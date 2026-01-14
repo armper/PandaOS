@@ -1,0 +1,12 @@
+[package]
+name = "panda-bootloader"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# This is a placeholder crate for future custom bootloader implementation
+# Currently, we use the bootloader crate dependency in the kernel
+
+[dev-dependencies]
