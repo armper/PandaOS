@@ -3,20 +3,18 @@
 //! This module sets up the Interrupt Descriptor Table (IDT) and handles
 //! various CPU exceptions and hardware interrupts.
 
-use spin::Mutex;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame};
+use x86_64::structures::DescriptorTablePointer;
 
-static IDT: Mutex<InterruptDescriptorTable> = Mutex::new(InterruptDescriptorTable::new());
+static mut IDT: InterruptDescriptorTable = InterruptDescriptorTable::new();
 
 /// Initialize interrupt handling
 pub fn init() {
-    let mut idt = IDT.lock();
-    idt.breakpoint.set_handler_fn(breakpoint_handler);
-    idt.double_fault.set_handler_fn(double_fault_handler);
-
-    // SAFETY: We're loading the IDT we just configured
+    // SAFETY: This is called once during kernel init, we're setting up the IDT
     unsafe {
-        idt.load();
+        IDT.breakpoint.set_handler_fn(breakpoint_handler);
+        IDT.double_fault.set_handler_fn(double_fault_handler);
+        IDT.load();
     }
 }
 

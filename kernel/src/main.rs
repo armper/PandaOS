@@ -14,6 +14,7 @@
 #![no_main]
 #![feature(custom_test_frameworks)]
 #![feature(abi_x86_interrupt)]
+#![feature(naked_functions)]
 #![test_runner(crate::test_runner)]
 #![reexport_test_harness_main = "test_main"]
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -28,10 +29,13 @@ use core::panic::PanicInfo;
 extern crate panda_hal;
 
 pub mod boot_phases;
+pub mod elf;
 pub mod interrupts;
 pub mod invariants;
 pub mod memory;
+pub mod process;
 pub mod syscall;
+pub mod usermode;
 
 /// Entry point for the kernel
 ///
@@ -96,6 +100,7 @@ fn test_runner(tests: &[&dyn Fn()]) {
     exit_qemu(QemuExitCode::Success);
 }
 
+/// QEMU exit codes for integration testing
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
@@ -104,13 +109,18 @@ pub enum QemuExitCode {
     Failed = 0x11,
 }
 
+/// Exit QEMU using isa-debug-exit device
 #[cfg(test)]
-pub fn exit_qemu(exit_code: QemuExitCode) {
+pub fn exit_qemu(exit_code: QemuExitCode) -> ! {
     use x86_64::instructions::port::Port;
 
     unsafe {
         let mut port = Port::new(0xf4);
         port.write(exit_code as u32);
+    }
+
+    loop {
+        x86_64::instructions::hlt();
     }
 }
 

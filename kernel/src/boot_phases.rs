@@ -106,9 +106,7 @@ impl KernelState<PhaseFullyInit> {
     /// Must only be called after all initialization is complete.
     pub unsafe fn enable_interrupts(&self) {
         // SAFETY: Caller guarantees full initialization complete
-        unsafe {
-            x86_64::instructions::interrupts::enable();
-        }
+        x86_64::instructions::interrupts::enable();
     }
 }
 

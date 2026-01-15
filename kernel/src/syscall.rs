@@ -17,6 +17,9 @@
 //! - Error codes follow POSIX errno conventions
 //! - All syscalls preserve callee-saved registers
 
+// Import macros for logging
+use panda_hal::{serial_print, serial_println};
+
 /// Syscall numbers (Linux-compatible)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u64)]
@@ -201,15 +204,45 @@ pub fn handle_syscall(
 
 /// sys_exit - Exit the current process
 fn sys_exit(status: i32) -> SyscallResult {
-    // TODO: Implement process exit
-    panic!("sys_exit({}) - not implemented", status);
+    serial_println!("Process exiting with status: {}", status);
+
+    // TODO: Actually terminate the process
+    // For now, just halt the system
+    loop {
+        x86_64::instructions::hlt();
+    }
 }
 
 /// sys_write - Write to file descriptor
-fn sys_write(_fd: i32, _buf: u64, _count: u64) -> SyscallResult {
-    // TODO: Implement write
-    // For now, just return ENOSYS
-    Err(ErrorCode::ENOSYS)
+fn sys_write(fd: i32, buf: u64, count: u64) -> SyscallResult {
+    // Only support stdout (fd 1) and stderr (fd 2) for now
+    if fd != 1 && fd != 2 {
+        return Err(ErrorCode::EBADF);
+    }
+
+    // Validate buffer address (basic check - should be more thorough)
+    if buf == 0 || count == 0 {
+        return Ok(0);
+    }
+
+    // Limit write size to prevent abuse
+    if count > 4096 {
+        return Err(ErrorCode::EINVAL);
+    }
+
+    // SAFETY: We perform basic validation of the buffer
+    // In a real kernel, this would check user memory permissions
+    let slice = unsafe { core::slice::from_raw_parts(buf as *const u8, count as usize) };
+
+    // Write to serial output
+    for &byte in slice {
+        // Only print printable ASCII and newlines
+        if (0x20..=0x7e).contains(&byte) || byte == b'\n' || byte == b'\r' || byte == b'\t' {
+            serial_print!("{}", byte as char);
+        }
+    }
+
+    Ok(count)
 }
 
 /// sys_getpid - Get process ID
