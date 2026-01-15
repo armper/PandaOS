@@ -277,17 +277,20 @@ unsafe fn init_scheduler_and_start() -> ! {
     println!("Created process PID {}", hello1_process.pid.as_u64());
     sched.add_process(hello1_process);
 
-    // TODO: Add hello2 after testing hello1 works
-    // Load hello2 program
-    // let hello2_data = include_bytes!("../../userland/build/hello2");
-    // println!("Loading hello2 program ({} bytes)...", hello2_data.len());
-    // let hello2_elf = elf::parse_elf(hello2_data).expect("Failed to parse hello2 ELF");
-    // let hello2_process = unsafe {
-    //     process::Process::new(&hello2_elf, hello2_data, &pid_allocator)
-    //         .expect("Failed to create hello2 process")
-    // };
-    // println!("Created process PID {}", hello2_process.pid.as_u64());
-    // sched.add_process(hello2_process);
+    // Load hello2 program (disabled for initial testing)
+    // Enable after verifying hello1 works correctly
+    #[cfg(feature = "multi_process")]
+    {
+        let hello2_data = include_bytes!("../../userland/build/hello2");
+        println!("Loading hello2 program ({} bytes)...", hello2_data.len());
+        let hello2_elf = elf::parse_elf(hello2_data).expect("Failed to parse hello2 ELF");
+        let hello2_process = unsafe {
+            process::Process::new(&hello2_elf, hello2_data, &pid_allocator)
+                .expect("Failed to create hello2 process")
+        };
+        println!("Created process PID {}", hello2_process.pid.as_u64());
+        sched.add_process(hello2_process);
+    }
 
     // Store scheduler in global
     // SAFETY: This is the only place that initializes the scheduler

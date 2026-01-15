@@ -208,14 +208,17 @@ pub fn handle_syscall(
 }
 
 /// sys_exit - Exit the current process
+///
+/// This function never returns normally - either the exit handler is called
+/// (which has ! return type) or the kernel halts.
 fn sys_exit(status: i32) -> SyscallResult {
     serial_println!("Process exiting with status: {}", status);
 
     // Exit QEMU if exit handler is set (for testing)
     // SAFETY: EXIT_HANDLER is set during initialization before any processes run
     if let Some(exit_fn) = unsafe { EXIT_HANDLER } {
+        // This call never returns - exit_fn has signature fn(i32) -> !
         exit_fn(status);
-        // Never returns - function signature is fn(i32) -> !
     }
 
     // If no exit handler, halt the system
