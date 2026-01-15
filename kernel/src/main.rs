@@ -61,14 +61,25 @@ pub extern "C" fn _start() -> ! {
 
     // SAFETY: HAL is now initialized, safe to proceed
     let state = unsafe { state.init_memory() };
+    println!("Memory management initialized");
 
-    // Initialize heap allocator
+    // SAFETY: Memory is now initialized, safe to proceed
+    let state = unsafe { state.init_interrupts() };
+
+    // Initialize GDT (must be before interrupts are enabled)
+    unsafe { gdt::init() };
+    println!("GDT initialized");
+
+    // Initialize interrupts (after GDT)
+    interrupts::init();
+    println!("Interrupt handling initialized");
+
+    // Initialize heap allocator (after interrupts are set up)
     unsafe { heap::init() };
     println!("Heap allocator initialized");
 
     // Test heap allocation
     {
-        extern crate alloc;
         use alloc::vec::Vec;
         let mut test_vec = Vec::new();
         test_vec.push(1);
@@ -76,19 +87,6 @@ pub extern "C" fn _start() -> ! {
         test_vec.push(3);
         println!("Heap test passed: {:?}", test_vec);
     }
-
-    println!("Memory management initialized");
-
-    // SAFETY: Memory is now initialized, safe to proceed
-    let state = unsafe { state.init_interrupts() };
-
-    // Initialize GDT (must be before interrupts)
-    unsafe { gdt::init() };
-    println!("GDT initialized");
-
-    // Initialize interrupts
-    interrupts::init();
-    println!("Interrupt handling initialized");
 
     // Finalize boot
     let _state = state.finalize();
