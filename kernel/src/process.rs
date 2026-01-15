@@ -23,12 +23,16 @@ pub enum ProcessState {
     Running,
     /// Process has exited
     Exited(i32),
+    /// Process is a zombie (exited but not yet reaped by parent)
+    Zombie(i32),
 }
 
 /// Minimal process structure
 pub struct Process {
     /// Process ID
     pub pid: Pid,
+    /// Parent process ID (None for init)
+    pub parent_pid: Option<Pid>,
     /// Process state
     pub state: ProcessState,
     /// Entry point address
@@ -108,6 +112,7 @@ impl Process {
 
         Ok(Self {
             pid,
+            parent_pid: None,
             state: ProcessState::Ready,
             entry_point: elf_info.entry_point,
             user_stack_ptr: user_stack_top,
@@ -175,6 +180,51 @@ impl Process {
         Ok(())
     }
 
+    /// Fork the current process, creating a child copy
+    ///
+    /// # Safety
+    ///
+    /// Frame allocator and GDT must be initialized.
+    pub unsafe fn fork_from(
+        &self,
+        child_pid: Pid,
+    ) -> Result<Self, &'static str> {
+        // Clone the parent's address space
+        // SAFETY: Caller guarantees frame allocator is initialized
+        let child_page_table = unsafe {
+            crate::paging::clone_user_address_space(self.page_table_phys)?
+        };
+
+        // Allocate kernel stack for child (per-process mapping)
+        let kernel_stack_top = crate::paging::KERNEL_STACK_TOP;
+        // SAFETY: Caller guarantees frame allocator is initialized
+        unsafe {
+            crate::paging::allocate_kernel_stack(
+                child_page_table,
+                kernel_stack_top,
+                crate::paging::KERNEL_STACK_PAGES,
+            )?;
+        }
+
+        // Copy parent's CPU context - child will have rax=0 set by caller
+        let child_context = self.context;
+
+        // Duplicate FD table
+        let child_fd_table = self.fd_table.clone();
+
+        Ok(Self {
+            pid: child_pid,
+            parent_pid: Some(self.pid),
+            state: ProcessState::Ready,
+            entry_point: self.entry_point,
+            user_stack_ptr: self.user_stack_ptr,
+            kernel_stack_ptr: kernel_stack_top,
+            page_table_phys: child_page_table,
+            context: child_context,
+            fd_table: child_fd_table,
+        })
+    }
+
     /// Mark process as running
     pub fn set_running(&mut self) {
         self.state = ProcessState::Running;
@@ -187,15 +237,25 @@ impl Process {
 
     /// Check if process has exited
     pub const fn is_exited(&self) -> bool {
-        matches!(self.state, ProcessState::Exited(_))
+        matches!(self.state, ProcessState::Exited(_) | ProcessState::Zombie(_))
     }
 
     /// Get exit code if process has exited
     pub const fn exit_code(&self) -> Option<i32> {
         match self.state {
-            ProcessState::Exited(code) => Some(code),
+            ProcessState::Exited(code) | ProcessState::Zombie(code) => Some(code),
             _ => None,
         }
+    }
+    
+    /// Mark process as zombie (exited but awaiting parent's wait)
+    pub fn set_zombie(&mut self, code: i32) {
+        self.state = ProcessState::Zombie(code);
+    }
+    
+    /// Check if process is a zombie
+    pub const fn is_zombie(&self) -> bool {
+        matches!(self.state, ProcessState::Zombie(_))
     }
 }
 
@@ -228,6 +288,7 @@ mod tests {
         // Create a mock process for state testing
         let mut process = Process {
             pid: pid_allocator.allocate(),
+            parent_pid: None,
             state: ProcessState::Ready,
             entry_point: 0x40_0000,
             user_stack_ptr: 0x7FFF_FFFF_F000,

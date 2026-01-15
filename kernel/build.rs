@@ -34,7 +34,7 @@ disable the feature"
     // Copy ELF binaries to output directory
     let userland_bin = PathBuf::from("../userland/bin");
 
-    for program in &["hello", "hello1", "hello2", "init", "sh", "cat"] {
+    for program in &["hello", "hello1", "hello2", "init", "sh", "cat", "true"] {
         let src = userland_bin.join(program);
         let dst = out_dir.join(format!("{}_elf", program));
 
@@ -55,6 +55,7 @@ disable the feature"
     println!("cargo:rerun-if-changed=../userland/init.asm");
     println!("cargo:rerun-if-changed=../userland/sh.asm");
     println!("cargo:rerun-if-changed=../userland/cat.asm");
+    println!("cargo:rerun-if-changed=../userland/true.asm");
     println!("cargo:rerun-if-changed=../userland/build.sh");
     println!("cargo:rerun-if-changed=../userland/bin/hello");
     println!("cargo:rerun-if-changed=../userland/bin/hello1");
@@ -62,4 +63,5 @@ disable the feature"
     println!("cargo:rerun-if-changed=../userland/bin/init");
     println!("cargo:rerun-if-changed=../userland/bin/sh");
     println!("cargo:rerun-if-changed=../userland/bin/cat");
+    println!("cargo:rerun-if-changed=../userland/bin/true");
 }

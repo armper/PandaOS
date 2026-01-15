@@ -204,6 +204,8 @@ pub fn handle_syscall(
         SyscallNumber::Getpid => sys_getpid(),
         SyscallNumber::Yield => sys_yield(),
         SyscallNumber::Execve => sys_exec(arg1, arg2),
+        SyscallNumber::Fork => sys_fork(),
+        SyscallNumber::Wait4 => sys_waitpid(arg1 as i64, arg2, arg3 as i32),
         // All other syscalls return ENOSYS for now
         _ => Err(ErrorCode::ENOSYS),
     };
@@ -383,9 +385,29 @@ fn sys_close(fd: i32) -> SyscallResult {
 
 /// sys_getpid - Get process ID
 fn sys_getpid() -> SyscallResult {
-    // TODO: Implement getpid
-    // For now, return fake PID of 1
-    Ok(1)
+    if let Some(getpid_fn) = GETPID_HANDLER.get() {
+        getpid_fn()
+    } else {
+        Ok(1)
+    }
+}
+
+/// sys_fork - Fork the current process
+fn sys_fork() -> SyscallResult {
+    if let Some(fork_fn) = FORK_HANDLER.get() {
+        fork_fn()
+    } else {
+        Err(ErrorCode::ENOSYS)
+    }
+}
+
+/// sys_waitpid - Wait for process state change
+fn sys_waitpid(pid: i64, status_ptr: u64, options: i32) -> SyscallResult {
+    if let Some(waitpid_fn) = WAITPID_HANDLER.get() {
+        waitpid_fn(pid, status_ptr, options)
+    } else {
+        Err(ErrorCode::ENOSYS)
+    }
 }
 
 /// sys_yield - Voluntarily yield the CPU to another process
@@ -429,6 +451,9 @@ static EXEC_HANDLER: Once<fn(&str, Option<&str>) -> Result<(), ErrorCode>> = Onc
 static OPEN_HANDLER: Once<fn(&str) -> SyscallResult> = Once::new();
 static READ_HANDLER: Once<fn(i32, u64, u64) -> SyscallResult> = Once::new();
 static CLOSE_HANDLER: Once<fn(i32) -> SyscallResult> = Once::new();
+static GETPID_HANDLER: Once<fn() -> SyscallResult> = Once::new();
+static FORK_HANDLER: Once<fn() -> SyscallResult> = Once::new();
+static WAITPID_HANDLER: Once<fn(i64, u64, i32) -> SyscallResult> = Once::new();
 
 /// Set the yield handler for syscall yield
 ///
@@ -458,6 +483,21 @@ pub fn set_read_handler(handler: fn(i32, u64, u64) -> SyscallResult) {
 /// Set the close handler for syscall close
 pub fn set_close_handler(handler: fn(i32) -> SyscallResult) {
     CLOSE_HANDLER.call_once(|| handler);
+}
+
+/// Set the getpid handler for syscall getpid
+pub fn set_getpid_handler(handler: fn() -> SyscallResult) {
+    GETPID_HANDLER.call_once(|| handler);
+}
+
+/// Set the fork handler for syscall fork
+pub fn set_fork_handler(handler: fn() -> SyscallResult) {
+    FORK_HANDLER.call_once(|| handler);
+}
+
+/// Set the waitpid handler for syscall waitpid
+pub fn set_waitpid_handler(handler: fn(i64, u64, i32) -> SyscallResult) {
+    WAITPID_HANDLER.call_once(|| handler);
 }
 
 #[cfg(test)]

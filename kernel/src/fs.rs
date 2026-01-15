@@ -77,6 +77,7 @@ static FILES: &[FileNode] = &[
     FileNode { path: "/init", data: include_bytes!("../../userland/bin/init") },
     FileNode { path: "/bin/sh", data: include_bytes!("../../userland/bin/sh") },
     FileNode { path: "/bin/cat", data: include_bytes!("../../userland/bin/cat") },
+    FileNode { path: "/bin/true", data: include_bytes!("../../userland/bin/true") },
     FileNode {
         path: "/etc/motd",
         data: b"Welcome to PandaOS.\r\nType 'help' for commands.\r\n",

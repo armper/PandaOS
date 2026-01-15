@@ -721,6 +721,158 @@ unsafe fn free_kernel_stack_pages(page_table_phys: u64) -> Result<(), &'static s
     Ok(())
 }
 
+/// Clone a user address space for fork()
+///
+/// Creates a new page table with copied user mappings (lower half).
+/// Kernel mappings (upper half) are shared (copied from source).
+///
+/// # Safety
+///
+/// - parent_page_table_phys must point to a valid L4 page table
+/// - Frame allocator must be initialized
+#[allow(clippy::cast_ptr_alignment)]
+pub unsafe fn clone_user_address_space(parent_page_table_phys: u64) -> Result<u64, &'static str> {
+    // Create a new user page table (copies kernel mappings)
+    // SAFETY: Caller guarantees frame allocator is initialized
+    let child_pt = unsafe { create_user_page_table()? };
+
+    // SAFETY: Both page tables are valid
+    let parent_l4 = unsafe { &*(parent_page_table_phys as *const PageTable) };
+    let child_l4 = unsafe { &mut *(child_pt as *mut PageTable) };
+
+    // Walk the parent's user space (lower half, entries 0-255)
+    for p4_index in 0..256 {
+        if !parent_l4[p4_index].is_present() {
+            continue;
+        }
+
+        let parent_l3_phys = parent_l4[p4_index].addr();
+        // SAFETY: L3 address is from a present L4 entry
+        let parent_l3 = unsafe { &*(parent_l3_phys as *const PageTable) };
+
+        // Create or get child L3 table
+        if !child_l4[p4_index].is_present() {
+            // SAFETY: Caller guarantees frame allocator is initialized
+            let l3_frame = unsafe {
+                crate::page_table_tracker::allocate_page_table_frame()
+                    .ok_or("Failed to allocate L3 for clone")?
+            };
+            let l3_phys = l3_frame as u64 * panda_hal::memory::FRAME_SIZE as u64;
+            // SAFETY: Frame was just allocated
+            let l3_table = unsafe { &mut *(l3_phys as *mut PageTable) };
+            l3_table.zero();
+
+            let flags = PageTableFlags::PRESENT
+                .or(PageTableFlags::WRITABLE)
+                .or(PageTableFlags::USER_ACCESSIBLE);
+            child_l4[p4_index].set(l3_phys, flags);
+        }
+
+        let child_l3_phys = child_l4[p4_index].addr();
+        // SAFETY: L3 is now present
+        let child_l3 = unsafe { &mut *(child_l3_phys as *mut PageTable) };
+
+        for p3_index in 0..ENTRY_COUNT {
+            if !parent_l3[p3_index].is_present() {
+                continue;
+            }
+
+            let parent_l2_phys = parent_l3[p3_index].addr();
+            // SAFETY: L2 address is from a present L3 entry
+            let parent_l2 = unsafe { &*(parent_l2_phys as *const PageTable) };
+
+            // Create child L2 table
+            if !child_l3[p3_index].is_present() {
+                // SAFETY: Caller guarantees frame allocator is initialized
+                let l2_frame = unsafe {
+                    crate::page_table_tracker::allocate_page_table_frame()
+                        .ok_or("Failed to allocate L2 for clone")?
+                };
+                let l2_phys = l2_frame as u64 * panda_hal::memory::FRAME_SIZE as u64;
+                // SAFETY: Frame was just allocated
+                let l2_table = unsafe { &mut *(l2_phys as *mut PageTable) };
+                l2_table.zero();
+
+                let flags = PageTableFlags::PRESENT
+                    .or(PageTableFlags::WRITABLE)
+                    .or(PageTableFlags::USER_ACCESSIBLE);
+                child_l3[p3_index].set(l2_phys, flags);
+            }
+
+            let child_l2_phys = child_l3[p3_index].addr();
+            // SAFETY: L2 is now present
+            let child_l2 = unsafe { &mut *(child_l2_phys as *mut PageTable) };
+
+            for p2_index in 0..ENTRY_COUNT {
+                if !parent_l2[p2_index].is_present() {
+                    continue;
+                }
+
+                if parent_l2[p2_index].flags().contains(PageTableFlags::HUGE_PAGE) {
+                    return Err("Huge pages not supported in fork");
+                }
+
+                let parent_l1_phys = parent_l2[p2_index].addr();
+                // SAFETY: L1 address is from a present L2 entry
+                let parent_l1 = unsafe { &*(parent_l1_phys as *const PageTable) };
+
+                // Create child L1 table
+                if !child_l2[p2_index].is_present() {
+                    // SAFETY: Caller guarantees frame allocator is initialized
+                    let l1_frame = unsafe {
+                        crate::page_table_tracker::allocate_page_table_frame()
+                            .ok_or("Failed to allocate L1 for clone")?
+                    };
+                    let l1_phys = l1_frame as u64 * panda_hal::memory::FRAME_SIZE as u64;
+                    // SAFETY: Frame was just allocated
+                    let l1_table = unsafe { &mut *(l1_phys as *mut PageTable) };
+                    l1_table.zero();
+
+                    let flags = PageTableFlags::PRESENT
+                        .or(PageTableFlags::WRITABLE)
+                        .or(PageTableFlags::USER_ACCESSIBLE);
+                    child_l2[p2_index].set(l1_phys, flags);
+                }
+
+                let child_l1_phys = child_l2[p2_index].addr();
+                // SAFETY: L1 is now present
+                let child_l1 = unsafe { &mut *(child_l1_phys as *mut PageTable) };
+
+                // Copy each mapped page
+                for p1_index in 0..ENTRY_COUNT {
+                    if !parent_l1[p1_index].is_present() {
+                        continue;
+                    }
+
+                    let parent_phys = parent_l1[p1_index].addr();
+                    let flags = parent_l1[p1_index].flags();
+
+                    // Allocate a new physical frame for the child
+                    // SAFETY: Caller guarantees frame allocator is initialized
+                    let child_frame = unsafe {
+                        crate::memory::allocate_frame()
+                            .ok_or("Failed to allocate frame for page copy")?
+                    };
+                    let child_phys = child_frame as u64 * panda_hal::memory::FRAME_SIZE as u64;
+
+                    // Copy page contents from parent to child
+                    // SAFETY: Both frames are valid and identity-mapped
+                    unsafe {
+                        let src = parent_phys as *const u8;
+                        let dst = child_phys as *mut u8;
+                        core::ptr::copy_nonoverlapping(src, dst, PAGE_SIZE as usize);
+                    }
+
+                    // Map the new frame in child's page table
+                    child_l1[p1_index].set(child_phys, flags);
+                }
+            }
+        }
+    }
+
+    Ok(child_pt)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
