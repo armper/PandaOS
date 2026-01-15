@@ -32,6 +32,8 @@ use core::panic::PanicInfo;
 extern crate panda_hal;
 
 pub mod boot_phases;
+pub mod context;
+pub mod context_switch;
 pub mod elf;
 pub mod gdt;
 pub mod heap;
@@ -41,8 +43,11 @@ pub mod linker_symbols;
 pub mod memory;
 pub mod page_table_tracker;
 pub mod paging;
+pub mod pic;
 pub mod process;
+pub mod scheduler;
 pub mod syscall;
+pub mod timer;
 pub mod usermode;
 
 /// Entry point for the kernel
@@ -119,10 +124,20 @@ pub extern "C" fn _start(boot_info: &'static bootloader::BootInfo) -> ! {
     #[cfg(test)]
     test_main();
 
-    println!("Kernel is running. Halting CPU.");
+    #[cfg(not(test))]
+    {
+        // Initialize scheduler and start multitasking
+        unsafe {
+            init_scheduler_and_start();
+        }
+    }
 
-    loop {
-        x86_64::instructions::hlt();
+    #[cfg(test)]
+    {
+        println!("All tests passed. Halting CPU.");
+        loop {
+            x86_64::instructions::hlt();
+        }
     }
 }
 
@@ -210,6 +225,223 @@ pub fn exit_qemu(exit_code: QemuExitCode) -> ! {
 
     loop {
         x86_64::instructions::hlt();
+    }
+}
+
+/// Global scheduler instance
+///
+/// # Safety
+///
+/// This global mutable static is initialized exactly once during kernel boot
+/// in `init_scheduler_and_start()`, before any interrupts are enabled or user
+/// processes run. After initialization:
+///
+/// - It is accessed only from interrupt handlers (timer, syscall) where interrupts
+///   are disabled, preventing concurrent access
+/// - Each access uses `addr_of_mut!` to create a raw pointer, then converts to
+///   a mutable reference with proper lifetime bounds
+/// - The scheduler itself uses safe Rust internally; only the global access is unsafe
+/// - No aliasing violations occur because interrupt handlers run atomically
+///
+/// Alternative approaches considered:
+/// - `Once`/`Lazy`: Not available in no_std without custom implementation
+/// - `Mutex`/`RwLock`: Cannot be used from interrupt context (may deadlock)
+/// - `static mut`: Using raw pointers via `addr_of_mut!` is the recommended pattern
+///   for interrupt handlers in the 2024 edition
+static mut SCHEDULER: Option<scheduler::Scheduler> = None;
+
+/// Initialize scheduler, load user programs, and start multitasking
+///
+/// # Safety
+///
+/// Must be called exactly once after all kernel subsystems are initialized.
+unsafe fn init_scheduler_and_start() -> ! {
+    use panda_hal::pid::PidAllocator;
+
+    println!("Initializing scheduler...");
+
+    // Create scheduler
+    let mut sched = scheduler::Scheduler::new();
+
+    // Create PID allocator
+    let pid_allocator = PidAllocator::new(1);
+
+    // Load hello1 program
+    let hello1_data = include_bytes!("../../userland/build/hello1");
+    println!("Loading hello1 program ({} bytes)...", hello1_data.len());
+    let hello1_elf = elf::parse_elf(hello1_data).expect("Failed to parse hello1 ELF");
+    let hello1_process = unsafe {
+        process::Process::new(&hello1_elf, hello1_data, &pid_allocator)
+            .expect("Failed to create hello1 process")
+    };
+    println!("Created process PID {}", hello1_process.pid.as_u64());
+    sched.add_process(hello1_process);
+
+    // Load hello2 program (disabled for initial testing)
+    // Enable after verifying hello1 works correctly
+    #[cfg(feature = "multi_process")]
+    {
+        let hello2_data = include_bytes!("../../userland/build/hello2");
+        println!("Loading hello2 program ({} bytes)...", hello2_data.len());
+        let hello2_elf = elf::parse_elf(hello2_data).expect("Failed to parse hello2 ELF");
+        let hello2_process = unsafe {
+            process::Process::new(&hello2_elf, hello2_data, &pid_allocator)
+                .expect("Failed to create hello2 process")
+        };
+        println!("Created process PID {}", hello2_process.pid.as_u64());
+        sched.add_process(hello2_process);
+    }
+
+    // Store scheduler in global
+    // SAFETY: This is the only place that initializes the scheduler
+    unsafe {
+        (*core::ptr::addr_of_mut!(SCHEDULER)) = Some(sched);
+    }
+
+    // Initialize PIC before setting up timer
+    println!("Initializing PIC...");
+    unsafe {
+        pic::init();
+    }
+
+    // Initialize PIT for 100 Hz (10ms intervals)
+    println!("Initializing PIT at 100 Hz...");
+    unsafe {
+        timer::init(100);
+    }
+
+    // Set timer interrupt handler
+    unsafe {
+        interrupts::set_timer_handler(timer_tick_handler);
+    }
+
+    // Set yield syscall handler
+    unsafe {
+        syscall::set_yield_handler(yield_handler);
+    }
+
+    // Set exit syscall handler
+    unsafe {
+        syscall::set_exit_handler(exit_handler);
+    }
+
+    // Unmask timer interrupt (IRQ 0)
+    println!("Enabling timer interrupt...");
+    unsafe {
+        pic::unmask_irq(0);
+    }
+
+    println!("Starting scheduler...");
+    println!("======================================");
+
+    // Start the scheduler - this never returns
+    unsafe {
+        start_first_process();
+    }
+}
+
+/// Get a mutable reference to the global scheduler
+///
+/// # Safety
+///
+/// Must be called only from contexts where:
+/// - Interrupts are disabled (ensuring no concurrent access)
+/// - Scheduler has been initialized via `init_scheduler_and_start()`
+///
+/// This is safe in interrupt handlers and syscall handlers as they
+/// run with interrupts disabled.
+unsafe fn get_scheduler() -> &'static mut scheduler::Scheduler {
+    // SAFETY: Caller guarantees interrupts are disabled and scheduler is initialized
+    unsafe { (*core::ptr::addr_of_mut!(SCHEDULER)).as_mut().expect("Scheduler not initialized") }
+}
+
+/// Timer interrupt handler - called on each timer tick
+fn timer_tick_handler() {
+    // For now, just acknowledge the timer tick
+    // Full preemptive multitasking would require saving interrupt frame state
+    // and switching page tables, which is complex. Start with yield-based switching.
+
+    // TODO: Implement preemptive scheduling
+    // This would require:
+    // 1. Saving interrupt frame to process context
+    // 2. Switching page tables
+    // 3. Restoring next process's interrupt frame
+    // 4. Returning via iretq
+}
+
+/// Yield handler - called when process voluntarily yields CPU  
+fn yield_handler() {
+    serial_println!("[YIELD] Process yielding CPU");
+
+    // SAFETY: Called from syscall handler with interrupts disabled
+    let scheduler = unsafe { get_scheduler() };
+
+    // Get next process (current will be moved to ready queue)
+    if let Some(next) = scheduler.schedule_next() {
+        serial_println!("[YIELD] Switching to process PID {}", next.pid.as_u64());
+
+        // For now, just log the yield - actual context switch would happen here
+        // This is complex because we're inside a syscall handler
+        // TODO: Implement actual context switch from syscall
+    } else {
+        serial_println!("[YIELD] No other processes to run");
+    }
+}
+
+/// Exit handler - called when process exits
+fn exit_handler(status: i32) -> ! {
+    serial_println!("Process exiting with status: {}", status);
+
+    // SAFETY: Called from syscall handler with interrupts disabled
+    let scheduler = unsafe { get_scheduler() };
+
+    // Mark current process as exited
+    scheduler.exit_current(status);
+
+    // Schedule next process
+    if let Some(next) = scheduler.schedule_next() {
+        // Restore next process context
+        // SAFETY: Next process has valid context
+        unsafe {
+            context_switch::restore_context_from_process(next);
+        }
+    } else {
+        // No more processes - return to kernel
+        println!("All processes exited");
+        loop {
+            x86_64::instructions::hlt();
+        }
+    }
+}
+
+/// Start the first process in the scheduler
+///
+/// # Safety
+///
+/// Must be called with interrupts disabled and scheduler initialized.
+unsafe fn start_first_process() -> ! {
+    // SAFETY: Scheduler is initialized before this is called
+    let scheduler = unsafe { get_scheduler() };
+
+    // Get first process to run
+    let first_process = scheduler.schedule_next().expect("No processes to run");
+
+    println!("Starting process PID {}...", first_process.pid.as_u64());
+
+    // Initialize context for first run
+    context_switch::init_context_for_first_run(first_process);
+
+    // Enable interrupts before jumping to user mode
+    x86_64::instructions::interrupts::enable();
+
+    // Enter user mode and start first process
+    // SAFETY: Process has been properly initialized
+    unsafe {
+        usermode::enter_usermode(
+            first_process.entry_point,
+            first_process.user_stack_ptr,
+            first_process.page_table_phys,
+        );
     }
 }
 
