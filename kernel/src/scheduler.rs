@@ -88,7 +88,8 @@ impl Scheduler {
                 // Check for pending signals before re-queueing
                 if proc.deliver_signals() {
                     // Process was terminated by signal
-                    proc.set_exited(128 + 2); // 128 + SIGINT (standard exit code for signal)
+                    // Exit code = 128 + signal number (standard Unix convention)
+                    proc.set_exited(128 + crate::process::Signal::SIGINT as i32);
                 } else {
                     proc.state = ProcessState::Ready;
                     self.ready_queue.push_back(proc);

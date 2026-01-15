@@ -72,7 +72,7 @@ pub enum SyscallNumber {
     /// Get process ID
     Getpid = 39,
     /// Send signal
-    Kill = 62,
+    Kill = 37,
     /// Yield CPU (sched_yield)
     Yield = 24,
 }
@@ -94,12 +94,12 @@ impl SyscallNumber {
             24 => Some(Self::Yield),
             32 => Some(Self::Dup),
             33 => Some(Self::Dup2),
+            37 => Some(Self::Kill),
             39 => Some(Self::Getpid),
             57 => Some(Self::Fork),
             59 => Some(Self::Execve),
             60 => Some(Self::Exit),
             61 => Some(Self::Wait4),
-            62 => Some(Self::Kill),
             79 => Some(Self::Getcwd),
             80 => Some(Self::Chdir),
             _ => None,

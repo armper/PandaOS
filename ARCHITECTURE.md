@@ -594,7 +594,7 @@ PandaOS implements minimal SIGINT handling for Ctrl+C support:
 - Default action: terminate process with exit code 130 (128 + 2)
 
 ### Syscalls
-- `kill(pid, sig)` - syscall #62
+- `kill(pid, sig)` - syscall #37
   - Send SIGINT to a target process
   - Currently only works if target is current process
   - Returns ESRCH if target PID not found
