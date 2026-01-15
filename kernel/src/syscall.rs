@@ -373,23 +373,50 @@ compile_error!(
 
 #[cfg(all(
     feature = "vfs-cat-smoke",
-    any(feature = "fork-exec-smoke", feature = "pipe-smoke", feature = "ctrlc-smoke", feature = "ls-smoke", feature = "cd-smoke", feature = "path-smoke")
+    any(
+        feature = "fork-exec-smoke",
+        feature = "pipe-smoke",
+        feature = "ctrlc-smoke",
+        feature = "ls-smoke",
+        feature = "cd-smoke",
+        feature = "path-smoke"
+    )
 ))]
 compile_error!(
     "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, cd-smoke, and path-smoke are mutually exclusive"
 );
 
-#[cfg(all(feature = "fork-exec-smoke", any(feature = "pipe-smoke", feature = "ctrlc-smoke", feature = "ls-smoke", feature = "cd-smoke", feature = "path-smoke")))]
+#[cfg(all(
+    feature = "fork-exec-smoke",
+    any(
+        feature = "pipe-smoke",
+        feature = "ctrlc-smoke",
+        feature = "ls-smoke",
+        feature = "cd-smoke",
+        feature = "path-smoke"
+    )
+))]
 compile_error!(
     "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, cd-smoke, and path-smoke are mutually exclusive"
 );
 
-#[cfg(all(feature = "pipe-smoke", any(feature = "ctrlc-smoke", feature = "ls-smoke", feature = "cd-smoke", feature = "path-smoke")))]
+#[cfg(all(
+    feature = "pipe-smoke",
+    any(
+        feature = "ctrlc-smoke",
+        feature = "ls-smoke",
+        feature = "cd-smoke",
+        feature = "path-smoke"
+    )
+))]
 compile_error!(
     "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, cd-smoke, and path-smoke are mutually exclusive"
 );
 
-#[cfg(all(feature = "ctrlc-smoke", any(feature = "ls-smoke", feature = "cd-smoke", feature = "path-smoke")))]
+#[cfg(all(
+    feature = "ctrlc-smoke",
+    any(feature = "ls-smoke", feature = "cd-smoke", feature = "path-smoke")
+))]
 compile_error!(
     "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, cd-smoke, and path-smoke are mutually exclusive"
 );
