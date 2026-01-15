@@ -6,16 +6,33 @@ This directory contains simple userland programs that run in ring 3 on PandaOS.
 
 ### /bin/sh
 Interactive shell with fork/exec/wait support:
-- Builtins: `help`, `echo`, `exit`
-- External commands: `cat`, `true`
+- Builtins: `help`, `echo` (builtin), `exit`
+- External commands: `cat`, `true`, `echo`, `wc`
 - Line editing with backspace support
 - Fork/exec/wait for external programs
+- **NEW**: Single-pipe pipeline support (`cmd1 | cmd2`)
 
 ### /bin/cat
 Read and display file contents:
 - Usage: `cat <path>`
 - Reads from in-memory VFS
 - Example: `cat /etc/version`
+
+### /bin/echo
+Echo arguments to stdout:
+- Usage: `echo <text>`
+- Reads argument from kernel-provided exec arg buffer
+- Writes text + newline to stdout
+- Example: `echo hello`
+- Useful in pipelines: `echo hello | wc`
+
+### /bin/wc
+Word count (byte count only):
+- Usage: `wc` (reads from stdin)
+- Counts bytes read until EOF
+- Prints decimal byte count + newline
+- Example: `echo hello | wc` outputs `6` (5 chars + newline)
+- Useful for testing pipes
 
 ### /bin/true
 Minimal program that exits with status 0:
@@ -126,13 +143,60 @@ Following Linux x86_64 calling convention:
 - r10 = rusage (unused, pass 0)
 - Returns: PID of exited child, or negative errno (EAGAIN if no zombie yet, ESRCH if no children)
 
+**pipe(pipefd)** - syscall #22
+- rax = 22
+- rdi = pointer to int[2] array to receive pipe fds
+- Returns: 0 on success, fills pipefd[0] with read end, pipefd[1] with write end
+- Returns: negative errno on error
+
+**dup2(oldfd, newfd)** - syscall #33
+- rax = 33
+- rdi = source file descriptor
+- rsi = target file descriptor
+- Returns: newfd on success, negative errno on error
+- Used to redirect stdin/stdout/stderr to pipes
+
 ## Memory Layout
 
 User programs are loaded at:
 - Entry point: 0x400000
 - Text/rodata/data sections follow
 - Stack: 0x7FFFFFFFFFFF (grows down)
+- Exec arg buffer: 0x7FFFFFFFC000 (128 bytes, contains argument passed to execve)
 - Heap: not yet implemented
+
+## Pipelines
+
+The shell supports single-pipe pipelines using `|` operator:
+
+```bash
+panda> echo hello | wc
+6
+panda> cat /etc/motd | wc
+48
+```
+
+**Implementation:**
+1. Shell parses command line, detects `|`
+2. Splits into left command and right command
+3. Creates pipe using `pipe()` syscall
+4. Forks left child:
+   - Redirects stdout to pipe write end using `dup2(wfd, 1)`
+   - Closes both pipe ends
+   - Execs left command
+5. Forks right child:
+   - Redirects stdin from pipe read end using `dup2(rfd, 0)`
+   - Closes both pipe ends
+   - Execs right command
+6. Parent:
+   - Closes both pipe ends
+   - Waits for both children using `wait4()`
+   - Reprompts
+
+**Limitations:**
+- Only single pipe supported (no `a|b|c`)
+- No quoting or escaping
+- No job control
 
 ## Testing
 
@@ -147,4 +211,7 @@ VFS_CAT_SMOKE=1 ./scripts/qemu-test.sh
 
 # Test fork/exec/wait with cat and true
 FORK_EXEC_SMOKE=1 ./scripts/qemu-test.sh
+
+# Test pipes with echo and wc
+PIPE_SMOKE=1 ./scripts/qemu-test.sh
 ```

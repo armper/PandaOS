@@ -18,7 +18,12 @@
 //! - Syscalls preserve all GPRs except RAX (return value) and RCX/R11 (syscall clobbers)
 
 // Import macros for logging
-#[cfg(any(feature = "shell-smoke", feature = "vfs-cat-smoke", feature = "fork-exec-smoke"))]
+#[cfg(any(
+    feature = "shell-smoke",
+    feature = "vfs-cat-smoke",
+    feature = "fork-exec-smoke",
+    feature = "pipe-smoke"
+))]
 use core::sync::atomic::{AtomicUsize, Ordering};
 use panda_hal::serial_println;
 use spin::Once;
@@ -258,9 +263,20 @@ pub fn set_exit_handler(handler: fn(i32) -> !) {
 
 /// sys_write - Write to file descriptor
 fn sys_write(fd: i32, buf: u64, count: u64) -> SyscallResult {
-    // stdout (fd 1) and stderr (fd 2) go to serial
+    // For stdout (fd 1) and stderr (fd 2), check if redirected to pipe first
     if fd == 1 || fd == 2 {
-        // Validate buffer address (basic check - should be more thorough)
+        if let Some(write_fn) = WRITE_HANDLER.get() {
+            // Try to write to fd table (may be a pipe)
+            match write_fn(fd, buf, count) {
+                Ok(n) => return Ok(n),
+                Err(ErrorCode::EBADF) => {
+                    // Not a pipe, fall through to serial output
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        // Default stdout/stderr behavior: write to serial
         if buf == 0 || count == 0 {
             return Ok(0);
         }
@@ -300,17 +316,42 @@ const SCRIPTED_INPUT: &[u8] = b"cat /etc/motd\nexit\n";
 #[cfg(feature = "fork-exec-smoke")]
 const SCRIPTED_INPUT: &[u8] = b"cat /etc/version\ntrue\nexit\n";
 
-#[cfg(all(feature = "shell-smoke", any(feature = "vfs-cat-smoke", feature = "fork-exec-smoke")))]
-compile_error!("shell-smoke, vfs-cat-smoke, and fork-exec-smoke are mutually exclusive");
+#[cfg(feature = "pipe-smoke")]
+const SCRIPTED_INPUT: &[u8] = b"echo hello | wc\nexit\n";
 
-#[cfg(all(feature = "vfs-cat-smoke", feature = "fork-exec-smoke"))]
-compile_error!("shell-smoke, vfs-cat-smoke, and fork-exec-smoke are mutually exclusive");
+#[cfg(all(
+    feature = "shell-smoke",
+    any(feature = "vfs-cat-smoke", feature = "fork-exec-smoke", feature = "pipe-smoke")
+))]
+compile_error!(
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, and pipe-smoke are mutually exclusive"
+);
 
-#[cfg(any(feature = "shell-smoke", feature = "vfs-cat-smoke", feature = "fork-exec-smoke"))]
+#[cfg(all(feature = "vfs-cat-smoke", any(feature = "fork-exec-smoke", feature = "pipe-smoke")))]
+compile_error!(
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, and pipe-smoke are mutually exclusive"
+);
+
+#[cfg(all(feature = "fork-exec-smoke", feature = "pipe-smoke"))]
+compile_error!(
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, and pipe-smoke are mutually exclusive"
+);
+
+#[cfg(any(
+    feature = "shell-smoke",
+    feature = "vfs-cat-smoke",
+    feature = "fork-exec-smoke",
+    feature = "pipe-smoke"
+))]
 static SCRIPTED_POS: AtomicUsize = AtomicUsize::new(0);
 
 fn read_byte() -> Option<u8> {
-    #[cfg(any(feature = "shell-smoke", feature = "vfs-cat-smoke", feature = "fork-exec-smoke"))]
+    #[cfg(any(
+        feature = "shell-smoke",
+        feature = "vfs-cat-smoke",
+        feature = "fork-exec-smoke",
+        feature = "pipe-smoke"
+    ))]
     {
         let pos = SCRIPTED_POS.fetch_add(1, Ordering::Relaxed);
         return SCRIPTED_INPUT.get(pos).copied();
@@ -319,7 +360,8 @@ fn read_byte() -> Option<u8> {
     #[cfg(not(any(
         feature = "shell-smoke",
         feature = "vfs-cat-smoke",
-        feature = "fork-exec-smoke"
+        feature = "fork-exec-smoke",
+        feature = "pipe-smoke"
     )))]
     {
         return panda_hal::serial::serial_read_byte();
@@ -328,15 +370,28 @@ fn read_byte() -> Option<u8> {
 
 /// sys_read - Read from file descriptor
 fn sys_read(fd: i32, buf: u64, count: u64) -> SyscallResult {
+    if count == 0 {
+        return Ok(0);
+    }
+
+    if buf == 0 {
+        return Err(ErrorCode::EFAULT);
+    }
+
+    // For stdin (fd 0), check if it's redirected to a pipe via the handler first
     if fd == 0 {
-        if count == 0 {
-            return Ok(0);
+        if let Some(read_fn) = READ_HANDLER.get() {
+            // Try to read from fd table (may be a pipe)
+            match read_fn(fd, buf, count) {
+                Ok(n) => return Ok(n),
+                Err(ErrorCode::EBADF) => {
+                    // Not a pipe, fall through to serial input
+                }
+                Err(e) => return Err(e),
+            }
         }
 
-        if buf == 0 {
-            return Err(ErrorCode::EFAULT);
-        }
-
+        // Default stdin behavior: read from serial
         let count = usize::try_from(count).map_err(|_| ErrorCode::EINVAL)?;
         if count > 4096 {
             return Err(ErrorCode::EINVAL);
@@ -368,10 +423,6 @@ fn sys_read(fd: i32, buf: u64, count: u64) -> SyscallResult {
 
     if fd == 1 || fd == 2 {
         return Err(ErrorCode::EBADF);
-    }
-
-    if count == 0 {
-        return Ok(0);
     }
 
     if let Some(read_fn) = READ_HANDLER.get() {

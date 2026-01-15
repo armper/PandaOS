@@ -20,7 +20,7 @@ global _start
 
 _start:
     ; Check if we have an argument
-    lea rsi, [rel EXEC_ARG_ADDR]
+    mov rsi, EXEC_ARG_ADDR
     
     ; Find string length
     xor rcx, rcx

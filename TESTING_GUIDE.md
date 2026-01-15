@@ -191,12 +191,50 @@ TEST PASS fork_exec_smoke
 - Parent shell survives fork+exec+wait cycles and reprompts correctly
 - Shell exits cleanly after `exit` command
 
+### Pipe Smoke (QEMU)
+
+This boots the kernel, runs `/init`, execs `/bin/sh`, and feeds scripted input to validate
+single-pipe pipeline functionality (`cmd1 | cmd2`).
+
+```bash
+PIPE_SMOKE=1 ./scripts/qemu-test.sh
+```
+
+**Serial log:** `target/qemu/pipe_smoke.log`
+
+**Expected Output (serial, excerpt):**
+```
+panda> echo hello | wc
+6
+panda> exit
+TEST PASS pipe_smoke
+```
+
+**What it tests:**
+- Shell parses pipe operator `|` correctly
+- Creates pipe via `sys_pipe()`
+- Forks left and right child processes
+- Left child: redirects stdout to pipe write end via `dup2()`, execs `/bin/echo hello`
+- Right child: redirects stdin from pipe read end via `dup2()`, execs `/bin/wc`
+- Parent closes both pipe ends and waits for both children
+- `/bin/echo` writes "hello\n" (6 bytes) to pipe
+- `/bin/wc` reads from pipe until EOF, counts bytes, prints "6\n"
+- Pipeline completes successfully
+- Shell continues and exits cleanly after `exit` command
+
+**Technical details:**
+- Uses kernel syscalls: `pipe(22)`, `dup2(33)`, `fork(57)`, `execve(59)`, `wait4(61)`, `close(3)`
+- Pipe buffer: 4KB ring buffer with EOF semantics
+- `dup2` allows redirecting pipe fds to stdin (fd 0) and stdout (fd 1)
+- Both `/bin/echo` and `/bin/wc` are prebuilt ELFs embedded in kernel VFS
+
 ### Debugging Smoke Tests
 
 All QEMU smoke tests write serial output to `target/qemu/<test_name>.log`:
 - `target/qemu/shell_smoke.log`
 - `target/qemu/vfs_cat_smoke.log`
 - `target/qemu/fork_exec_smoke.log`
+- `target/qemu/pipe_smoke.log`
 
 The test script uses QEMU's `-serial file:` option to write serial output directly to these
 log files without buffering. This ensures reliable capture of kernel output.
