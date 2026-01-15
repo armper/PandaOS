@@ -60,6 +60,8 @@ pub enum ProcessState {
 pub struct Process {
     /// Process ID
     pub pid: Pid,
+    /// Process group ID (for job control)
+    pub pgid: Pid,
     /// Parent process ID (None for init)
     pub parent_pid: Option<Pid>,
     /// Process state
@@ -145,6 +147,7 @@ impl Process {
 
         Ok(Self {
             pid,
+            pgid: pid, // Initially, process is its own group leader
             parent_pid: None,
             state: ProcessState::Ready,
             wait_state: WaitState::NotWaiting,
@@ -245,6 +248,7 @@ impl Process {
 
         Ok(Self {
             pid: child_pid,
+            pgid: child_pid, // Child gets its own process group by default
             parent_pid: Some(self.pid),
             state: ProcessState::Ready,
             wait_state: WaitState::NotWaiting,
@@ -388,6 +392,7 @@ mod tests {
         // Create a mock process for state testing
         let mut process = Process {
             pid: pid_allocator.allocate(),
+            pgid: panda_hal::pid::Pid::new(1),
             parent_pid: None,
             state: ProcessState::Ready,
             wait_state: WaitState::NotWaiting,
@@ -418,6 +423,7 @@ mod tests {
 
         let parent = Process {
             pid: pid_allocator.allocate(),
+            pgid: panda_hal::pid::Pid::new(1),
             parent_pid: None,
             state: ProcessState::Ready,
             wait_state: WaitState::NotWaiting,
@@ -441,6 +447,7 @@ mod tests {
 
         let mut process = Process {
             pid: pid_allocator.allocate(),
+            pgid: panda_hal::pid::Pid::new(1),
             parent_pid: None,
             state: ProcessState::Ready,
             wait_state: WaitState::NotWaiting,

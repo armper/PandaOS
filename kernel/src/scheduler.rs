@@ -38,12 +38,14 @@ pub struct Scheduler {
     ready_queue: VecDeque<Process>,
     /// Currently running process (if any)
     current: Option<Process>,
+    /// Foreground process group ID (for job control)
+    foreground_pgid: Option<panda_hal::pid::Pid>,
 }
 
 impl Scheduler {
     /// Create a new empty scheduler
     pub fn new() -> Self {
-        Self { ready_queue: VecDeque::new(), current: None }
+        Self { ready_queue: VecDeque::new(), current: None, foreground_pgid: None }
     }
 
     /// Add a process to the scheduler
@@ -295,6 +297,55 @@ impl Scheduler {
     pub fn all_processes(&self) -> impl Iterator<Item = &Process> {
         self.current.iter().chain(self.ready_queue.iter())
     }
+
+    /// Set the foreground process group ID
+    ///
+    /// The foreground process group receives signals like SIGINT (Ctrl+C).
+    /// Only one process group can be in the foreground at a time.
+    pub fn set_foreground_pgid(&mut self, pgid: Option<panda_hal::pid::Pid>) {
+        self.foreground_pgid = pgid;
+    }
+
+    /// Get the foreground process group ID
+    pub fn foreground_pgid(&self) -> Option<panda_hal::pid::Pid> {
+        self.foreground_pgid
+    }
+
+    /// Send a signal to all processes in a process group
+    ///
+    /// # Arguments
+    ///
+    /// * `pgid` - Process group ID to signal
+    /// * `signal` - Signal to send
+    ///
+    /// # Returns
+    ///
+    /// Number of processes that received the signal
+    pub fn signal_process_group(
+        &mut self,
+        pgid: panda_hal::pid::Pid,
+        signal: crate::process::Signal,
+    ) -> usize {
+        let mut count = 0;
+
+        // Signal current process if it's in the target group
+        if let Some(proc) = &mut self.current {
+            if proc.pgid == pgid {
+                proc.send_signal(signal);
+                count += 1;
+            }
+        }
+
+        // Signal all processes in ready queue that are in the target group
+        for proc in &mut self.ready_queue {
+            if proc.pgid == pgid {
+                proc.send_signal(signal);
+                count += 1;
+            }
+        }
+
+        count
+    }
 }
 
 impl Default for Scheduler {
@@ -312,6 +363,7 @@ mod tests {
     fn create_mock_process(pid: u64) -> Process {
         Process {
             pid: panda_hal::pid::Pid::new(pid),
+            pgid: panda_hal::pid::Pid::new(pid),
             parent_pid: None,
             state: ProcessState::Ready,
             wait_state: crate::process::WaitState::NotWaiting,

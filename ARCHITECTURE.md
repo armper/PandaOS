@@ -139,11 +139,111 @@ None yet - hardware access is direct. Future refactoring will add:
 - `close(fd)` - syscall #3 (closes file descriptors >= 3, handles pipe refcounting)
 - `pipe(pipefd)` - syscall #22 (creates pipe, returns read/write fds)
 - `dup2(oldfd, newfd)` - syscall #33 (duplicates file descriptor)
+- `kill(pid, sig)` - syscall #37 (sends signal to process or process group)
 - `getpid()` - syscall #39 (returns process ID)
 - `fork()` - syscall #57 (creates child process, returns child PID to parent, 0 to child)
 - `execve(path, arg)` - syscall #59 (replaces current process image, single arg string)
 - `exit(status)` - syscall #60 (terminates process)
 - `waitpid(pid, status, options)` - syscall #61 (waits for child to exit, reaps zombie)
+- `setpgid(pid, pgid)` - syscall #109 (sets process group ID)
+
+## Job Control (Minimal)
+
+**Status:** ✅ **FOUNDATIONS IMPLEMENTED** - Basic process groups and foreground tracking.
+
+### Overview
+
+PandaOS implements minimal job control foundations to enable correct Ctrl+C behavior for pipelines.
+This provides the infrastructure for future full job control support (background jobs, Ctrl+Z, etc.).
+
+### Process Groups (pgid)
+
+Each process has a **process group ID** (`pgid`) that identifies which group it belongs to:
+- When a process is created, it starts in its own process group (`pgid == pid`)
+- Processes can join other groups using `setpgid(pid, pgid)` syscall
+- Process groups enable signaling multiple related processes at once
+
+**Use Cases:**
+- Pipeline processes (e.g., `echo hi | wc`) should be in the same process group
+- Allows Ctrl+C to terminate all processes in a pipeline simultaneously
+
+### Foreground Process Group
+
+The scheduler tracks a **foreground process group** (`foreground_pgid`):
+- Only one process group can be in the foreground at a time
+- The foreground group receives terminal signals (SIGINT from Ctrl+C)
+- Shell sets a child's pgid as foreground before waiting for it
+- Shell clears foreground pgid after child exits or receives signal
+
+### Signal Delivery
+
+Signals can target:
+1. **Single process**: `kill(pid, signal)` where `pid > 0`
+2. **Process group**: `kill(-pgid, signal)` where `pid < 0` (negative means group)
+
+When Ctrl+C is pressed in the shell:
+1. Shell checks if there's a foreground process group
+2. If yes, sends SIGINT to that group: `kill(-foreground_pgid, SIGINT)`
+3. All processes in that group receive SIGINT and terminate
+
+### Implementation Details
+
+**Process Structure** (`kernel/src/process.rs`):
+```rust
+pub struct Process {
+    pub pid: Pid,
+    pub pgid: Pid,  // Process group ID
+    // ... other fields
+}
+```
+
+**Scheduler API** (`kernel/src/scheduler.rs`):
+```rust
+impl Scheduler {
+    // Track foreground process group
+    pub fn set_foreground_pgid(&mut self, pgid: Option<Pid>);
+    pub fn foreground_pgid(&self) -> Option<Pid>;
+    
+    // Signal all processes in a group
+    pub fn signal_process_group(&mut self, pgid: Pid, signal: Signal) -> usize;
+}
+```
+
+**Shell Behavior** (`userland/sh.asm`):
+- After `fork()`, child calls `setpgid(0, 0)` to become process group leader
+- Parent saves child's pgid as foreground: `foreground_pgid = child_pid`
+- Parent waits for child with `waitpid(child_pid, ...)`
+- On Ctrl+C, sends `kill(-foreground_pgid, SIGINT)` if foreground group exists
+- After child exits, clears foreground: `foreground_pgid = 0`
+
+### Limitations & Future Work
+
+**Currently Supported:**
+- ✅ Process groups (pgid)
+- ✅ Foreground process group tracking
+- ✅ SIGINT delivery to process groups
+- ✅ Ctrl+C terminates foreground processes
+- ✅ Works for single commands and pipelines
+
+**Not Yet Supported (Ctrl+Z):**
+- ❌ SIGTSTP (stop signal)
+- ❌ SIGCONT (continue signal)
+- ❌ Background jobs
+- ❌ Job list management (`jobs` command)
+- ❌ Foreground/background switching (`fg`, `bg`)
+
+**Why Ctrl+Z is Not Supported:**
+
+Implementing Ctrl+Z requires:
+1. **Process state management**: Add `Stopped` state to `ProcessState` enum
+2. **Signal handling**: Implement SIGTSTP and SIGCONT signal delivery
+3. **Scheduler changes**: Skip stopped processes during scheduling
+4. **Job tracking**: Shell must maintain a job table with stopped/background jobs
+5. **TTY ownership**: Track which process group controls the terminal
+
+This is a significant amount of complexity beyond the minimal job control needed
+for correct Ctrl+C behavior. The foundations laid here (pgid + foreground tracking)
+make future Ctrl+Z support straightforward when needed.
 
 ## Process Model (Post-Fork/Wait)
 
