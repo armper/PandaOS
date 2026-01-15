@@ -7,6 +7,9 @@ use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, Pag
 
 static mut IDT: InterruptDescriptorTable = InterruptDescriptorTable::new();
 
+/// Timer interrupt handler function pointer
+static mut TIMER_HANDLER: Option<fn()> = None;
+
 /// Initialize interrupt handling
 pub fn init() {
     // SAFETY: This is called once during kernel init, we're setting up the IDT
@@ -22,7 +25,25 @@ pub fn init() {
         // Add page fault handler
         idt.page_fault.set_handler_fn(page_fault_handler);
 
+        // Add timer interrupt (IRQ 0 -> interrupt 32)
+        idt[32].set_handler_fn(timer_interrupt_handler);
+
         idt.load();
+    }
+}
+
+/// Set the timer interrupt handler
+///
+/// This allows the scheduler to register a handler that will be called
+/// on every timer tick.
+///
+/// # Safety
+///
+/// Must be called before enabling timer interrupts.
+pub unsafe fn set_timer_handler(handler: fn()) {
+    // SAFETY: Caller guarantees this is called before timer interrupts are enabled
+    unsafe {
+        TIMER_HANDLER = Some(handler);
     }
 }
 
@@ -54,6 +75,20 @@ extern "x86-interrupt" fn page_fault_handler(
     // For now, halt on page fault
     loop {
         x86_64::instructions::hlt();
+    }
+}
+
+/// Timer interrupt handler (IRQ 0)
+extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFrame) {
+    // Call registered timer handler if available
+    if let Some(handler) = unsafe { TIMER_HANDLER } {
+        handler();
+    }
+
+    // Send EOI (End of Interrupt) to PIC
+    // SAFETY: Sending EOI to PIC is safe and required after handling IRQ
+    unsafe {
+        crate::pic::send_eoi(0);
     }
 }
 

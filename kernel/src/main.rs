@@ -43,9 +43,11 @@ pub mod linker_symbols;
 pub mod memory;
 pub mod page_table_tracker;
 pub mod paging;
+pub mod pic;
 pub mod process;
 pub mod scheduler;
 pub mod syscall;
+pub mod timer;
 pub mod usermode;
 
 /// Entry point for the kernel
