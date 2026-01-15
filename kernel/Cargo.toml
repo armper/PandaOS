@@ -23,6 +23,7 @@ default = []
 shell-smoke = []
 vfs-cat-smoke = []
 fork-exec-smoke = []
+pipe-smoke = []
 build-userland = []
 
 [package.metadata.bootimage]

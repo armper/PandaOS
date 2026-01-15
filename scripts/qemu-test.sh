@@ -50,7 +50,7 @@ fi
 if [ "${PIPE_SMOKE:-0}" -eq 1 ]; then
     FEATURE_COUNT=$((FEATURE_COUNT + 1))
     TEST_NAME="pipe_smoke"
-    FEATURES+=(--test pipe_smoke)
+    FEATURES+=(--features pipe-smoke)
     EXPECTED_MARKER="TEST PASS pipe_smoke"
 fi
 

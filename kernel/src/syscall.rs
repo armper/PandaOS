@@ -18,7 +18,12 @@
 //! - Syscalls preserve all GPRs except RAX (return value) and RCX/R11 (syscall clobbers)
 
 // Import macros for logging
-#[cfg(any(feature = "shell-smoke", feature = "vfs-cat-smoke", feature = "fork-exec-smoke"))]
+#[cfg(any(
+    feature = "shell-smoke",
+    feature = "vfs-cat-smoke",
+    feature = "fork-exec-smoke",
+    feature = "pipe-smoke"
+))]
 use core::sync::atomic::{AtomicUsize, Ordering};
 use panda_hal::serial_println;
 use spin::Once;
@@ -311,17 +316,36 @@ const SCRIPTED_INPUT: &[u8] = b"cat /etc/motd\nexit\n";
 #[cfg(feature = "fork-exec-smoke")]
 const SCRIPTED_INPUT: &[u8] = b"cat /etc/version\ntrue\nexit\n";
 
-#[cfg(all(feature = "shell-smoke", any(feature = "vfs-cat-smoke", feature = "fork-exec-smoke")))]
-compile_error!("shell-smoke, vfs-cat-smoke, and fork-exec-smoke are mutually exclusive");
+#[cfg(feature = "pipe-smoke")]
+const SCRIPTED_INPUT: &[u8] = b"echo hello | wc\nexit\n";
 
-#[cfg(all(feature = "vfs-cat-smoke", feature = "fork-exec-smoke"))]
-compile_error!("shell-smoke, vfs-cat-smoke, and fork-exec-smoke are mutually exclusive");
+#[cfg(all(
+    feature = "shell-smoke",
+    any(feature = "vfs-cat-smoke", feature = "fork-exec-smoke", feature = "pipe-smoke")
+))]
+compile_error!("shell-smoke, vfs-cat-smoke, fork-exec-smoke, and pipe-smoke are mutually exclusive");
 
-#[cfg(any(feature = "shell-smoke", feature = "vfs-cat-smoke", feature = "fork-exec-smoke"))]
+#[cfg(all(feature = "vfs-cat-smoke", any(feature = "fork-exec-smoke", feature = "pipe-smoke")))]
+compile_error!("shell-smoke, vfs-cat-smoke, fork-exec-smoke, and pipe-smoke are mutually exclusive");
+
+#[cfg(all(feature = "fork-exec-smoke", feature = "pipe-smoke"))]
+compile_error!("shell-smoke, vfs-cat-smoke, fork-exec-smoke, and pipe-smoke are mutually exclusive");
+
+#[cfg(any(
+    feature = "shell-smoke",
+    feature = "vfs-cat-smoke",
+    feature = "fork-exec-smoke",
+    feature = "pipe-smoke"
+))]
 static SCRIPTED_POS: AtomicUsize = AtomicUsize::new(0);
 
 fn read_byte() -> Option<u8> {
-    #[cfg(any(feature = "shell-smoke", feature = "vfs-cat-smoke", feature = "fork-exec-smoke"))]
+    #[cfg(any(
+        feature = "shell-smoke",
+        feature = "vfs-cat-smoke",
+        feature = "fork-exec-smoke",
+        feature = "pipe-smoke"
+    ))]
     {
         let pos = SCRIPTED_POS.fetch_add(1, Ordering::Relaxed);
         return SCRIPTED_INPUT.get(pos).copied();
@@ -330,7 +354,8 @@ fn read_byte() -> Option<u8> {
     #[cfg(not(any(
         feature = "shell-smoke",
         feature = "vfs-cat-smoke",
-        feature = "fork-exec-smoke"
+        feature = "fork-exec-smoke",
+        feature = "pipe-smoke"
     )))]
     {
         return panda_hal::serial::serial_read_byte();
