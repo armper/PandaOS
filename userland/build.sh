@@ -54,7 +54,17 @@ echo "Building true..."
 nasm -f elf64 true.asm -o build/true.o
 $LINKER -o build/true build/true.o -static -nostdlib --entry=_start
 
-cp build/hello build/hello1 build/hello2 build/init build/sh build/cat build/true bin/
+# Build echo program
+echo "Building echo..."
+nasm -f elf64 echo.asm -o build/echo.o
+$LINKER -o build/echo build/echo.o -static -nostdlib --entry=_start
+
+# Build wc program
+echo "Building wc..."
+nasm -f elf64 wc.asm -o build/wc.o
+$LINKER -o build/wc build/wc.o -static -nostdlib --entry=_start
+
+cp build/hello build/hello1 build/hello2 build/init build/sh build/cat build/true build/echo build/wc bin/
 
 echo "Userland programs built successfully!"
 ls -lh build/

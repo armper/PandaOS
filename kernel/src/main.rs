@@ -45,6 +45,7 @@ pub mod memory;
 pub mod page_table_tracker;
 pub mod paging;
 pub mod pic;
+pub mod pipe;
 pub mod process;
 pub mod scheduler;
 pub mod syscall;
@@ -310,10 +311,13 @@ unsafe fn init_scheduler_and_start() -> ! {
     syscall::set_exec_handler(exec_handler);
     syscall::set_open_handler(open_handler);
     syscall::set_read_handler(read_handler);
+    syscall::set_write_handler(write_handler);
     syscall::set_close_handler(close_handler);
     syscall::set_getpid_handler(getpid_handler);
     syscall::set_fork_handler(fork_handler);
     syscall::set_waitpid_handler(waitpid_handler);
+    syscall::set_pipe_handler(pipe_handler);
+    syscall::set_dup2_handler(dup2_handler);
 
     // Unmask timer interrupt (IRQ 0)
     println!("Enabling timer interrupt...");
@@ -455,9 +459,86 @@ fn read_handler(fd: i32, buf: u64, count: u64) -> syscall::SyscallResult {
     let scheduler = unsafe { get_scheduler() };
     let current = scheduler.current_process_mut().ok_or(syscall::ErrorCode::ESRCH)?;
     let count = usize::try_from(count).map_err(|_| syscall::ErrorCode::EINVAL)?;
-    let data = current.fd_table.read(fd, count)?;
-    crate::usermode::copy_to_user_bytes(buf, data)?;
-    Ok(data.len() as u64)
+
+    // Check fd kind
+    let fd_kind = current.fd_table.get(fd)?;
+
+    match fd_kind {
+        fs::FdKind::File(_) => {
+            // Read from file
+            let data = current.fd_table.read(fd, count)?;
+            crate::usermode::copy_to_user_bytes(buf, data)?;
+            Ok(data.len() as u64)
+        }
+        fs::FdKind::PipeRead(pipe_id) => {
+            // Read from pipe - use a temporary buffer
+            let mut temp_buf = [0u8; 4096];
+            let to_read = count.min(temp_buf.len());
+
+            // Try to read from pipe (non-blocking)
+            match crate::pipe::pipe_read(pipe_id, &mut temp_buf[..to_read]) {
+                Ok(n) => {
+                    if n > 0 {
+                        crate::usermode::copy_to_user_bytes(buf, &temp_buf[..n])?;
+                    }
+                    Ok(n as u64)
+                }
+                Err(syscall::ErrorCode::EAGAIN) => {
+                    // Busy-wait by yielding (simple blocking implementation)
+                    // In a full implementation, we'd block the process
+                    yield_handler();
+                    // Never reached - yield_handler switches processes
+                    unreachable!()
+                }
+                Err(e) => Err(e),
+            }
+        }
+        fs::FdKind::PipeWrite(_) => {
+            // Can't read from write end
+            Err(syscall::ErrorCode::EBADF)
+        }
+    }
+}
+
+fn write_handler(fd: i32, buf: u64, count: u64) -> syscall::SyscallResult {
+    let scheduler = unsafe { get_scheduler() };
+    let current = scheduler.current_process_mut().ok_or(syscall::ErrorCode::ESRCH)?;
+    let count = usize::try_from(count).map_err(|_| syscall::ErrorCode::EINVAL)?;
+
+    // Check fd kind
+    let fd_kind = current.fd_table.get(fd)?;
+
+    match fd_kind {
+        fs::FdKind::File(_) => {
+            // Files are read-only
+            Err(syscall::ErrorCode::EBADF)
+        }
+        fs::FdKind::PipeWrite(pipe_id) => {
+            // Write to pipe - use a temporary buffer
+            let mut temp_buf = [0u8; 4096];
+            let to_write = count.min(temp_buf.len());
+
+            // Copy from user space
+            let copied = crate::usermode::copy_user_bytes(buf, to_write, &mut temp_buf)?;
+
+            // Try to write to pipe (non-blocking)
+            match crate::pipe::pipe_write(pipe_id, &temp_buf[..copied]) {
+                Ok(n) => Ok(n as u64),
+                Err(syscall::ErrorCode::EAGAIN) => {
+                    // Busy-wait by yielding (simple blocking implementation)
+                    // In a full implementation, we'd block the process
+                    yield_handler();
+                    // Never reached - yield_handler switches processes
+                    unreachable!()
+                }
+                Err(e) => Err(e),
+            }
+        }
+        fs::FdKind::PipeRead(_) => {
+            // Can't write to read end
+            Err(syscall::ErrorCode::EBADF)
+        }
+    }
 }
 
 fn close_handler(fd: i32) -> syscall::SyscallResult {
@@ -465,6 +546,47 @@ fn close_handler(fd: i32) -> syscall::SyscallResult {
     let current = scheduler.current_process_mut().ok_or(syscall::ErrorCode::ESRCH)?;
     current.fd_table.close(fd)?;
     Ok(0)
+}
+
+/// pipe handler - create a pipe
+fn pipe_handler(pipefd_ptr: u64) -> syscall::SyscallResult {
+    serial_println!("[PIPE] Creating pipe");
+
+    // Create a new pipe
+    let (read_id, write_id) = crate::pipe::pipe_create()?;
+
+    // Get current process
+    let scheduler = unsafe { get_scheduler() };
+    let current = scheduler.current_process_mut().ok_or(syscall::ErrorCode::ESRCH)?;
+
+    // Open read and write ends in FD table
+    let read_fd = current.fd_table.open_pipe_read(read_id)?;
+    let write_fd = current.fd_table.open_pipe_write(write_id)?;
+
+    serial_println!("[PIPE] Created pipe: read_fd={}, write_fd={}", read_fd, write_fd);
+
+    // Write fds to user memory
+    let fds = [read_fd, write_fd];
+    let fds_bytes = unsafe {
+        core::slice::from_raw_parts(fds.as_ptr() as *const u8, core::mem::size_of_val(&fds))
+    };
+    crate::usermode::copy_to_user_bytes(pipefd_ptr, fds_bytes)?;
+
+    Ok(0)
+}
+
+/// dup2 handler - duplicate a file descriptor
+fn dup2_handler(oldfd: i32, newfd: i32) -> syscall::SyscallResult {
+    serial_println!("[DUP2] Duplicating fd {} to {}", oldfd, newfd);
+
+    // Get current process
+    let scheduler = unsafe { get_scheduler() };
+    let current = scheduler.current_process_mut().ok_or(syscall::ErrorCode::ESRCH)?;
+
+    // Perform dup2
+    current.fd_table.dup2(oldfd, newfd)?;
+
+    Ok(newfd as u64)
 }
 
 /// getpid handler - return current process PID

@@ -133,14 +133,16 @@ None yet - hardware access is direct. Future refactoring will add:
 - **rcx, r11**: Preserved by hardware (store user RIP and RFLAGS)
 
 **Implemented Syscalls:**
-- `read(fd, buf, count)` - syscall #0 (stdin from serial; file fds read-only)
-- `write(fd, buf, count)` - syscall #1 (stdout/stderr to serial)
+- `read(fd, buf, count)` - syscall #0 (stdin from serial; file fds read-only; pipe read)
+- `write(fd, buf, count)` - syscall #1 (stdout/stderr to serial; pipe write)
 - `open(path, flags, mode)` - syscall #2 (read-only, absolute paths)
-- `close(fd)` - syscall #3 (closes file descriptors >= 3)
-- `exit(status)` - syscall #60 (terminates process)
+- `close(fd)` - syscall #3 (closes file descriptors >= 3, handles pipe refcounting)
+- `pipe(pipefd)` - syscall #22 (creates pipe, returns read/write fds)
+- `dup2(oldfd, newfd)` - syscall #33 (duplicates file descriptor)
 - `getpid()` - syscall #39 (returns process ID)
-- `execve(path, arg)` - syscall #59 (replaces current process image, single arg string)
 - `fork()` - syscall #57 (creates child process, returns child PID to parent, 0 to child)
+- `execve(path, arg)` - syscall #59 (replaces current process image, single arg string)
+- `exit(status)` - syscall #60 (terminates process)
 - `waitpid(pid, status, options)` - syscall #61 (waits for child to exit, reaps zombie)
 
 ## Process Model (Post-Fork/Wait)
@@ -154,6 +156,38 @@ None yet - hardware access is direct. Future refactoring will add:
 - Per-process fixed-size table (16 entries)
 - `fd 0/1/2` are reserved for serial stdio
 - `fd >= 3` are allocated on open and track per-fd offsets
+- Supports three FD kinds: File, PipeRead, PipeWrite
+
+## Pipe Subsystem
+
+**Design:**
+- Unix-like pipes for inter-process communication
+- Fixed-size 4KB ring buffer per pipe
+- Non-blocking semantics with EAGAIN
+- Reference-counted pipe ends
+
+**Pipe Pool:**
+- Global pool of up to 16 concurrent pipes
+- Pipes allocated on demand via `pipe()` syscall
+- Each pipe has independent read/write refcounts
+
+**Pipe Semantics:**
+- `pipe(pipefd)` creates two fds: read end and write end
+- `write()` to write end appends data to ring buffer
+- `read()` from read end consumes data from ring buffer
+- When last writer closes: readers get EOF (0 bytes) when buffer empty
+- When last reader closes: writers get EPIPE error
+- Non-blocking: returns EAGAIN when buffer full (write) or empty (read)
+- Busy-wait blocking: syscall handlers yield on EAGAIN (simple implementation)
+
+**Fork Behavior:**
+- Child inherits parent's FD table with pipe fds
+- Pipe refcounts incremented for child's ends
+- Parent and child can communicate via shared pipe
+
+**FD Operations:**
+- `dup2(oldfd, newfd)` duplicates pipe fds with proper refcounting
+- `close(fd)` decrements pipe refcounts and triggers EOF/EPIPE
 
 ## Process Model (Post-Fork/Wait)
 

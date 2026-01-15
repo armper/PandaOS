@@ -156,8 +156,9 @@ PandaOS is a Unix-like x86_64 kernel written in Rust with a focus on:
 - [x] **System call interface**:
   - syscall/sysret infrastructure via MSRs
   - Linux x86_64 ABI compatibility
-  - Implemented: read(), write(), open(), close(), exit(), getpid(), yield(), execve()
+  - Implemented: read(), write(), open(), close(), exit(), getpid(), yield(), execve(), fork(), waitpid(), pipe(), dup2()
   - Syscall entry/exit with explicit context save/restore
+  - Pipe support in read/write syscalls
 - [x] **GDT with user segments**:
   - Kernel code/data segments (ring 0)
   - User code/data segments (ring 3)
@@ -188,6 +189,15 @@ PandaOS is a Unix-like x86_64 kernel written in Rust with a focus on:
   - See [SCHEDULER.md](SCHEDULER.md) for details
 - [ ] Timer-based preemption (complex, deferred)
 - [x] Yield-based context switching (syscall-driven)
+- [x] **Pipes (IPC)**:
+  - Unix-like pipes with 4KB ring buffer
+  - pipe() syscall creates read/write fd pair
+  - Non-blocking with EAGAIN semantics
+  - Reference-counted pipe ends
+  - EOF/EPIPE behavior on close
+  - dup2() for fd redirection
+  - Fork-safe with proper refcounting
+  - Global pool of 16 concurrent pipes
 - [ ] Basic I/O (keyboard)
 
 ## Key Design Decisions

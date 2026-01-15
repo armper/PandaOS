@@ -162,6 +162,8 @@ pub enum ErrorCode {
     EINVAL = 22,
     /// Too many open files
     EMFILE = 24,
+    /// Broken pipe
+    EPIPE = 32,
     /// Function not implemented
     ENOSYS = 38,
 }
@@ -208,6 +210,8 @@ pub fn handle_syscall(
         SyscallNumber::Execve => sys_exec(arg1, arg2),
         SyscallNumber::Fork => sys_fork(),
         SyscallNumber::Wait4 => sys_waitpid(arg1 as i64, arg2, arg3 as i32),
+        SyscallNumber::Pipe => sys_pipe(arg1),
+        SyscallNumber::Dup2 => sys_dup2(arg1 as i32, arg2 as i32),
         // All other syscalls return ENOSYS for now
         _ => Err(ErrorCode::ENOSYS),
     };
@@ -254,32 +258,37 @@ pub fn set_exit_handler(handler: fn(i32) -> !) {
 
 /// sys_write - Write to file descriptor
 fn sys_write(fd: i32, buf: u64, count: u64) -> SyscallResult {
-    // Only support stdout (fd 1) and stderr (fd 2) for now
-    if fd != 1 && fd != 2 {
-        return Err(ErrorCode::EBADF);
+    // stdout (fd 1) and stderr (fd 2) go to serial
+    if fd == 1 || fd == 2 {
+        // Validate buffer address (basic check - should be more thorough)
+        if buf == 0 || count == 0 {
+            return Ok(0);
+        }
+
+        // Limit write size to prevent abuse
+        if count > 4096 {
+            return Err(ErrorCode::EINVAL);
+        }
+
+        let mut local_buf = [0u8; 4096];
+        let count = usize::try_from(count).map_err(|_| ErrorCode::EINVAL)?;
+        let copied = crate::usermode::copy_user_bytes(buf, count, &mut local_buf)?;
+        let slice = &local_buf[..copied];
+
+        // Write raw bytes to serial output
+        for &byte in slice {
+            panda_hal::serial::write_byte_raw(byte);
+        }
+
+        return Ok(count as u64);
     }
 
-    // Validate buffer address (basic check - should be more thorough)
-    if buf == 0 || count == 0 {
-        return Ok(0);
+    // For other fds, use the write handler
+    if let Some(write_fn) = WRITE_HANDLER.get() {
+        write_fn(fd, buf, count)
+    } else {
+        Err(ErrorCode::EBADF)
     }
-
-    // Limit write size to prevent abuse
-    if count > 4096 {
-        return Err(ErrorCode::EINVAL);
-    }
-
-    let mut local_buf = [0u8; 4096];
-    let count = usize::try_from(count).map_err(|_| ErrorCode::EINVAL)?;
-    let copied = crate::usermode::copy_user_bytes(buf, count, &mut local_buf)?;
-    let slice = &local_buf[..copied];
-
-    // Write raw bytes to serial output
-    for &byte in slice {
-        panda_hal::serial::write_byte_raw(byte);
-    }
-
-    Ok(count as u64)
 }
 
 #[cfg(feature = "shell-smoke")]
@@ -457,15 +466,36 @@ fn sys_exec(path_ptr: u64, arg_ptr: u64) -> SyscallResult {
     }
 }
 
+/// sys_pipe - Create a pipe
+fn sys_pipe(pipefd_ptr: u64) -> SyscallResult {
+    if let Some(pipe_fn) = PIPE_HANDLER.get() {
+        pipe_fn(pipefd_ptr)
+    } else {
+        Err(ErrorCode::ENOSYS)
+    }
+}
+
+/// sys_dup2 - Duplicate a file descriptor
+fn sys_dup2(oldfd: i32, newfd: i32) -> SyscallResult {
+    if let Some(dup2_fn) = DUP2_HANDLER.get() {
+        dup2_fn(oldfd, newfd)
+    } else {
+        Err(ErrorCode::ENOSYS)
+    }
+}
+
 /// Yield handler function pointer for scheduler integration
 static YIELD_HANDLER: Once<fn()> = Once::new();
 static EXEC_HANDLER: Once<fn(&str, Option<&str>) -> Result<(), ErrorCode>> = Once::new();
 static OPEN_HANDLER: Once<fn(&str) -> SyscallResult> = Once::new();
 static READ_HANDLER: Once<fn(i32, u64, u64) -> SyscallResult> = Once::new();
+static WRITE_HANDLER: Once<fn(i32, u64, u64) -> SyscallResult> = Once::new();
 static CLOSE_HANDLER: Once<fn(i32) -> SyscallResult> = Once::new();
 static GETPID_HANDLER: Once<fn() -> SyscallResult> = Once::new();
 static FORK_HANDLER: Once<fn() -> SyscallResult> = Once::new();
 static WAITPID_HANDLER: Once<fn(i64, u64, i32) -> SyscallResult> = Once::new();
+static PIPE_HANDLER: Once<fn(u64) -> SyscallResult> = Once::new();
+static DUP2_HANDLER: Once<fn(i32, i32) -> SyscallResult> = Once::new();
 
 /// Set the yield handler for syscall yield
 ///
@@ -492,6 +522,11 @@ pub fn set_read_handler(handler: fn(i32, u64, u64) -> SyscallResult) {
     READ_HANDLER.call_once(|| handler);
 }
 
+/// Set the write handler for syscall write on file descriptors
+pub fn set_write_handler(handler: fn(i32, u64, u64) -> SyscallResult) {
+    WRITE_HANDLER.call_once(|| handler);
+}
+
 /// Set the close handler for syscall close
 pub fn set_close_handler(handler: fn(i32) -> SyscallResult) {
     CLOSE_HANDLER.call_once(|| handler);
@@ -510,6 +545,16 @@ pub fn set_fork_handler(handler: fn() -> SyscallResult) {
 /// Set the waitpid handler for syscall waitpid
 pub fn set_waitpid_handler(handler: fn(i64, u64, i32) -> SyscallResult) {
     WAITPID_HANDLER.call_once(|| handler);
+}
+
+/// Set the pipe handler for syscall pipe
+pub fn set_pipe_handler(handler: fn(u64) -> SyscallResult) {
+    PIPE_HANDLER.call_once(|| handler);
+}
+
+/// Set the dup2 handler for syscall dup2
+pub fn set_dup2_handler(handler: fn(i32, i32) -> SyscallResult) {
+    DUP2_HANDLER.call_once(|| handler);
 }
 
 #[cfg(test)]
