@@ -206,10 +206,31 @@ pub fn handle_syscall(
 fn sys_exit(status: i32) -> SyscallResult {
     serial_println!("Process exiting with status: {}", status);
 
-    // TODO: Actually terminate the process
+    // Exit QEMU if exit handler is set
+    if let Some(exit_fn) = unsafe { EXIT_HANDLER } {
+        exit_fn(status);
+    }
+
+    // TODO: Actually terminate the process and return to scheduler
     // For now, just halt the system
     loop {
         x86_64::instructions::hlt();
+    }
+}
+
+/// Exit handler function pointer for testing
+static mut EXIT_HANDLER: Option<fn(i32) -> !> = None;
+
+/// Set the exit handler for syscall exit
+///
+/// # Safety
+///
+/// Must be called before any user processes run.
+/// Handler must never return.
+pub unsafe fn set_exit_handler(handler: fn(i32) -> !) {
+    // SAFETY: Caller guarantees this is called before any user processes run
+    unsafe {
+        EXIT_HANDLER = Some(handler);
     }
 }
 

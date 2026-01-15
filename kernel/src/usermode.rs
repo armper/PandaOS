@@ -32,26 +32,20 @@ pub unsafe fn init_syscall() {
 
     // Configure STAR register with segment selectors
     // SAFETY: We're configuring syscall/sysret during kernel init
-    unsafe {
-        let _ = Star::write(
-            selectors.user_code,
-            selectors.user_data,
-            selectors.kernel_code,
-            selectors.kernel_data,
-        );
-    }
+    let _ = Star::write(
+        selectors.user_code,
+        selectors.user_data,
+        selectors.kernel_code,
+        selectors.kernel_data,
+    );
 
     // Set LSTAR to syscall entry point
     // SAFETY: syscall_entry is a valid function pointer
-    unsafe {
-        LStar::write(VirtAddr::new(syscall_entry as *const () as u64));
-    }
+    LStar::write(VirtAddr::new(syscall_entry as *const () as u64));
 
     // Set SFMASK to clear IF (interrupts) on syscall entry
     // SAFETY: This is a valid RFLAGS configuration
-    unsafe {
-        SFMask::write(RFlags::INTERRUPT_FLAG);
-    }
+    SFMask::write(RFlags::INTERRUPT_FLAG);
 
     // Enable syscall/sysret in EFER
     // SAFETY: This is safe to do during kernel init

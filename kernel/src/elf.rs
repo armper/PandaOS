@@ -228,6 +228,106 @@ pub fn parse_elf(data: &[u8]) -> Result<ElfInfo, ElfError> {
     Ok(ElfInfo { entry_point: ehdr.e_entry, load_segments: segments, segment_count })
 }
 
+/// Load ELF segments into memory
+///
+/// Maps all PT_LOAD segments into the specified page table.
+/// Allocates physical frames and copies segment data.
+///
+/// # Safety
+///
+/// - page_table_phys must point to a valid L4 page table
+/// - Frame allocator must be initialized
+/// - data must contain valid ELF file
+#[allow(clippy::cast_possible_truncation)]
+#[allow(clippy::cast_sign_loss)]
+pub unsafe fn load_elf_segments(
+    elf_info: &ElfInfo,
+    data: &[u8],
+    page_table_phys: u64,
+) -> Result<(), &'static str> {
+    use crate::paging::{map_page, PageTableFlags, PhysAddr, VirtAddr};
+
+    for i in 0..elf_info.segment_count {
+        let segment = elf_info.load_segments[i].unwrap();
+
+        // Calculate page-aligned addresses
+        let vaddr_start = segment.vaddr & !0xFFF;
+        let vaddr_end = (segment.vaddr + segment.mem_size + 0xFFF) & !0xFFF;
+        let num_pages = ((vaddr_end - vaddr_start) / 4096) as usize;
+
+        // Determine flags based on segment permissions
+        let mut flags = PageTableFlags::PRESENT.or(PageTableFlags::USER_ACCESSIBLE);
+        
+        if segment.is_writable() {
+            flags = flags.or(PageTableFlags::WRITABLE);
+        }
+        
+        if !segment.is_executable() {
+            flags = flags.or(PageTableFlags::NO_EXECUTE);
+        }
+
+        // Map each page in the segment
+        for page_idx in 0..num_pages {
+            // SAFETY: Caller guarantees frame allocator is initialized
+            let frame = unsafe {
+                crate::memory::allocate_frame()
+                    .ok_or("Failed to allocate frame for segment")?
+            };
+            let phys_addr = PhysAddr::new(frame as u64 * panda_hal::memory::FRAME_SIZE as u64);
+            let virt_addr = VirtAddr::new(vaddr_start + (page_idx as u64 * 4096));
+
+            // SAFETY: Caller guarantees page table is valid
+            unsafe {
+                map_page(page_table_phys, virt_addr, phys_addr, flags)?;
+            }
+
+            // Zero the page first
+            // SAFETY: We just allocated and mapped this frame
+            let page_ptr = phys_addr.as_u64() as *mut u8;
+            unsafe {
+                core::ptr::write_bytes(page_ptr, 0, 4096);
+            }
+
+            // Copy segment data if within file size
+            let page_vaddr = vaddr_start + (page_idx as u64 * 4096);
+            
+            if page_vaddr < segment.vaddr + segment.file_size {
+                let offset_in_segment = if page_vaddr >= segment.vaddr {
+                    page_vaddr - segment.vaddr
+                } else {
+                    0
+                };
+                
+                let file_offset = segment.file_offset + offset_in_segment;
+                let offset_in_page = if segment.vaddr > page_vaddr {
+                    (segment.vaddr - page_vaddr) as usize
+                } else {
+                    0
+                };
+                
+                let bytes_to_copy = core::cmp::min(
+                    4096 - offset_in_page,
+                    (segment.file_size - offset_in_segment) as usize,
+                );
+
+                if bytes_to_copy > 0 && file_offset < data.len() as u64 {
+                    let src = &data[file_offset as usize..][..bytes_to_copy];
+                    // SAFETY: We verified the physical address is valid
+                    let dst = unsafe {
+                        core::slice::from_raw_parts_mut(
+                            (phys_addr.as_u64() + offset_in_page as u64) as *mut u8,
+                            bytes_to_copy,
+                        )
+                    };
+                    dst.copy_from_slice(src);
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
