@@ -346,3 +346,53 @@ cd kernel && cargo bootimage --target x86_64-unknown-none -Z build-std=core,comp
 ```
 
 All commands execute successfully with zero errors and zero warnings.
+
+## SIGINT / Ctrl+C Testing
+
+### ctrlc_smoke Test
+
+**Purpose**: Verify shell handles Ctrl+C (SIGINT) correctly when idle.
+
+**Test Flow**:
+1. Shell starts with prompt
+2. User types "echo test" 
+3. Ctrl+C (0x03) is pressed
+4. Shell clears input line, prints "^C", and shows new prompt
+5. Shell remains responsive ("help" command works)
+6. Shell exits cleanly with "exit" command
+
+**Expected Output**:
+```
+panda> echo test^C
+panda> help
+commands: help, echo, cat, true, exit
+panda> exit
+TEST PASS ctrlc_smoke
+```
+
+**Running the Test**:
+```bash
+CTRLC_SMOKE=1 ./scripts/qemu-test.sh
+```
+
+**Test Input Sequence**:
+```
+"echo test"  → normal input
+0x03         → Ctrl+C byte
+"\nhelp\n"   → verify shell still works
+"exit\n"     → clean exit
+```
+
+**What's Tested**:
+- Ctrl+C detection in shell input loop
+- Input line clearing on Ctrl+C
+- Shell prompt restoration
+- Shell continues running (doesn't exit on Ctrl+C)
+- SIGINT signal infrastructure (kernel support)
+
+**Implementation Notes**:
+- Shell detects 0x03 byte and jumps to ctrlc handler
+- Handler clears r12 (input buffer position) and reprints prompt
+- Kernel has SIGINT support but shell doesn't yet send signals to children
+- Full job control (SIGINT to foreground child) not yet implemented
+
