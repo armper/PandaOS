@@ -498,6 +498,62 @@ CD_SMOKE=1 ./scripts/qemu-test.sh
 "exit\n"    → clean exit
 ```
 
+## PATH Environment Variable Testing
+
+### path_smoke Test
+
+**Purpose**: Verify PATH environment variable and command lookup without absolute paths.
+
+**Test Flow**:
+1. Shell starts with `PATH=/bin`
+2. User types "ls" → kernel resolves to `/bin/ls` via PATH
+3. User types "cat /etc/version" → absolute path, no PATH lookup
+4. User types "cd bin" → changes to `/bin`
+5. User types "ls" → kernel still resolves via PATH (not relative)
+6. User types "exit" → clean exit
+
+**Expected Output**:
+```
+panda> ls
+bin
+etc
+panda> cat /etc/version
+PandaOS 0.1.0
+panda> cd bin
+panda> ls
+sh
+cat
+true
+echo
+wc
+ls
+panda> exit
+TEST PASS path_smoke
+```
+
+**Running the Test**:
+```bash
+PATH_SMOKE=1 ./scripts/qemu-test.sh
+```
+
+**Test Input Sequence**:
+```
+"ls\n"               → command without slash, resolved via PATH to /bin/ls
+"cat /etc/version\n" → absolute path, no PATH lookup needed
+"cd bin\n"           → change to /bin directory
+"ls\n"               → still resolved via PATH (not as relative ./ls)
+"exit\n"             → clean exit
+```
+
+**What it tests:**
+- Process starts with default `PATH=/bin`
+- Commands without `/` trigger PATH lookup in kernel
+- Commands with `/` bypass PATH and use absolute/relative resolution
+- PATH lookup works regardless of current working directory
+- Environment variables are preserved across fork/exec
+- Successful PATH resolution executes the found binary
+- Failed PATH lookup returns `ENOENT` (tested implicitly by success)
+
 **What's Tested**:
 - Per-process current working directory
 - chdir() syscall implementation
