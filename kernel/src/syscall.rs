@@ -73,6 +73,8 @@ pub enum SyscallNumber {
     Getpid = 39,
     /// Send signal
     Kill = 37,
+    /// Set process group ID
+    Setpgid = 109,
     /// Yield CPU (sched_yield)
     Yield = 24,
 }
@@ -102,6 +104,7 @@ impl SyscallNumber {
             61 => Some(Self::Wait4),
             79 => Some(Self::Getcwd),
             80 => Some(Self::Chdir),
+            109 => Some(Self::Setpgid),
             _ => None,
         }
     }
@@ -129,6 +132,7 @@ impl SyscallNumber {
             Self::Chdir => "chdir",
             Self::Getpid => "getpid",
             Self::Kill => "kill",
+            Self::Setpgid => "setpgid",
             Self::Yield => "yield",
         }
     }
@@ -219,6 +223,7 @@ pub fn handle_syscall(
         SyscallNumber::Pipe => sys_pipe(arg1),
         SyscallNumber::Dup2 => sys_dup2(arg1 as i32, arg2 as i32),
         SyscallNumber::Kill => sys_kill(arg1 as i32, arg2 as i32),
+        SyscallNumber::Setpgid => sys_setpgid(arg1 as i32, arg2 as i32),
         // All other syscalls return ENOSYS for now
         _ => Err(ErrorCode::ENOSYS),
     };
@@ -557,6 +562,15 @@ fn sys_kill(pid: i32, sig: i32) -> SyscallResult {
     }
 }
 
+/// sys_setpgid - Set process group ID
+fn sys_setpgid(pid: i32, pgid: i32) -> SyscallResult {
+    if let Some(setpgid_fn) = SETPGID_HANDLER.get() {
+        setpgid_fn(pid, pgid)
+    } else {
+        Err(ErrorCode::ENOSYS)
+    }
+}
+
 /// Yield handler function pointer for scheduler integration
 static YIELD_HANDLER: Once<fn()> = Once::new();
 static EXEC_HANDLER: Once<fn(&str, Option<&str>) -> Result<(), ErrorCode>> = Once::new();
@@ -570,6 +584,7 @@ static WAITPID_HANDLER: Once<fn(i64, u64, i32) -> SyscallResult> = Once::new();
 static PIPE_HANDLER: Once<fn(u64) -> SyscallResult> = Once::new();
 static DUP2_HANDLER: Once<fn(i32, i32) -> SyscallResult> = Once::new();
 static KILL_HANDLER: Once<fn(i32, i32) -> SyscallResult> = Once::new();
+static SETPGID_HANDLER: Once<fn(i32, i32) -> SyscallResult> = Once::new();
 
 /// Set the yield handler for syscall yield
 ///
@@ -634,6 +649,11 @@ pub fn set_dup2_handler(handler: fn(i32, i32) -> SyscallResult) {
 /// Set the kill handler for syscall kill
 pub fn set_kill_handler(handler: fn(i32, i32) -> SyscallResult) {
     KILL_HANDLER.call_once(|| handler);
+}
+
+/// Set the setpgid handler for syscall setpgid
+pub fn set_setpgid_handler(handler: fn(i32, i32) -> SyscallResult) {
+    SETPGID_HANDLER.call_once(|| handler);
 }
 
 #[cfg(test)]

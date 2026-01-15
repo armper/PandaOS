@@ -319,6 +319,7 @@ unsafe fn init_scheduler_and_start() -> ! {
     syscall::set_pipe_handler(pipe_handler);
     syscall::set_dup2_handler(dup2_handler);
     syscall::set_kill_handler(kill_handler);
+    syscall::set_setpgid_handler(setpgid_handler);
 
     // Unmask timer interrupt (IRQ 0)
     println!("Enabling timer interrupt...");
@@ -597,7 +598,7 @@ fn getpid_handler() -> syscall::SyscallResult {
     Ok(current.pid.as_u64())
 }
 
-/// kill handler - send signal to a process
+/// kill handler - send signal to a process or process group
 fn kill_handler(pid: i32, sig: i32) -> syscall::SyscallResult {
     use crate::process::Signal;
 
@@ -609,25 +610,70 @@ fn kill_handler(pid: i32, sig: i32) -> syscall::SyscallResult {
     // SAFETY: Called from syscall handler with interrupts disabled
     let scheduler = unsafe { get_scheduler() };
 
-    // Find the target process
-    let target_pid = panda_hal::pid::Pid::new(pid as u64);
+    if pid > 0 {
+        // Signal a specific process
+        let target_pid = panda_hal::pid::Pid::new(pid as u64);
 
-    // Check if it's the current process
-    if let Some(current) = scheduler.current_process_mut() {
-        if current.pid == target_pid {
-            current.send_signal(signal);
-            return Ok(0);
+        // Check if it's the current process
+        if let Some(current) = scheduler.current_process_mut() {
+            if current.pid == target_pid {
+                current.send_signal(signal);
+                return Ok(0);
+            }
         }
+
+        // LIMITATION: We only support sending signals to the current process.
+        // A full implementation would search the scheduler's ready queue for the target PID.
+        serial_println!("[KILL] Process {} not found or not current", pid);
+        Err(syscall::ErrorCode::ESRCH)
+    } else if pid < 0 {
+        // Signal a process group (negative PID means process group)
+        let pgid = panda_hal::pid::Pid::new((-pid) as u64);
+        serial_println!("[KILL] Signaling process group {}", pgid.as_u64());
+        
+        let count = scheduler.signal_process_group(pgid, signal);
+        
+        if count > 0 {
+            serial_println!("[KILL] Signaled {} processes in group {}", count, pgid.as_u64());
+            Ok(0)
+        } else {
+            serial_println!("[KILL] No processes in group {}", pgid.as_u64());
+            Err(syscall::ErrorCode::ESRCH)
+        }
+    } else {
+        // pid == 0: signal current process's group (not implemented yet)
+        Err(syscall::ErrorCode::EINVAL)
+    }
+}
+
+/// setpgid handler - set process group ID
+fn setpgid_handler(pid: i32, pgid: i32) -> syscall::SyscallResult {
+    serial_println!("[SETPGID] Setting PGID {} for PID {}", pgid, pid);
+
+    // SAFETY: Called from syscall handler with interrupts disabled
+    let scheduler = unsafe { get_scheduler() };
+
+    // Simplified implementation: only allow setting pgid for current process (pid == 0)
+    // and only to its own PID (creating a new process group)
+    if pid != 0 {
+        serial_println!("[SETPGID] Only pid=0 (current process) supported");
+        return Err(syscall::ErrorCode::EINVAL);
     }
 
-    // LIMITATION: We only support sending signals to the current process.
-    // A full implementation would search the scheduler's ready queue for the target PID.
-    // This requires adding a method to scheduler to iterate processes by PID.
-    // For minimal SIGINT support, this limitation is acceptable since the shell
-    // would typically send SIGINT only to its own foreground child, which requires
-    // more complex job control infrastructure.
-    serial_println!("[KILL] Process {} not found or not current", pid);
-    Err(syscall::ErrorCode::ESRCH)
+    let current = scheduler.current_process_mut().ok_or(syscall::ErrorCode::ESRCH)?;
+    let current_pid = current.pid;
+
+    // If pgid == 0, set to current process's PID (make it a group leader)
+    let new_pgid = if pgid == 0 {
+        current_pid
+    } else {
+        panda_hal::pid::Pid::new(pgid as u64)
+    };
+
+    serial_println!("[SETPGID] Setting process {} to group {}", current_pid.as_u64(), new_pgid.as_u64());
+    current.pgid = new_pgid;
+
+    Ok(0)
 }
 
 
