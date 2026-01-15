@@ -323,13 +323,19 @@ const SCRIPTED_INPUT: &[u8] = b"echo hello | wc\nexit\n";
     feature = "shell-smoke",
     any(feature = "vfs-cat-smoke", feature = "fork-exec-smoke", feature = "pipe-smoke")
 ))]
-compile_error!("shell-smoke, vfs-cat-smoke, fork-exec-smoke, and pipe-smoke are mutually exclusive");
+compile_error!(
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, and pipe-smoke are mutually exclusive"
+);
 
 #[cfg(all(feature = "vfs-cat-smoke", any(feature = "fork-exec-smoke", feature = "pipe-smoke")))]
-compile_error!("shell-smoke, vfs-cat-smoke, fork-exec-smoke, and pipe-smoke are mutually exclusive");
+compile_error!(
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, and pipe-smoke are mutually exclusive"
+);
 
 #[cfg(all(feature = "fork-exec-smoke", feature = "pipe-smoke"))]
-compile_error!("shell-smoke, vfs-cat-smoke, fork-exec-smoke, and pipe-smoke are mutually exclusive");
+compile_error!(
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, and pipe-smoke are mutually exclusive"
+);
 
 #[cfg(any(
     feature = "shell-smoke",
