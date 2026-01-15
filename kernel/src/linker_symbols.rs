@@ -24,15 +24,15 @@ extern "C" {
     // Kernel text (code) section boundaries
     static __text_start: u8;
     static __text_end: u8;
-    
-    // Read-only data section boundaries  
+
+    // Read-only data section boundaries
     static __rodata_start: u8;
     static __rodata_end: u8;
-    
+
     // Initialized data section boundaries
     static __data_start: u8;
     static __data_end: u8;
-    
+
     // Uninitialized data (BSS) section boundaries
     static __bss_start: u8;
     static __bss_end: u8;
@@ -177,7 +177,7 @@ mod tests {
     fn test_kernel_boundaries() {
         let start = kernel_phys_start();
         let end = kernel_phys_end();
-        
+
         assert!(start < end, "Kernel start must be before end");
         assert!(start >= KERNEL_PHYS_BASE);
         assert!(end > start);
@@ -188,7 +188,7 @@ mod tests {
         let start = kernel_phys_start();
         let end = kernel_phys_end();
         let size = end - start;
-        
+
         // Kernel should be at least 1 page and less than 128 MiB
         assert!(size >= 4096);
         assert!(size < 128 * 1024 * 1024);

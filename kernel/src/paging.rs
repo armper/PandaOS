@@ -254,7 +254,7 @@ impl PhysAddr {
 pub unsafe fn init_identity_map_minimal() -> Result<(), &'static str> {
     // For now, the bootloader already sets up identity mapping
     // This is a placeholder for future custom mapping implementation
-    
+
     println!("Identity mapping: Using bootloader-provided mapping");
     Ok(())
 }
@@ -271,31 +271,31 @@ pub unsafe fn init_identity_map_minimal() -> Result<(), &'static str> {
 pub unsafe fn init_higher_half_mapping() -> Result<(), &'static str> {
     // Initialize page table tracker
     crate::page_table_tracker::init();
-    
+
     // For now, we continue to use bootloader's identity mapping
     // TODO: Implement custom higher-half page table setup with:
     // - Kernel text mapped as RX (Read + Execute, No Write)
-    // - Kernel rodata mapped as R (Read only, No Execute)  
+    // - Kernel rodata mapped as R (Read only, No Execute)
     // - Kernel data/bss mapped as RW (Read + Write, No Execute)
     // - Heap mapped as RW, NX
-    
+
     println!("Higher-half mapping: Prepared (using identity mapping for now)");
-    
+
     // Track existing page tables from bootloader
     // SAFETY: We're reading CR3 which is safe
     use x86_64::registers::control::Cr3;
     let (level_4_table_frame, _) = Cr3::read();
     let l4_frame_num =
         level_4_table_frame.start_address().as_u64() / panda_hal::memory::FRAME_SIZE as u64;
-    
+
     // Track the L4 page table frame
     // SAFETY: This frame is the active page table, we're just tracking it
     unsafe {
         crate::page_table_tracker::track_page_table_frame(l4_frame_num as usize);
     }
-    
+
     println!("Page table tracking: L4 frame {} tracked", l4_frame_num);
-    
+
     Ok(())
 }
 
@@ -311,15 +311,15 @@ pub unsafe fn switch_to_new_page_table(page_table_phys_addr: u64) -> Result<(), 
     // SAFETY: Caller guarantees the page table is valid
     use x86_64::registers::control::Cr3;
     use x86_64::PhysAddr;
-    
+
     let phys_addr = PhysAddr::new(page_table_phys_addr);
     let frame = x86_64::structures::paging::PhysFrame::containing_address(phys_addr);
-    
+
     // SAFETY: Caller guarantees the page table is valid and properly set up
     unsafe {
         Cr3::write(frame, x86_64::registers::control::Cr3Flags::empty());
     }
-    
+
     println!("Page table switched to {:#x}", page_table_phys_addr);
     Ok(())
 }

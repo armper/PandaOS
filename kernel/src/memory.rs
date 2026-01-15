@@ -117,13 +117,17 @@ pub unsafe fn init_from_bootloader(boot_info: &'static bootloader::BootInfo) {
     // The bootloader loads the kernel at low physical memory
     let kernel_phys_start = crate::linker_symbols::kernel_phys_start();
     let kernel_phys_end = crate::linker_symbols::kernel_phys_end();
-    
+
     let kernel_start_frame = (kernel_phys_start / panda_hal::memory::FRAME_SIZE as u64) as usize;
-    let kernel_end_frame = 
-        ((kernel_phys_end + panda_hal::memory::FRAME_SIZE as u64 - 1) / panda_hal::memory::FRAME_SIZE as u64) as usize;
-    
-    frame_allocator.reserve_range(kernel_start_frame, kernel_end_frame, ReservationReason::KernelImage);
-    
+    let kernel_end_frame = ((kernel_phys_end + panda_hal::memory::FRAME_SIZE as u64 - 1)
+        / panda_hal::memory::FRAME_SIZE as u64) as usize;
+
+    frame_allocator.reserve_range(
+        kernel_start_frame,
+        kernel_end_frame,
+        ReservationReason::KernelImage,
+    );
+
     println!(
         "Kernel image: {:#x}..{:#x} ({} frames)",
         kernel_phys_start,

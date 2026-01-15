@@ -99,26 +99,17 @@ pub unsafe fn track_page_table_frame(frame: usize) {
 
 /// Check if a frame is a page table frame
 pub fn is_page_table_frame(frame: usize) -> bool {
-    PAGE_TABLE_TRACKER
-        .lock()
-        .as_ref()
-        .map_or(false, |t| t.is_page_table_frame(frame))
+    PAGE_TABLE_TRACKER.lock().as_ref().map_or(false, |t| t.is_page_table_frame(frame))
 }
 
 /// Get count of tracked page table frames
 pub fn page_table_frame_count() -> usize {
-    PAGE_TABLE_TRACKER
-        .lock()
-        .as_ref()
-        .map_or(0, |t| t.count())
+    PAGE_TABLE_TRACKER.lock().as_ref().map_or(0, |t| t.count())
 }
 
 /// Get list of all page table frames (for debugging and testing)
 pub fn get_page_table_frames() -> Vec<usize> {
-    PAGE_TABLE_TRACKER
-        .lock()
-        .as_ref()
-        .map_or(Vec::new(), |t| t.frames().to_vec())
+    PAGE_TABLE_TRACKER.lock().as_ref().map_or(Vec::new(), |t| t.frames().to_vec())
 }
 
 /// Allocate a frame for page tables
@@ -157,11 +148,11 @@ mod tests {
     #[test]
     fn test_track_single_frame() {
         let mut tracker = PageTableTracker::new();
-        
+
         // Note: track_frame() requires unsafe and reserves frames,
         // which we can't do in a unit test without the full kernel.
         // This test just verifies the data structure works.
-        
+
         assert_eq!(tracker.count(), 0);
         assert!(!tracker.is_page_table_frame(100));
     }
