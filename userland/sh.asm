@@ -13,6 +13,8 @@ BITS 64
 %define SYS_EXECVE 59
 %define SYS_EXIT 60
 %define SYS_WAIT4 61
+%define SYS_GETCWD 79
+%define SYS_CHDIR 80
 %define SYS_SETPGID 109
 
 %define STDIN 0
@@ -390,11 +392,51 @@ check_exit:
     jne check_echo
     mov al, [r13 + 2]
     cmp al, 'i'
-    jne check_echo
+    jne check_cd
     mov al, [r13 + 3]
     cmp al, 't'
-    jne check_echo
+    jne check_cd
     jmp cmd_exit
+
+check_cd:
+    cmp r12, 2
+    jl check_echo
+    mov al, [r13]
+    cmp al, 'c'
+    jne check_echo
+    mov al, [r13 + 1]
+    cmp al, 'd'
+    jne check_echo
+    
+    ; cd command - builtin (no fork/exec)
+    cmp r12, 2
+    je cmd_cd_home       ; cd with no args -> go to /
+    mov al, [r13 + 2]
+    cmp al, ' '
+    jne check_echo
+    
+    ; cd with argument
+    lea rdi, [r13 + 3]   ; path starts at position 3
+    mov rax, SYS_CHDIR
+    syscall
+    test rax, rax
+    js cd_failed
+    jmp prompt_loop      ; success, show new prompt
+    
+cd_failed:
+    mov rax, SYS_WRITE
+    mov rdi, STDOUT
+    lea rsi, [rel cd_err]
+    mov rdx, cd_err_len
+    syscall
+    jmp prompt_loop
+
+cmd_cd_home:
+    ; cd with no args -> change to /
+    lea rdi, [rel root_dir]
+    mov rax, SYS_CHDIR
+    syscall
+    jmp prompt_loop
 
 check_echo:
     cmp r12, 4
@@ -667,7 +709,7 @@ exec_direct:
 section .rodata
 prompt: db "panda> "
 prompt_len equ $ - prompt
-help_text: db "commands: help, echo, cat, true, exit", 0x0D, 0x0A
+help_text: db "commands: help, echo, cat, cd, ls, true, exit", 0x0D, 0x0A
 help_len equ $ - help_text
 unknown_text: db "command not found", 0x0D, 0x0A
 unknown_len equ $ - unknown_text
@@ -679,6 +721,8 @@ ctrlc_msg: db "^C", 0x0D, 0x0A
 ctrlc_msg_len equ $ - ctrlc_msg
 cat_usage: db "usage: cat <path>", 0x0D, 0x0A
 cat_usage_len equ $ - cat_usage
+cd_err: db "cd: directory not found", 0x0D, 0x0A
+cd_err_len equ $ - cd_err
 exec_fail: db "exec failed", 0x0D, 0x0A
 exec_fail_len equ $ - exec_fail
 fork_fail: db "fork failed", 0x0D, 0x0A
@@ -689,6 +733,7 @@ cat_path: db "/bin/cat", 0
 true_path: db "/bin/true", 0
 bin_prefix: db "/bin/"
 bin_prefix_len equ $ - bin_prefix
+root_dir: db "/", 0
 
 section .bss
 line_buf: resb BUF_SIZE

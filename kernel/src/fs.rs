@@ -6,9 +6,20 @@ use crate::syscall::ErrorCode;
 pub const MAX_FDS: usize = 16;
 pub const FIRST_NONSTD_FD: usize = 3;
 
+/// File type enumeration
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum FileType {
+    /// Regular file
+    File = 0,
+    /// Directory
+    Directory = 1,
+}
+
 pub struct FileNode {
     pub path: &'static str,
     pub data: &'static [u8],
+    pub file_type: FileType,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -22,6 +33,8 @@ pub struct OpenFile {
 pub enum FdKind {
     /// Regular file
     File(OpenFile),
+    /// Directory (opened for reading entries)
+    Directory(OpenFile),
     /// Pipe read end
     PipeRead(PipeId),
     /// Pipe write end
@@ -49,8 +62,16 @@ impl FdTable {
     }
 
     pub fn open_node(&mut self, node_index: usize) -> Result<i32, ErrorCode> {
+        let node = FILES.get(node_index).ok_or(ErrorCode::ENOENT)?;
         let fd = self.allocate_fd()?;
-        self.entries[fd] = Some(FdKind::File(OpenFile { node_index, offset: 0 }));
+        match node.file_type {
+            FileType::File => {
+                self.entries[fd] = Some(FdKind::File(OpenFile { node_index, offset: 0 }));
+            }
+            FileType::Directory => {
+                self.entries[fd] = Some(FdKind::Directory(OpenFile { node_index, offset: 0 }));
+            }
+        }
         Ok(fd as i32)
     }
 
@@ -96,8 +117,8 @@ impl FdTable {
                 FdKind::PipeWrite(pipe_id) => {
                     crate::pipe::pipe_close_write(pipe_id)?;
                 }
-                FdKind::File(_) => {
-                    // Files don't need cleanup
+                FdKind::File(_) | FdKind::Directory(_) => {
+                    // Files and directories don't need cleanup
                 }
             }
             Ok(())
@@ -128,10 +149,36 @@ impl FdTable {
                     Some(FdKind::File(OpenFile { node_index: open.node_index, offset: end }));
                 Ok(&node.data[start..end])
             }
+            FdKind::Directory(_) => {
+                // Reading directories via read() is not supported
+                // Use getdents64 syscall instead
+                Err(ErrorCode::EISDIR)
+            }
             FdKind::PipeRead(_) | FdKind::PipeWrite(_) => {
                 // Pipes are handled through separate syscall path
                 Err(ErrorCode::EBADF)
             }
+        }
+    }
+
+    /// Update directory offset (for getdents64)
+    pub fn update_directory_offset(&mut self, fd: i32, new_offset: usize) -> Result<(), ErrorCode> {
+        if fd < 0 || fd as usize >= MAX_FDS {
+            return Err(ErrorCode::EBADF);
+        }
+        if fd < FIRST_NONSTD_FD as i32 {
+            return Err(ErrorCode::EBADF);
+        }
+        
+        let kind = self.entries[fd as usize].ok_or(ErrorCode::EBADF)?;
+        if let FdKind::Directory(open) = kind {
+            self.entries[fd as usize] = Some(FdKind::Directory(OpenFile {
+                node_index: open.node_index,
+                offset: new_offset,
+            }));
+            Ok(())
+        } else {
+            Err(ErrorCode::ENOTDIR)
         }
     }
 
@@ -161,6 +208,9 @@ impl FdTable {
             FdKind::File(open) => {
                 self.entries[newfd as usize] = Some(FdKind::File(open));
             }
+            FdKind::Directory(open) => {
+                self.entries[newfd as usize] = Some(FdKind::Directory(open));
+            }
             FdKind::PipeRead(pipe_id) => {
                 crate::pipe::pipe_open_read_end(pipe_id)?;
                 self.entries[newfd as usize] = Some(FdKind::PipeRead(pipe_id));
@@ -177,7 +227,7 @@ impl FdTable {
     /// Fork the FD table (for use in fork())
     /// Increments refcounts for all pipe fds
     pub fn fork_copy(&self) -> Result<Self, ErrorCode> {
-        let mut new_table = *self;
+        let new_table = *self;
 
         // Increment refcounts for all pipe fds
         for entry in &new_table.entries {
@@ -189,8 +239,8 @@ impl FdTable {
                     FdKind::PipeWrite(pipe_id) => {
                         crate::pipe::pipe_open_write_end(*pipe_id)?;
                     }
-                    FdKind::File(_) => {
-                        // Files don't need refcounting
+                    FdKind::File(_) | FdKind::Directory(_) => {
+                        // Files and directories don't need refcounting
                     }
                 }
             }
@@ -200,15 +250,23 @@ impl FdTable {
     }
 }
 
-static FILES: &[FileNode] = &[
-    FileNode { path: "/init", data: include_bytes!("../../userland/bin/init") },
-    FileNode { path: "/bin/sh", data: include_bytes!("../../userland/bin/sh") },
-    FileNode { path: "/bin/cat", data: include_bytes!("../../userland/bin/cat") },
-    FileNode { path: "/bin/true", data: include_bytes!("../../userland/bin/true") },
-    FileNode { path: "/bin/echo", data: include_bytes!("../../userland/bin/echo") },
-    FileNode { path: "/bin/wc", data: include_bytes!("../../userland/bin/wc") },
-    FileNode { path: "/etc/motd", data: b"Welcome to PandaOS.\r\nType 'help' for commands.\r\n" },
-    FileNode { path: "/etc/version", data: b"PandaOS 0.1.0\r\n" },
+pub static FILES: &[FileNode] = &[
+    // Root directory
+    FileNode { path: "/", data: b"", file_type: FileType::Directory },
+    // /bin directory
+    FileNode { path: "/bin", data: b"", file_type: FileType::Directory },
+    // /etc directory
+    FileNode { path: "/etc", data: b"", file_type: FileType::Directory },
+    // Regular files
+    FileNode { path: "/init", data: include_bytes!("../../userland/bin/init"), file_type: FileType::File },
+    FileNode { path: "/bin/sh", data: include_bytes!("../../userland/bin/sh"), file_type: FileType::File },
+    FileNode { path: "/bin/cat", data: include_bytes!("../../userland/bin/cat"), file_type: FileType::File },
+    FileNode { path: "/bin/true", data: include_bytes!("../../userland/bin/true"), file_type: FileType::File },
+    FileNode { path: "/bin/echo", data: include_bytes!("../../userland/bin/echo"), file_type: FileType::File },
+    FileNode { path: "/bin/wc", data: include_bytes!("../../userland/bin/wc"), file_type: FileType::File },
+    FileNode { path: "/bin/ls", data: include_bytes!("../../userland/bin/ls"), file_type: FileType::File },
+    FileNode { path: "/etc/motd", data: b"Welcome to PandaOS.\r\nType 'help' for commands.\r\n", file_type: FileType::File },
+    FileNode { path: "/etc/version", data: b"PandaOS 0.1.0\r\n", file_type: FileType::File },
 ];
 
 /// Look up a file by absolute path.
@@ -225,6 +283,142 @@ pub fn lookup_node(path: &str) -> Option<(usize, &'static FileNode)> {
 pub fn open_path(table: &mut FdTable, path: &str) -> Result<i32, ErrorCode> {
     let (node_index, _node) = lookup_node(path).ok_or(ErrorCode::ENOENT)?;
     table.open_node(node_index)
+}
+
+/// Directory entry for getdents64 syscall
+#[repr(C, packed)]
+pub struct DirEntry {
+    /// Inode number (we use node_index)
+    pub d_ino: u64,
+    /// Offset to next entry
+    pub d_off: u64,
+    /// Length of this record
+    pub d_reclen: u16,
+    /// File type
+    pub d_type: u8,
+    // Null-terminated filename (variable length) followed by padding to align to 8 bytes
+}
+
+/// List directory entries for a given directory path
+/// Returns a list of (name, file_type) tuples
+pub fn list_directory(dir_path: &str) -> Result<alloc::vec::Vec<(&'static str, FileType)>, ErrorCode> {
+    use alloc::vec::Vec;
+    
+    // Verify the path is a directory
+    let (_, node) = lookup_node(dir_path).ok_or(ErrorCode::ENOENT)?;
+    if node.file_type != FileType::Directory {
+        return Err(ErrorCode::ENOTDIR);
+    }
+    
+    // Normalize directory path (ensure it ends with '/' or is "/")
+    let dir_prefix = if dir_path == "/" {
+        "/"
+    } else {
+        dir_path
+    };
+    
+    let mut entries = Vec::new();
+    
+    // Find all files that are direct children of this directory
+    for file in FILES.iter() {
+        if file.path == dir_path {
+            continue; // Skip the directory itself
+        }
+        
+        // Check if this file is a direct child
+        if dir_prefix == "/" {
+            // For root directory, find entries with exactly one '/' 
+            if file.path.starts_with('/') && file.path[1..].find('/').is_none() {
+                let name = &file.path[1..]; // Strip leading '/'
+                if !name.is_empty() {
+                    entries.push((name, file.file_type));
+                }
+            }
+        } else {
+            // For subdirectories, check if path starts with dir_prefix + '/'
+            let prefix_with_slash = alloc::format!("{}/", dir_prefix);
+            if file.path.starts_with(&prefix_with_slash) {
+                let remainder = &file.path[prefix_with_slash.len()..];
+                // Check if it's a direct child (no more '/' in remainder)
+                if !remainder.contains('/') {
+                    entries.push((remainder, file.file_type));
+                }
+            }
+        }
+    }
+    
+    Ok(entries)
+}
+
+/// Resolve a relative path against a current working directory
+/// Returns an absolute path
+pub fn resolve_path(cwd: &str, path: &str) -> Result<alloc::string::String, ErrorCode> {
+    // If path is absolute, use it directly
+    if path.starts_with('/') {
+        return normalize_path(path);
+    }
+    
+    // Otherwise, prepend cwd
+    let combined = if cwd.ends_with('/') {
+        alloc::format!("{}{}", cwd, path)
+    } else {
+        alloc::format!("{}/{}", cwd, path)
+    };
+    
+    normalize_path(&combined)
+}
+
+/// Normalize a path by resolving . and .. components
+/// Prevents escaping beyond root (/)
+pub fn normalize_path(path: &str) -> Result<alloc::string::String, ErrorCode> {
+    use alloc::string::String;
+    use alloc::vec::Vec;
+    
+    if !path.starts_with('/') {
+        return Err(ErrorCode::EINVAL);
+    }
+    
+    let mut components = Vec::new();
+    
+    for component in path.split('/') {
+        match component {
+            "" | "." => {
+                // Skip empty components and current directory
+            }
+            ".." => {
+                // Go up one level (but don't go above root)
+                if !components.is_empty() {
+                    components.pop();
+                }
+            }
+            name => {
+                components.push(name);
+            }
+        }
+    }
+    
+    // Build the normalized path
+    if components.is_empty() {
+        Ok(String::from("/"))
+    } else {
+        let mut result = String::from("/");
+        for (i, component) in components.iter().enumerate() {
+            if i > 0 {
+                result.push('/');
+            }
+            result.push_str(component);
+        }
+        Ok(result)
+    }
+}
+
+/// Validate that a path exists and is a directory
+pub fn validate_directory(path: &str) -> Result<(), ErrorCode> {
+    let (_, node) = lookup_node(path).ok_or(ErrorCode::ENOENT)?;
+    if node.file_type != FileType::Directory {
+        return Err(ErrorCode::ENOTDIR);
+    }
+    Ok(())
 }
 
 #[cfg(test)]

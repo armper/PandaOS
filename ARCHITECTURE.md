@@ -250,13 +250,32 @@ make future Ctrl+Z support straightforward when needed.
 **VFS Model:**
 - Static in-memory file table with absolute-path lookup
 - Read-only byte slices for file contents
-- No directories, no writes
+- Directory support with `getdents64` syscall
+- File types: regular files and directories
+- Directories: `/`, `/bin`, `/etc`
+- No writes (read-only filesystem)
+- Path resolution: supports relative paths, `.` and `..`
+
+**Process State:**
+- Each process has a current working directory (`cwd`)
+- Initialized to `/` for new processes
+- Preserved across `fork()` (child inherits parent's cwd)
+- Preserved across `exec()` 
+- Changed via `chdir()` syscall
+
+**Path Resolution:**
+- Absolute paths start with `/`
+- Relative paths resolved against process cwd
+- `.` refers to current directory
+- `..` refers to parent directory
+- Cannot escape root directory `/`
 
 **FD Table:**
 - Per-process fixed-size table (16 entries)
 - `fd 0/1/2` are reserved for serial stdio
 - `fd >= 3` are allocated on open and track per-fd offsets
-- Supports three FD kinds: File, PipeRead, PipeWrite
+- Supports four FD kinds: File, Directory, PipeRead, PipeWrite
+- Directories opened for reading can be queried via `getdents64`
 
 ## Pipe Subsystem
 

@@ -12,6 +12,7 @@
 use crate::context::CpuContext;
 use crate::elf::ElfInfo;
 use crate::fs::FdTable;
+use alloc::string::String;
 use panda_hal::pid::{Pid, PidAllocator};
 
 /// Signal types supported by PandaOS
@@ -82,6 +83,8 @@ pub struct Process {
     pub fd_table: FdTable,
     /// Pending signals (bitmask)
     pub pending_signals: u32,
+    /// Current working directory (absolute path)
+    pub cwd: String,
 }
 
 impl Process {
@@ -158,6 +161,7 @@ impl Process {
             context,
             fd_table: FdTable::new(),
             pending_signals: 0,
+            cwd: String::from("/"),
         })
     }
 
@@ -259,6 +263,7 @@ impl Process {
             context: child_context,
             fd_table: child_fd_table,
             pending_signals: 0,
+            cwd: self.cwd.clone(),
         })
     }
 

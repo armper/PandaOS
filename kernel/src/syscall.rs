@@ -23,7 +23,9 @@
     feature = "vfs-cat-smoke",
     feature = "fork-exec-smoke",
     feature = "pipe-smoke",
-    feature = "ctrlc-smoke"
+    feature = "ctrlc-smoke",
+    feature = "ls-smoke",
+    feature = "cd-smoke"
 ))]
 use core::sync::atomic::{AtomicUsize, Ordering};
 use panda_hal::serial_println;
@@ -77,6 +79,8 @@ pub enum SyscallNumber {
     Setpgid = 109,
     /// Yield CPU (sched_yield)
     Yield = 24,
+    /// Get directory entries
+    Getdents64 = 217,
 }
 
 impl SyscallNumber {
@@ -105,6 +109,7 @@ impl SyscallNumber {
             79 => Some(Self::Getcwd),
             80 => Some(Self::Chdir),
             109 => Some(Self::Setpgid),
+            217 => Some(Self::Getdents64),
             _ => None,
         }
     }
@@ -134,6 +139,7 @@ impl SyscallNumber {
             Self::Kill => "kill",
             Self::Setpgid => "setpgid",
             Self::Yield => "yield",
+            Self::Getdents64 => "getdents64",
         }
     }
 }
@@ -172,6 +178,8 @@ pub enum ErrorCode {
     EINVAL = 22,
     /// Too many open files
     EMFILE = 24,
+    /// Result too large
+    ERANGE = 34,
     /// Broken pipe
     EPIPE = 32,
     /// Function not implemented
@@ -224,6 +232,9 @@ pub fn handle_syscall(
         SyscallNumber::Dup2 => sys_dup2(arg1 as i32, arg2 as i32),
         SyscallNumber::Kill => sys_kill(arg1 as i32, arg2 as i32),
         SyscallNumber::Setpgid => sys_setpgid(arg1 as i32, arg2 as i32),
+        SyscallNumber::Getdents64 => sys_getdents64(arg1 as i32, arg2, arg3),
+        SyscallNumber::Getcwd => sys_getcwd(arg1, arg2),
+        SyscallNumber::Chdir => sys_chdir(arg1),
         // All other syscalls return ENOSYS for now
         _ => Err(ErrorCode::ENOSYS),
     };
@@ -329,35 +340,53 @@ const SCRIPTED_INPUT: &[u8] = b"echo hello | wc\nexit\n";
 #[cfg(feature = "ctrlc-smoke")]
 const SCRIPTED_INPUT: &[u8] = b"echo test\x03\nhelp\nexit\n";
 
+#[cfg(feature = "ls-smoke")]
+const SCRIPTED_INPUT: &[u8] = b"ls\nexit\n";
+
+#[cfg(feature = "cd-smoke")]
+const SCRIPTED_INPUT: &[u8] = b"ls\ncd bin\nls\ncd ..\nls\nexit\n";
+
 #[cfg(all(
     feature = "shell-smoke",
     any(
         feature = "vfs-cat-smoke",
         feature = "fork-exec-smoke",
         feature = "pipe-smoke",
-        feature = "ctrlc-smoke"
+        feature = "ctrlc-smoke",
+        feature = "ls-smoke",
+        feature = "cd-smoke"
     )
 ))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, and ctrlc-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, and cd-smoke are mutually exclusive"
 );
 
 #[cfg(all(
     feature = "vfs-cat-smoke",
-    any(feature = "fork-exec-smoke", feature = "pipe-smoke", feature = "ctrlc-smoke")
+    any(feature = "fork-exec-smoke", feature = "pipe-smoke", feature = "ctrlc-smoke", feature = "ls-smoke", feature = "cd-smoke")
 ))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, and ctrlc-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, and cd-smoke are mutually exclusive"
 );
 
-#[cfg(all(feature = "fork-exec-smoke", any(feature = "pipe-smoke", feature = "ctrlc-smoke")))]
+#[cfg(all(feature = "fork-exec-smoke", any(feature = "pipe-smoke", feature = "ctrlc-smoke", feature = "ls-smoke", feature = "cd-smoke")))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, and ctrlc-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, and cd-smoke are mutually exclusive"
 );
 
-#[cfg(all(feature = "pipe-smoke", feature = "ctrlc-smoke"))]
+#[cfg(all(feature = "pipe-smoke", any(feature = "ctrlc-smoke", feature = "ls-smoke", feature = "cd-smoke")))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, and ctrlc-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, and cd-smoke are mutually exclusive"
+);
+
+#[cfg(all(feature = "ctrlc-smoke", any(feature = "ls-smoke", feature = "cd-smoke")))]
+compile_error!(
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, and cd-smoke are mutually exclusive"
+);
+
+#[cfg(all(feature = "ls-smoke", feature = "cd-smoke"))]
+compile_error!(
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, and cd-smoke are mutually exclusive"
 );
 
 #[cfg(any(
@@ -365,7 +394,9 @@ compile_error!(
     feature = "vfs-cat-smoke",
     feature = "fork-exec-smoke",
     feature = "pipe-smoke",
-    feature = "ctrlc-smoke"
+    feature = "ctrlc-smoke",
+    feature = "ls-smoke",
+    feature = "cd-smoke"
 ))]
 static SCRIPTED_POS: AtomicUsize = AtomicUsize::new(0);
 
@@ -375,7 +406,9 @@ fn read_byte() -> Option<u8> {
         feature = "vfs-cat-smoke",
         feature = "fork-exec-smoke",
         feature = "pipe-smoke",
-        feature = "ctrlc-smoke"
+        feature = "ctrlc-smoke",
+        feature = "ls-smoke",
+        feature = "cd-smoke"
     ))]
     {
         let pos = SCRIPTED_POS.fetch_add(1, Ordering::Relaxed);
@@ -387,7 +420,9 @@ fn read_byte() -> Option<u8> {
         feature = "vfs-cat-smoke",
         feature = "fork-exec-smoke",
         feature = "pipe-smoke",
-        feature = "ctrlc-smoke"
+        feature = "ctrlc-smoke",
+        feature = "ls-smoke",
+        feature = "cd-smoke"
     )))]
     {
         return panda_hal::serial::serial_read_byte();
@@ -579,6 +614,33 @@ fn sys_setpgid(pid: i32, pgid: i32) -> SyscallResult {
     }
 }
 
+/// sys_getdents64 - Get directory entries
+fn sys_getdents64(fd: i32, buf: u64, count: u64) -> SyscallResult {
+    if let Some(getdents_fn) = GETDENTS64_HANDLER.get() {
+        getdents_fn(fd, buf, count)
+    } else {
+        Err(ErrorCode::ENOSYS)
+    }
+}
+
+/// sys_getcwd - Get current working directory
+fn sys_getcwd(buf: u64, size: u64) -> SyscallResult {
+    if let Some(getcwd_fn) = GETCWD_HANDLER.get() {
+        getcwd_fn(buf, size)
+    } else {
+        Err(ErrorCode::ENOSYS)
+    }
+}
+
+/// sys_chdir - Change current working directory
+fn sys_chdir(path: u64) -> SyscallResult {
+    if let Some(chdir_fn) = CHDIR_HANDLER.get() {
+        chdir_fn(path)
+    } else {
+        Err(ErrorCode::ENOSYS)
+    }
+}
+
 /// Yield handler function pointer for scheduler integration
 static YIELD_HANDLER: Once<fn()> = Once::new();
 static EXEC_HANDLER: Once<fn(&str, Option<&str>) -> Result<(), ErrorCode>> = Once::new();
@@ -593,6 +655,9 @@ static PIPE_HANDLER: Once<fn(u64) -> SyscallResult> = Once::new();
 static DUP2_HANDLER: Once<fn(i32, i32) -> SyscallResult> = Once::new();
 static KILL_HANDLER: Once<fn(i32, i32) -> SyscallResult> = Once::new();
 static SETPGID_HANDLER: Once<fn(i32, i32) -> SyscallResult> = Once::new();
+static GETDENTS64_HANDLER: Once<fn(i32, u64, u64) -> SyscallResult> = Once::new();
+static GETCWD_HANDLER: Once<fn(u64, u64) -> SyscallResult> = Once::new();
+static CHDIR_HANDLER: Once<fn(u64) -> SyscallResult> = Once::new();
 
 /// Set the yield handler for syscall yield
 ///
@@ -662,6 +727,21 @@ pub fn set_kill_handler(handler: fn(i32, i32) -> SyscallResult) {
 /// Set the setpgid handler for syscall setpgid
 pub fn set_setpgid_handler(handler: fn(i32, i32) -> SyscallResult) {
     SETPGID_HANDLER.call_once(|| handler);
+}
+
+/// Set the getdents64 handler for syscall getdents64
+pub fn set_getdents64_handler(handler: fn(i32, u64, u64) -> SyscallResult) {
+    GETDENTS64_HANDLER.call_once(|| handler);
+}
+
+/// Set the getcwd handler for syscall getcwd
+pub fn set_getcwd_handler(handler: fn(u64, u64) -> SyscallResult) {
+    GETCWD_HANDLER.call_once(|| handler);
+}
+
+/// Set the chdir handler for syscall chdir
+pub fn set_chdir_handler(handler: fn(u64) -> SyscallResult) {
+    CHDIR_HANDLER.call_once(|| handler);
 }
 
 #[cfg(test)]
