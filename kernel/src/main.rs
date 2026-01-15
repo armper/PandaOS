@@ -313,6 +313,8 @@ unsafe fn init_scheduler_and_start() -> ! {
     syscall::set_read_handler(read_handler);
     syscall::set_write_handler(write_handler);
     syscall::set_close_handler(close_handler);
+    syscall::set_stat_handler(stat_handler);
+    syscall::set_fstat_handler(fstat_handler);
     syscall::set_getpid_handler(getpid_handler);
     syscall::set_fork_handler(fork_handler);
     syscall::set_waitpid_handler(waitpid_handler);
@@ -596,6 +598,69 @@ fn close_handler(fd: i32) -> syscall::SyscallResult {
     let scheduler = unsafe { get_scheduler() };
     let current = scheduler.current_process_mut().ok_or(syscall::ErrorCode::ESRCH)?;
     current.fd_table.close(fd)?;
+    Ok(0)
+}
+
+/// stat handler - get file metadata by path
+fn stat_handler(path_ptr: u64, stat_buf: u64) -> syscall::SyscallResult {
+    const MAX_PATH_LEN: usize = 64;
+    let mut path_buf = [0u8; MAX_PATH_LEN];
+
+    // Copy path from user space
+    let path = crate::usermode::copy_user_cstr(path_ptr, &mut path_buf)?;
+
+    // Get current process
+    let scheduler = unsafe { get_scheduler() };
+    let current = scheduler.current_process().ok_or(syscall::ErrorCode::ESRCH)?;
+
+    // Resolve path relative to cwd
+    let resolved_path = fs::resolve_path(&current.cwd, path)?;
+
+    // Get metadata
+    let metadata = fs::stat_path(&resolved_path)?;
+
+    // Copy metadata to user space (file_type as u8, size as u64)
+    let metadata_bytes = [
+        metadata.file_type as u8,
+        0, 0, 0, 0, 0, 0, 0, // padding to align size field
+        (metadata.size & 0xFF) as u8,
+        ((metadata.size >> 8) & 0xFF) as u8,
+        ((metadata.size >> 16) & 0xFF) as u8,
+        ((metadata.size >> 24) & 0xFF) as u8,
+        ((metadata.size >> 32) & 0xFF) as u8,
+        ((metadata.size >> 40) & 0xFF) as u8,
+        ((metadata.size >> 48) & 0xFF) as u8,
+        ((metadata.size >> 56) & 0xFF) as u8,
+    ];
+    crate::usermode::copy_to_user_bytes(stat_buf, &metadata_bytes)?;
+
+    Ok(0)
+}
+
+/// fstat handler - get file metadata by file descriptor
+fn fstat_handler(fd: i32, stat_buf: u64) -> syscall::SyscallResult {
+    // Get current process
+    let scheduler = unsafe { get_scheduler() };
+    let current = scheduler.current_process().ok_or(syscall::ErrorCode::ESRCH)?;
+
+    // Get metadata
+    let metadata = fs::fstat_fd(&current.fd_table, fd)?;
+
+    // Copy metadata to user space (file_type as u8, size as u64)
+    let metadata_bytes = [
+        metadata.file_type as u8,
+        0, 0, 0, 0, 0, 0, 0, // padding to align size field
+        (metadata.size & 0xFF) as u8,
+        ((metadata.size >> 8) & 0xFF) as u8,
+        ((metadata.size >> 16) & 0xFF) as u8,
+        ((metadata.size >> 24) & 0xFF) as u8,
+        ((metadata.size >> 32) & 0xFF) as u8,
+        ((metadata.size >> 40) & 0xFF) as u8,
+        ((metadata.size >> 48) & 0xFF) as u8,
+        ((metadata.size >> 56) & 0xFF) as u8,
+    ];
+    crate::usermode::copy_to_user_bytes(stat_buf, &metadata_bytes)?;
+
     Ok(0)
 }
 
@@ -1196,6 +1261,8 @@ fn exit_handler(status: i32) -> ! {
         serial_println!("TEST PASS ctrlc_smoke");
         #[cfg(feature = "ls-smoke")]
         serial_println!("TEST PASS ls_smoke");
+        #[cfg(feature = "ls-stat-smoke")]
+        serial_println!("TEST PASS ls_stat_smoke");
         #[cfg(feature = "cd-smoke")]
         serial_println!("TEST PASS cd_smoke");
         #[cfg(feature = "path-smoke")]
@@ -1207,6 +1274,7 @@ fn exit_handler(status: i32) -> ! {
             feature = "pipe-smoke",
             feature = "ctrlc-smoke",
             feature = "ls-smoke",
+            feature = "ls-stat-smoke",
             feature = "cd-smoke",
             feature = "path-smoke"
         )))]

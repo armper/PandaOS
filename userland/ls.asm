@@ -1,17 +1,24 @@
 ; Minimal ls for PandaOS
 ; Lists directory entries using getdents64 syscall
+; Enhanced with stat() to show directories with / suffix
 
 BITS 64
 
 %define SYS_WRITE 1
 %define SYS_OPEN 2
 %define SYS_CLOSE 3
+%define SYS_STAT 4
 %define SYS_EXIT 60
 %define SYS_GETDENTS64 217
 
 %define STDOUT 1
 
 %define BUF_SIZE 1024
+%define STAT_BUF_SIZE 16
+
+; File type constants
+%define FILE_TYPE_FILE 0
+%define FILE_TYPE_DIR 1
 
 ; Directory entry structure (getdents64)
 ; struct linux_dirent64 {
@@ -65,9 +72,48 @@ process_entry:
     ; Get d_name (starts at offset 19)
     lea rsi, [rbx + 19]
     
+    ; Save the name pointer and record length
+    push r15
+    push rsi
+    
+    ; Build full path to stat: "/" + name
+    ; Copy name to path_buf
+    lea rdi, [rel path_buf]
+    mov byte [rdi], '/'         ; start with '/'
+    inc rdi
+    
+    ; Copy name
+.copy_name:
+    lodsb                       ; load byte from rsi
+    stosb                       ; store to rdi
+    test al, al
+    jnz .copy_name
+    
+    ; Call stat on the full path
+    mov rax, SYS_STAT
+    lea rdi, [rel path_buf]
+    lea rsi, [rel stat_buf]
+    syscall
+    
+    ; Restore name pointer
+    pop rsi
+    
     ; Print the name
     call print_name
     
+    ; Check if it's a directory (stat_buf[0] == FILE_TYPE_DIR)
+    mov al, byte [rel stat_buf]
+    cmp al, FILE_TYPE_DIR
+    jne .not_dir
+    
+    ; Print "/" for directories
+    mov rax, SYS_WRITE
+    mov rdi, STDOUT
+    lea rsi, [rel dir_suffix]
+    mov rdx, 1
+    syscall
+    
+.not_dir:
     ; Print newline
     mov rax, SYS_WRITE
     mov rdi, STDOUT
@@ -75,7 +121,8 @@ process_entry:
     mov rdx, 2
     syscall
     
-    ; Move to next entry
+    ; Restore record length and move to next entry
+    pop r15
     add r14, r15
     jmp process_entry
 
@@ -145,6 +192,9 @@ open_err_len equ $ - open_err
 read_err: db "ls: getdents64 failed", 0x0D, 0x0A
 read_err_len equ $ - read_err
 newline: db 0x0D, 0x0A
+dir_suffix: db "/"
 
 section .bss
 buf: resb BUF_SIZE
+stat_buf: resb STAT_BUF_SIZE
+path_buf: resb 256
