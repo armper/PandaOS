@@ -32,6 +32,7 @@ use core::panic::PanicInfo;
 extern crate panda_hal;
 
 pub mod boot_phases;
+pub mod context;
 pub mod elf;
 pub mod gdt;
 pub mod heap;
@@ -42,6 +43,7 @@ pub mod memory;
 pub mod page_table_tracker;
 pub mod paging;
 pub mod process;
+pub mod scheduler;
 pub mod syscall;
 pub mod usermode;
 

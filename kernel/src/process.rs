@@ -9,6 +9,7 @@
 //! - Entry point is validated before execution
 //! - No process can access another's memory
 
+use crate::context::CpuContext;
 use crate::elf::ElfInfo;
 use panda_hal::pid::{Pid, PidAllocator};
 
@@ -37,6 +38,8 @@ pub struct Process {
     pub kernel_stack_ptr: u64,
     /// Page table physical address
     pub page_table_phys: u64,
+    /// Saved CPU context for context switching
+    pub context: CpuContext,
 }
 
 impl Process {
@@ -83,6 +86,15 @@ impl Process {
         // TODO: Allocate actual kernel stack
         let kernel_stack_ptr = 0xFFFF_FFFF_8000_0000;
 
+        // Get GDT selectors for user mode
+        // SAFETY: GDT must be initialized before creating processes
+        let selectors = unsafe { crate::gdt::get_selectors() };
+        let user_cs = selectors.user_code.0 as u64;
+        let user_ss = selectors.user_data.0 as u64;
+
+        // Initialize CPU context for user mode
+        let context = CpuContext::new_user(elf_info.entry_point, user_stack_top, user_cs, user_ss);
+
         Ok(Self {
             pid,
             state: ProcessState::Ready,
@@ -90,6 +102,7 @@ impl Process {
             user_stack_ptr: user_stack_top,
             kernel_stack_ptr,
             page_table_phys,
+            context,
         })
     }
 
@@ -151,6 +164,7 @@ mod tests {
             user_stack_ptr: 0x7FFF_FFFF_F000,
             kernel_stack_ptr: 0xFFFF_FFFF_8000_0000,
             page_table_phys: 0x1000,
+            context: crate::context::CpuContext::zero(),
         };
 
         assert_eq!(process.state, ProcessState::Ready);
