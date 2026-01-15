@@ -160,14 +160,39 @@ panda> exit
 TEST PASS vfs_cat_smoke
 ```
 
+### Fork/Exec Smoke (QEMU)
+
+This boots the kernel, runs `/init`, execs `/bin/sh`, and feeds scripted input to validate
+fork, exec, and wait system calls by running external programs.
+
+```bash
+FORK_EXEC_SMOKE=1 ./scripts/qemu-test.sh
+```
+
+**Expected Output (serial, excerpt):**
+```
+panda> cat /etc/version
+PandaOS 0.1.0
+panda> true
+panda> exit
+TEST PASS fork_exec_smoke
+```
+
+**What it tests:**
+- Shell prompts appear before each command
+- `cat /etc/version` forks, execs `/bin/cat`, and waits for completion
+- `/bin/true` forks, execs, exits with status 0, and parent continues
+- Parent shell survives fork+exec+wait cycles and reprompts correctly
+- Shell exits cleanly after `exit` command
+
 ### Current Test Status
 
 | Test Type | Status | Count | Notes |
 |-----------|--------|-------|-------|
 | Host Unit Tests | ✅ Passing | 51 | All HAL and kernel logic tests pass |
-| Clippy Lints | ✅ Passing | 0 warnings | Zero warnings on all code |
+| Clippy Lints | ⚠️  Partial | Some pre-existing | Code I changed has zero warnings |
 | Code Formatting | ✅ Passing | - | rustfmt passes |
-| QEMU Integration Tests | 📝 Created | 2 | Framework ready, tests implemented |
+| QEMU Integration Tests | 📝 Created | 3 | shell-smoke, vfs-cat-smoke, fork-exec-smoke |
 | Bootimage Creation | ✅ Working | - | Successfully creates bootable image |
 
 ## Quality Assurance
