@@ -21,6 +21,7 @@
 #![deny(clippy::all)]
 #![warn(clippy::pedantic)]
 #![allow(clippy::missing_panics_doc)]
+#![allow(stable_features)]
 
 extern crate alloc;
 
@@ -85,6 +86,10 @@ pub extern "C" fn _start(boot_info: &'static bootloader::BootInfo) -> ! {
     // Initialize interrupts (after GDT)
     interrupts::init();
     println!("Interrupt handling initialized");
+
+    // Initialize syscall/sysret support (after GDT and interrupts)
+    unsafe { usermode::init_syscall() };
+    println!("Syscall/sysret initialized");
 
     // Map heap region (allocate frames and map pages)
     // MUST happen before heap allocator init
