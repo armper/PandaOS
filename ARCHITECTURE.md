@@ -110,22 +110,69 @@ None yet - hardware access is direct. Future refactoring will add:
 
 ### Syscall Implementation Plan
 
-1. **Phase 1**: Basic syscalls (exit, write to serial)
+1. **Phase 1**: Basic syscalls (exit, write to serial) - ✅ **COMPLETED**
 2. **Phase 2**: File operations (open, read, write, close)
 3. **Phase 3**: Process management (fork, exec, wait)
 4. **Phase 4**: Advanced features (mmap, signals, etc.)
+
+### Syscall Mechanism
+
+**Implementation:** Uses fast `syscall/sysret` instructions (x86_64)
+- **STAR MSR**: Configures segment selectors for kernel/user transitions
+- **LSTAR MSR**: Points to syscall entry point (`syscall_entry`)
+- **SFMASK MSR**: Masks RFLAGS on entry (clears IF to disable interrupts)
+- **EFER.SCE**: Enables syscall/sysret extensions
+
+**Calling Convention:** Linux x86_64 ABI
+- **rax**: Syscall number
+- **rdi, rsi, rdx, r10, r8, r9**: Arguments (up to 6)
+- **rax**: Return value (positive) or -errno (negative)
+- **rcx, r11**: Preserved by hardware (store user RIP and RFLAGS)
+
+**Implemented Syscalls:**
+- `write(fd, buf, count)` - syscall #1 (stdout/stderr to serial)
+- `exit(status)` - syscall #60 (terminates process)
+- `getpid()` - syscall #39 (returns process ID)
+
+## Process Model
+
+**Structure:**
+- Each process has isolated address space (separate page table)
+- User stack: 16KB (4 pages) at top of user space
+- Kernel stack: Separate stack for handling syscalls
+- State tracking: Ready, Running, Exited(code)
+
+**Process Creation:**
+1. Parse ELF64 executable
+2. Create new page table (copies kernel mappings to upper half)
+3. Map PT_LOAD segments with correct permissions (R/W/X)
+4. Allocate and map user stack (RW, NX, user-accessible)
+5. Assign PID from allocator
+
+**Memory Isolation:**
+- Each process has its own L4 page table
+- Kernel mappings (upper half) shared across all processes
+- User mappings (lower half) process-specific
+- Page permissions enforced by CPU (user/kernel, R/W/X, NX)
 
 ## Memory Layout
 
 ### Virtual Address Space
 
 ```
-0x0000000000000000 - 0x00007FFFFFFFFFFF: User space (future)
-0xFFFF800000000000 - 0xFFFFFFFFFFFFFFFF: Kernel space (higher-half)
-  0xFFFF800000000000 + kernel offset: Kernel code/data (future full mapping)
+0x0000_0000_0000_0000 - 0x0000_7FFF_FFFF_FFFF: User space
+0x0000_8000_0000_0000 - 0xFFFF_7FFF_FFFF_FFFF: Canonical hole (unmapped)
+0xFFFF_8000_0000_0000 - 0xFFFF_FFFF_FFFF_FFFF: Kernel space (higher-half)
 ```
 
-**Higher-Half Kernel Mapping:**
+**User Space Layout:**
+- `0x0000_0040_0000`: Typical ELF program entry (text segment)
+- `0x0000_0060_0000+`: Data and BSS segments
+- `0x7FFF_FFFF_F000`: User stack top (grows downward, 4 pages / 16KB default)
+- User pages marked with `USER_ACCESSIBLE` flag
+- Non-executable stack (`NO_EXECUTE` flag set)
+
+**Kernel Space:**
 - `KERNEL_VIRT_BASE = 0xFFFF_8000_0000_0000` - Base address for kernel virtual memory
 - `KERNEL_PHYS_BASE = 0x0010_0000` - Physical load address (1 MiB)
 - Kernel operates in higher-half address space for security and organization

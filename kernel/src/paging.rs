@@ -345,14 +345,12 @@ pub unsafe fn create_user_page_table() -> Result<u64, &'static str> {
     };
 
     let l4_phys_addr = l4_frame as u64 * panda_hal::memory::FRAME_SIZE as u64;
-    
+
     // Zero out the new page table
     // NOTE: This assumes identity mapping of physical memory
     // TODO: Use proper virtual address translation
     // SAFETY: We just allocated this frame and assume identity mapping
-    let l4_table = unsafe {
-        &mut *(l4_phys_addr as *mut PageTable)
-    };
+    let l4_table = unsafe { &mut *(l4_phys_addr as *mut PageTable) };
     l4_table.zero();
 
     // Copy kernel mappings from current page table (upper half)
@@ -360,13 +358,11 @@ pub unsafe fn create_user_page_table() -> Result<u64, &'static str> {
     use x86_64::registers::control::Cr3;
     let (current_l4_frame, _) = Cr3::read();
     let current_l4_phys = current_l4_frame.start_address().as_u64();
-    
+
     // NOTE: This assumes identity mapping of physical memory
     // TODO: Use proper virtual address translation
     // SAFETY: Current L4 is valid and we assume identity mapping
-    let current_l4 = unsafe {
-        &*(current_l4_phys as *const PageTable)
-    };
+    let current_l4 = unsafe { &*(current_l4_phys as *const PageTable) };
 
     // Copy upper half entries (256-511) for kernel space
     for i in 256..512 {
@@ -411,7 +407,7 @@ pub unsafe fn map_page(
                 .ok_or("Failed to allocate L3 page table")?
         };
         let p3_phys = p3_frame as u64 * panda_hal::memory::FRAME_SIZE as u64;
-        
+
         // SAFETY: Frame was just allocated
         let p3_table = unsafe { &mut *(p3_phys as *mut PageTable) };
         p3_table.zero();
@@ -423,9 +419,7 @@ pub unsafe fn map_page(
     }
 
     // SAFETY: Entry is now present
-    let l3_table = unsafe {
-        &mut *(l4_table[p4_index].addr() as *mut PageTable)
-    };
+    let l3_table = unsafe { &mut *(l4_table[p4_index].addr() as *mut PageTable) };
 
     // Get or create L2 table
     if !l3_table[p3_index].is_present() {
@@ -435,7 +429,7 @@ pub unsafe fn map_page(
                 .ok_or("Failed to allocate L2 page table")?
         };
         let p2_phys = p2_frame as u64 * panda_hal::memory::FRAME_SIZE as u64;
-        
+
         // SAFETY: Frame was just allocated
         let p2_table = unsafe { &mut *(p2_phys as *mut PageTable) };
         p2_table.zero();
@@ -447,9 +441,7 @@ pub unsafe fn map_page(
     }
 
     // SAFETY: Entry is now present
-    let l2_table = unsafe {
-        &mut *(l3_table[p3_index].addr() as *mut PageTable)
-    };
+    let l2_table = unsafe { &mut *(l3_table[p3_index].addr() as *mut PageTable) };
 
     // Get or create L1 table
     if !l2_table[p2_index].is_present() {
@@ -459,7 +451,7 @@ pub unsafe fn map_page(
                 .ok_or("Failed to allocate L1 page table")?
         };
         let p1_phys = p1_frame as u64 * panda_hal::memory::FRAME_SIZE as u64;
-        
+
         // SAFETY: Frame was just allocated
         let p1_table = unsafe { &mut *(p1_phys as *mut PageTable) };
         p1_table.zero();
@@ -471,9 +463,7 @@ pub unsafe fn map_page(
     }
 
     // SAFETY: Entry is now present
-    let l1_table = unsafe {
-        &mut *(l2_table[p2_index].addr() as *mut PageTable)
-    };
+    let l1_table = unsafe { &mut *(l2_table[p2_index].addr() as *mut PageTable) };
 
     // Map the page
     l1_table[p1_index].set(phys_addr.as_u64(), flags);
@@ -502,20 +492,18 @@ pub unsafe fn allocate_user_stack(
 
     for i in 0..num_pages {
         // SAFETY: Caller guarantees frame allocator is initialized
-        let frame = unsafe {
-            crate::memory::allocate_frame()
-                .ok_or("Failed to allocate stack frame")?
-        };
+        let frame =
+            unsafe { crate::memory::allocate_frame().ok_or("Failed to allocate stack frame")? };
         let phys_addr = PhysAddr::new(frame as u64 * panda_hal::memory::FRAME_SIZE as u64);
-        
+
         // Stack grows down, so subtract from top
         let virt_addr = VirtAddr::new(stack_top - ((i + 1) as u64 * PAGE_SIZE));
-        
+
         // SAFETY: Caller guarantees page table is valid
         unsafe {
             map_page(page_table_phys, virt_addr, phys_addr, flags)?;
         }
-        
+
         // Zero the stack page
         // NOTE: This assumes identity mapping of physical memory
         // TODO: Use proper virtual address translation

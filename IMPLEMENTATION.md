@@ -11,7 +11,7 @@ PandaOS is a Unix-like x86_64 kernel written in Rust with a focus on:
 
 ## Current Status
 
-### ✅ Completed (Phase 1-6)
+### ✅ Completed (Phase 1-7)
 
 #### 1. Project Foundation
 - Workspace with 3 crates: `kernel`, `hal`, `bootloader`
@@ -37,7 +37,6 @@ PandaOS is a Unix-like x86_64 kernel written in Rust with a focus on:
 - `#![deny(unsafe_op_in_unsafe_fn)]` - All unsafe must be in unsafe blocks
 - `#![deny(clippy::all)]` - Zero clippy warnings policy
 - `#![warn(clippy::pedantic)]` - Extra lints for quality
-- `#![feature(naked_functions)]` - For syscall entry points
 
 **Runtime Safety**:
 - All unsafe blocks have SAFETY comments
@@ -143,8 +142,28 @@ PandaOS is a Unix-like x86_64 kernel written in Rust with a focus on:
   - **page_table_reservation_smoke** - page table frame tracking and reservation
 
 #### 4. Core Kernel Features
-- [ ] Process management
-- [ ] System call interface
+- [x] **Process management**:
+  - Process structure with PID, state, page table
+  - ELF64 loader with segment mapping
+  - User address space isolation
+  - User stack allocation (16KB default)
+- [x] **System call interface**:
+  - syscall/sysret infrastructure via MSRs
+  - Linux x86_64 ABI compatibility
+  - Implemented: write(), exit(), getpid()
+  - Syscall entry/exit with register preservation
+- [x] **GDT with user segments**:
+  - Kernel code/data segments (ring 0)
+  - User code/data segments (ring 3)
+  - TSS for interrupt stack switching
+- [x] **User mode transition**:
+  - enter_usermode() for ring 0 → ring 3
+  - Page table creation and switching
+  - Memory permission enforcement (User, R/W/X, NX)
+- [x] **Userland programs**:
+  - hello.asm - test program using syscalls
+  - Build system to create static ELF executables
+  - Embedding mechanism via build.rs
 - [ ] Basic I/O (keyboard, timer)
 - [ ] Interrupt handling (PIC/APIC)
 

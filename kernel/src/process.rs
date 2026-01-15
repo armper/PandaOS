@@ -64,9 +64,7 @@ impl Process {
 
         // Create user page table
         // SAFETY: Caller guarantees frame allocator is initialized
-        let page_table_phys = unsafe {
-            crate::paging::create_user_page_table()?
-        };
+        let page_table_phys = unsafe { crate::paging::create_user_page_table()? };
 
         // Load ELF segments into user address space
         // SAFETY: Caller guarantees frame allocator is initialized
@@ -130,11 +128,11 @@ mod tests {
             ElfInfo { entry_point: 0x40_0000, load_segments: [None; 8], segment_count: 0 };
 
         let pid_allocator = PidAllocator::new(1);
-        
+
         // Note: Process::new now requires unsafe and ELF data
         // We can't test it in a unit test without the full kernel
         // This test is kept as a placeholder
-        
+
         assert_eq!(pid_allocator.allocate().as_u64(), 1);
     }
 
@@ -144,7 +142,7 @@ mod tests {
             ElfInfo { entry_point: 0x40_0000, load_segments: [None; 8], segment_count: 0 };
 
         let pid_allocator = PidAllocator::new(1);
-        
+
         // Create a mock process for state testing
         let mut process = Process {
             pid: pid_allocator.allocate(),

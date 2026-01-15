@@ -257,11 +257,11 @@ pub unsafe fn load_elf_segments(
 
         // Determine flags based on segment permissions
         let mut flags = PageTableFlags::PRESENT.or(PageTableFlags::USER_ACCESSIBLE);
-        
+
         if segment.is_writable() {
             flags = flags.or(PageTableFlags::WRITABLE);
         }
-        
+
         if !segment.is_executable() {
             flags = flags.or(PageTableFlags::NO_EXECUTE);
         }
@@ -270,8 +270,7 @@ pub unsafe fn load_elf_segments(
         for page_idx in 0..num_pages {
             // SAFETY: Caller guarantees frame allocator is initialized
             let frame = unsafe {
-                crate::memory::allocate_frame()
-                    .ok_or("Failed to allocate frame for segment")?
+                crate::memory::allocate_frame().ok_or("Failed to allocate frame for segment")?
             };
             let phys_addr = PhysAddr::new(frame as u64 * panda_hal::memory::FRAME_SIZE as u64);
             let virt_addr = VirtAddr::new(vaddr_start + (page_idx as u64 * 4096));
@@ -292,21 +291,18 @@ pub unsafe fn load_elf_segments(
 
             // Copy segment data if within file size
             let page_vaddr = vaddr_start + (page_idx as u64 * 4096);
-            
+
             if page_vaddr < segment.vaddr + segment.file_size {
-                let offset_in_segment = if page_vaddr >= segment.vaddr {
-                    page_vaddr - segment.vaddr
-                } else {
-                    0
-                };
-                
+                let offset_in_segment =
+                    if page_vaddr >= segment.vaddr { page_vaddr - segment.vaddr } else { 0 };
+
                 let file_offset = segment.file_offset + offset_in_segment;
                 let offset_in_page = if segment.vaddr > page_vaddr {
                     (segment.vaddr - page_vaddr) as usize
                 } else {
                     0
                 };
-                
+
                 let bytes_to_copy = core::cmp::min(
                     4096 - offset_in_page,
                     (segment.file_size - offset_in_segment) as usize,
