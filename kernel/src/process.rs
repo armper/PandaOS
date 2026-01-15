@@ -210,7 +210,7 @@ impl Process {
         let child_context = self.context;
 
         // Duplicate FD table
-        let child_fd_table = self.fd_table.clone();
+        let child_fd_table = self.fd_table;
 
         Ok(Self {
             pid: child_pid,
