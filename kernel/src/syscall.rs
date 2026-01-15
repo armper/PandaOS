@@ -258,9 +258,20 @@ pub fn set_exit_handler(handler: fn(i32) -> !) {
 
 /// sys_write - Write to file descriptor
 fn sys_write(fd: i32, buf: u64, count: u64) -> SyscallResult {
-    // stdout (fd 1) and stderr (fd 2) go to serial
+    // For stdout (fd 1) and stderr (fd 2), check if redirected to pipe first
     if fd == 1 || fd == 2 {
-        // Validate buffer address (basic check - should be more thorough)
+        if let Some(write_fn) = WRITE_HANDLER.get() {
+            // Try to write to fd table (may be a pipe)
+            match write_fn(fd, buf, count) {
+                Ok(n) => return Ok(n),
+                Err(ErrorCode::EBADF) => {
+                    // Not a pipe, fall through to serial output
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        // Default stdout/stderr behavior: write to serial
         if buf == 0 || count == 0 {
             return Ok(0);
         }
@@ -328,15 +339,28 @@ fn read_byte() -> Option<u8> {
 
 /// sys_read - Read from file descriptor
 fn sys_read(fd: i32, buf: u64, count: u64) -> SyscallResult {
+    if count == 0 {
+        return Ok(0);
+    }
+
+    if buf == 0 {
+        return Err(ErrorCode::EFAULT);
+    }
+
+    // For stdin (fd 0), check if it's redirected to a pipe via the handler first
     if fd == 0 {
-        if count == 0 {
-            return Ok(0);
+        if let Some(read_fn) = READ_HANDLER.get() {
+            // Try to read from fd table (may be a pipe)
+            match read_fn(fd, buf, count) {
+                Ok(n) => return Ok(n),
+                Err(ErrorCode::EBADF) => {
+                    // Not a pipe, fall through to serial input
+                }
+                Err(e) => return Err(e),
+            }
         }
 
-        if buf == 0 {
-            return Err(ErrorCode::EFAULT);
-        }
-
+        // Default stdin behavior: read from serial
         let count = usize::try_from(count).map_err(|_| ErrorCode::EINVAL)?;
         if count > 4096 {
             return Err(ErrorCode::EINVAL);
@@ -368,10 +392,6 @@ fn sys_read(fd: i32, buf: u64, count: u64) -> SyscallResult {
 
     if fd == 1 || fd == 2 {
         return Err(ErrorCode::EBADF);
-    }
-
-    if count == 0 {
-        return Ok(0);
     }
 
     if let Some(read_fn) = READ_HANDLER.get() {

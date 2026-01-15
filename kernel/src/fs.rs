@@ -144,15 +144,15 @@ impl FdTable {
             return Err(ErrorCode::EBADF);
         }
 
-        // Can't dup stdin/stdout/stderr
-        if oldfd < FIRST_NONSTD_FD as i32 || newfd < FIRST_NONSTD_FD as i32 {
+        // Can't dup FROM stdin/stdout/stderr, but can dup TO them for pipe redirection
+        if oldfd < FIRST_NONSTD_FD as i32 {
             return Err(ErrorCode::EINVAL);
         }
 
         let old_kind = self.entries[oldfd as usize].ok_or(ErrorCode::EBADF)?;
 
-        // Close newfd if it's open
-        if self.entries[newfd as usize].is_some() {
+        // Close newfd if it's open and it's not a standard fd
+        if newfd >= FIRST_NONSTD_FD as i32 && self.entries[newfd as usize].is_some() {
             self.close(newfd)?;
         }
 
@@ -205,6 +205,8 @@ static FILES: &[FileNode] = &[
     FileNode { path: "/bin/sh", data: include_bytes!("../../userland/bin/sh") },
     FileNode { path: "/bin/cat", data: include_bytes!("../../userland/bin/cat") },
     FileNode { path: "/bin/true", data: include_bytes!("../../userland/bin/true") },
+    FileNode { path: "/bin/echo", data: include_bytes!("../../userland/bin/echo") },
+    FileNode { path: "/bin/wc", data: include_bytes!("../../userland/bin/wc") },
     FileNode { path: "/etc/motd", data: b"Welcome to PandaOS.\r\nType 'help' for commands.\r\n" },
     FileNode { path: "/etc/version", data: b"PandaOS 0.1.0\r\n" },
 ];
