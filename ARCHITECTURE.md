@@ -6,7 +6,7 @@ PandaOS is a Unix-like x86_64 kernel written in Rust with a focus on clean archi
 
 **SMP Status**: Single-core only until Phase 2. See [docs/SMP_STRATEGY.md](docs/SMP_STRATEGY.md) for details.
 
-**Scheduler Status**: ✅ **COMPLETED** - Minimal preemptive scheduler infrastructure implemented. See [SCHEDULER.md](SCHEDULER.md) for details.
+**Scheduler Status**: ✅ **COMPLETED** - Cooperative round-robin scheduler implemented (preemption planned). See [SCHEDULER.md](SCHEDULER.md) for details.
 
 ## Design Philosophy
 
@@ -269,7 +269,7 @@ All page table frames are tracked to ensure they're never allocated again:
 
 ## Process Scheduler
 
-PandaOS implements a minimal preemptive multitasking scheduler. For complete documentation, see [SCHEDULER.md](SCHEDULER.md).
+PandaOS implements a minimal cooperative round-robin scheduler. For complete documentation, see [SCHEDULER.md](SCHEDULER.md).
 
 ### Design
 
@@ -304,12 +304,12 @@ PandaOS implements a minimal preemptive multitasking scheduler. For complete doc
 
 **Round-robin**:
 - Processes taken from head of ready queue
-- Running process moved to tail on preemption
+- Running process moved to tail on yield/preemption
 - Fair distribution of CPU time
 
 **Preemption Points**:
 - Timer interrupt (planned)
-- Yield syscall (planned)
+- Yield syscall (implemented, cooperative)
 - Exit syscall (implemented)
 
 ### Context Switch Flow
@@ -357,6 +357,14 @@ User: syscall → LSTAR → syscall_entry → handler → scheduler (if needed)
   → (save context, schedule, restore context) → sysretq → User
 ```
 
+**Syscall vs Interrupt Context**:
+- Syscall entry saves user RIP/RFLAGS from RCX/R11 explicitly into CpuContext
+- Interrupt entry gets RIP/CS/RFLAGS/RSP/SS via hardware interrupt frame
+- Syscall returns with sysretq; interrupt returns with iretq
+- Syscall path switches to the per-process kernel stack before calling Rust
+- Syscall entry uses an arch-local pointer to the current CpuContext
+- Kernel stack VA is fixed; CR3 selects per-process backing frames
+
 ### Safety Guarantees
 
 - **No data races**: Interrupts disabled during scheduler access
@@ -368,16 +376,12 @@ User: syscall → LSTAR → syscall_entry → handler → scheduler (if needed)
 ### Current Limitations
 
 1. **Timer preemption not implemented**: Requires complex interrupt frame handling
-2. **Yield not implemented**: Requires syscall context save/restore
-3. **Single process only**: hello2 behind feature flag
-4. **No sleep/wake**: Processes either ready or exited
-5. **No process groups**: Basic process model only
+2. **No sleep/wake**: Processes either ready or exited
+3. **No process groups**: Basic process model only
 
 ### Future Work
 
 - Implement timer-based preemption
-- Implement yield syscall context switching
-- Enable multiple processes
 - Add process sleep/wake
 - Implement fork/exec syscalls
 

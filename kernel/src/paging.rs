@@ -327,6 +327,12 @@ pub unsafe fn switch_to_new_page_table(page_table_phys_addr: u64) -> Result<(), 
 /// Page size constant
 const PAGE_SIZE: u64 = 4096;
 
+/// Kernel stack top (virtual address, grows down)
+pub const KERNEL_STACK_TOP: u64 = 0xFFFF_FFFF_8000_0000;
+
+/// Default kernel stack size in pages
+pub const KERNEL_STACK_PAGES: usize = 4;
+
 /// Create a new user page table with kernel mappings
 ///
 /// Creates a fresh L4 page table and copies kernel mappings from the current
@@ -489,6 +495,50 @@ pub unsafe fn allocate_user_stack(
         .or(PageTableFlags::WRITABLE)
         .or(PageTableFlags::USER_ACCESSIBLE)
         .or(PageTableFlags::NO_EXECUTE);
+
+    for i in 0..num_pages {
+        // SAFETY: Caller guarantees frame allocator is initialized
+        let frame =
+            unsafe { crate::memory::allocate_frame().ok_or("Failed to allocate stack frame")? };
+        let phys_addr = PhysAddr::new(frame as u64 * panda_hal::memory::FRAME_SIZE as u64);
+
+        // Stack grows down, so subtract from top
+        let virt_addr = VirtAddr::new(stack_top - ((i + 1) as u64 * PAGE_SIZE));
+
+        // SAFETY: Caller guarantees page table is valid
+        unsafe {
+            map_page(page_table_phys, virt_addr, phys_addr, flags)?;
+        }
+
+        // Zero the stack page
+        // NOTE: This assumes identity mapping of physical memory
+        // TODO: Use proper virtual address translation
+        // SAFETY: We just mapped this page and assume identity mapping
+        let page_ptr = phys_addr.as_u64() as *mut u8;
+        unsafe {
+            core::ptr::write_bytes(page_ptr, 0, PAGE_SIZE as usize);
+        }
+    }
+
+    Ok(())
+}
+
+/// Allocate and map kernel stack
+///
+/// Allocates physical frames and maps them to a kernel stack region.
+/// Stack grows down from the specified top address.
+///
+/// # Safety
+///
+/// - page_table_phys must point to a valid L4 page table
+/// - Frame allocator must be initialized
+pub unsafe fn allocate_kernel_stack(
+    page_table_phys: u64,
+    stack_top: u64,
+    num_pages: usize,
+) -> Result<(), &'static str> {
+    let flags =
+        PageTableFlags::PRESENT.or(PageTableFlags::WRITABLE).or(PageTableFlags::NO_EXECUTE);
 
     for i in 0..num_pages {
         // SAFETY: Caller guarantees frame allocator is initialized

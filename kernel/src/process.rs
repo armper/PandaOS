@@ -82,9 +82,17 @@ impl Process {
             crate::paging::allocate_user_stack(page_table_phys, user_stack_top, 4)?;
         }
 
-        // For now, use fixed kernel stack address
-        // TODO: Allocate actual kernel stack
-        let kernel_stack_ptr = 0xFFFF_FFFF_8000_0000;
+        // Allocate kernel stack in higher half (per-process mapping)
+        let kernel_stack_top = crate::paging::KERNEL_STACK_TOP;
+        // SAFETY: Caller guarantees frame allocator is initialized
+        unsafe {
+            crate::paging::allocate_kernel_stack(
+                page_table_phys,
+                kernel_stack_top,
+                crate::paging::KERNEL_STACK_PAGES,
+            )?;
+        }
+        let kernel_stack_ptr = kernel_stack_top;
 
         // Get GDT selectors for user mode
         // SAFETY: GDT must be initialized before creating processes

@@ -15,7 +15,7 @@
 //!
 //! - Syscall numbers never change once defined
 //! - Error codes follow POSIX errno conventions
-//! - All syscalls preserve callee-saved registers
+//! - Syscalls preserve all GPRs except RAX (return value) and RCX/R11 (syscall clobbers)
 
 // Import macros for logging
 use panda_hal::{serial_print, serial_println};
@@ -288,8 +288,6 @@ fn sys_getpid() -> SyscallResult {
 
 /// sys_yield - Voluntarily yield the CPU to another process
 fn sys_yield() -> SyscallResult {
-    serial_println!("Process yielding CPU");
-
     // Get scheduler instance if available
     if let Some(yield_fn) = unsafe { YIELD_HANDLER } {
         yield_fn();

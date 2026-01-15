@@ -277,20 +277,16 @@ unsafe fn init_scheduler_and_start() -> ! {
     println!("Created process PID {}", hello1_process.pid.as_u64());
     sched.add_process(hello1_process);
 
-    // Load hello2 program (disabled for initial testing)
-    // Enable after verifying hello1 works correctly
-    #[cfg(feature = "multi_process")]
-    {
-        let hello2_data = include_bytes!("../../userland/build/hello2");
-        println!("Loading hello2 program ({} bytes)...", hello2_data.len());
-        let hello2_elf = elf::parse_elf(hello2_data).expect("Failed to parse hello2 ELF");
-        let hello2_process = unsafe {
-            process::Process::new(&hello2_elf, hello2_data, &pid_allocator)
-                .expect("Failed to create hello2 process")
-        };
-        println!("Created process PID {}", hello2_process.pid.as_u64());
-        sched.add_process(hello2_process);
-    }
+    // Load hello2 program
+    let hello2_data = include_bytes!("../../userland/build/hello2");
+    println!("Loading hello2 program ({} bytes)...", hello2_data.len());
+    let hello2_elf = elf::parse_elf(hello2_data).expect("Failed to parse hello2 ELF");
+    let hello2_process = unsafe {
+        process::Process::new(&hello2_elf, hello2_data, &pid_allocator)
+            .expect("Failed to create hello2 process")
+    };
+    println!("Created process PID {}", hello2_process.pid.as_u64());
+    sched.add_process(hello2_process);
 
     // Store scheduler in global
     // SAFETY: This is the only place that initializes the scheduler
@@ -369,20 +365,33 @@ fn timer_tick_handler() {
     // 4. Returning via iretq
 }
 
-/// Yield handler - called when process voluntarily yields CPU  
+/// Yield handler - called when process voluntarily yields CPU
 fn yield_handler() {
     serial_println!("[YIELD] Process yielding CPU");
 
     // SAFETY: Called from syscall handler with interrupts disabled
     let scheduler = unsafe { get_scheduler() };
 
+    // Ensure the current process returns 0 from yield() when resumed.
+    if let Some(current) = scheduler.current_process_mut() {
+        current.context.rax = 0;
+    }
+
     // Get next process (current will be moved to ready queue)
     if let Some(next) = scheduler.schedule_next() {
         serial_println!("[YIELD] Switching to process PID {}", next.pid.as_u64());
 
-        // For now, just log the yield - actual context switch would happen here
-        // This is complex because we're inside a syscall handler
-        // TODO: Implement actual context switch from syscall
+        // Update syscall context pointer and kernel stack for the new process.
+        // SAFETY: Scheduler is initialized and interrupts are disabled here.
+        unsafe {
+            usermode::set_current_syscall_context(core::ptr::addr_of_mut!(next.context));
+        }
+
+        // Switch CR3 and return to user mode for the next process.
+        // SAFETY: Next process has a valid user context and page table.
+        unsafe {
+            usermode::switch_to_user(core::ptr::addr_of!(next.context), next.page_table_phys);
+        }
     } else {
         serial_println!("[YIELD] No other processes to run");
     }
@@ -400,17 +409,21 @@ fn exit_handler(status: i32) -> ! {
 
     // Schedule next process
     if let Some(next) = scheduler.schedule_next() {
-        // Restore next process context
-        // SAFETY: Next process has valid context
+        // Update syscall context pointer and kernel stack for the new process.
+        // SAFETY: Scheduler is initialized and interrupts are disabled here.
         unsafe {
-            context_switch::restore_context_from_process(next);
+            usermode::set_current_syscall_context(core::ptr::addr_of_mut!(next.context));
+        }
+
+        // Switch CR3 and return to user mode for the next process.
+        // SAFETY: Next process has a valid user context and page table.
+        unsafe {
+            usermode::switch_to_user(core::ptr::addr_of!(next.context), next.page_table_phys);
         }
     } else {
-        // No more processes - return to kernel
-        println!("All processes exited");
-        loop {
-            x86_64::instructions::hlt();
-        }
+        // No more processes - report success and exit QEMU deterministically.
+        serial_println!("TEST PASS yield_cooperative_smoke");
+        exit_qemu(QemuExitCode::Success);
     }
 }
 
@@ -430,6 +443,12 @@ unsafe fn start_first_process() -> ! {
 
     // Initialize context for first run
     context_switch::init_context_for_first_run(first_process);
+
+    // Publish current syscall context and kernel stack pointer
+    // SAFETY: Scheduler is initialized and interrupts are disabled here
+    unsafe {
+        usermode::set_current_syscall_context(core::ptr::addr_of_mut!(first_process.context));
+    }
 
     // Enable interrupts before jumping to user mode
     x86_64::instructions::interrupts::enable();

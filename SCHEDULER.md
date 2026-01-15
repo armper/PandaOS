@@ -2,7 +2,7 @@
 
 ## Overview
 
-PandaOS implements a minimal preemptive multitasking scheduler with round-robin scheduling. The scheduler coordinates with timer interrupts and syscalls to enable time-sharing between user processes.
+PandaOS implements a minimal cooperative scheduler with round-robin scheduling. The scheduler coordinates with syscalls for voluntary yielding; timer preemption is planned but not enabled yet.
 
 ## Architecture
 
@@ -125,13 +125,13 @@ This is left for future implementation due to complexity.
 
 ### Cooperative Scheduling
 
-**Current Status: Partially Implemented**
+**Current Status: Implemented**
 
 Yield syscall:
-- Implemented syscall handler stub
-- Handler logs but doesn't switch yet
-- Requires syscall context save/restore
-- Must handle sysretq to different process
+- Syscall entry saves full user CPU context
+- Current process moved Running → Ready
+- Next process selected Ready → Running
+- Context restored and sysretq returns to the new process
 
 Exit syscall:
 - Marks process as exited
@@ -169,6 +169,31 @@ Exit syscall:
 3. `syscall_entry` saves user state
 4. Handler processes syscall
 5. Handler returns via `sysretq`
+
+### Syscall Context Boundaries
+
+**Saved on syscall entry:**
+- GPRs: r15..r8, rbp, rdi, rsi, rdx, rcx, rbx, rax
+- User RIP from RCX → context.rip
+- User RFLAGS from R11 → context.rflags
+- User RSP captured before switching to kernel stack → context.rsp
+
+**Preserved across yield():**
+- All GPRs (as restored from context)
+- RSP, RIP, RFLAGS
+- RCX/R11 follow syscall semantics (RCX = return RIP, R11 = user RFLAGS)
+
+**Diff vs interrupt context:**
+- Syscall path saves RIP/RFLAGS manually (RCX/R11) vs interrupt frame pushes RIP/CS/RFLAGS/RSP/SS
+- Syscall returns via sysretq; interrupt returns via iretq
+
+### Kernel Stack Discipline
+
+1. Each process has a dedicated kernel stack mapped into its page table.
+2. Syscall entry switches to the current process kernel stack before calling Rust.
+3. Context switches update the current syscall context pointer.
+4. Kernel stack VA is fixed (`KERNEL_STACK_TOP`); CR3 selects backing frames.
+5. CR3 is switched only in the sysret path that does not touch the old stack.
 
 ## Process Lifecycle
 
@@ -225,9 +250,8 @@ Exit syscall:
 ### Short Term
 
 1. Implement timer-based preemption
-2. Implement yield-based context switching
-3. Test with multiple processes
-4. Add scheduler metrics (context switch count, etc.)
+2. Test with multiple processes
+3. Add scheduler metrics (context switch count, etc.)
 
 ### Medium Term
 

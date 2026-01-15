@@ -140,6 +140,7 @@ PandaOS is a Unix-like x86_64 kernel written in Rust with a focus on:
   - heap_test - heap allocator functionality
   - **higher_half_smoke** - higher-half kernel operation (static vars, heap, function pointers)
   - **page_table_reservation_smoke** - page table frame tracking and reservation
+  - **yield_cooperative_smoke** - cooperative multitasking via yield()
 
 #### 4. Core Kernel Features
 - [x] **Process management**:
@@ -152,7 +153,7 @@ PandaOS is a Unix-like x86_64 kernel written in Rust with a focus on:
   - syscall/sysret infrastructure via MSRs
   - Linux x86_64 ABI compatibility
   - Implemented: write(), exit(), getpid(), yield()
-  - Syscall entry/exit with register preservation
+  - Syscall entry/exit with explicit context save/restore
 - [x] **GDT with user segments**:
   - Kernel code/data segments (ring 0)
   - User code/data segments (ring 3)
@@ -167,16 +168,18 @@ PandaOS is a Unix-like x86_64 kernel written in Rust with a focus on:
   - hello2.asm - scheduler test with yield
   - Build system to create static ELF executables
   - Embedding mechanism via build.rs
-- [x] **Scheduler and Preemptive Multitasking**:
+- [x] **Scheduler and Cooperative Multitasking**:
   - Round-robin scheduler implementation
   - CPU context save/restore
   - Context switching infrastructure
+  - Syscall-driven cooperative switching with sysretq return
+  - Per-process kernel stacks for syscall handling
   - Timer interrupt support (PIT + PIC)
   - Scheduler integration (handlers set up)
   - Multiple user programs support
   - See [SCHEDULER.md](SCHEDULER.md) for details
 - [ ] Timer-based preemption (complex, deferred)
-- [ ] Yield-based context switching (deferred)
+- [x] Yield-based context switching (syscall-driven)
 - [ ] Basic I/O (keyboard)
 
 ## Key Design Decisions
@@ -196,6 +199,7 @@ PandaOS is a Unix-like x86_64 kernel written in Rust with a focus on:
 - Subsystems initialized explicitly
 - References passed through function parameters
 - Static state only for hardware (e.g., VGA buffer, serial port)
+- Arch-local syscall context pointer for sysret (current context)
 
 ### 3. musl + Linux ABI Compatibility
 **Rationale**: 
