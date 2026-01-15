@@ -124,7 +124,11 @@ pub unsafe fn init_from_bootloader(boot_info: &'static bootloader::BootInfo) {
     // The bootloader memory map itself and boot info structure
     let boot_info_addr = boot_info as *const _ as u64;
     let boot_info_frame = (boot_info_addr / 4096) as usize;
-    frame_allocator.reserve_range(boot_info_frame, boot_info_frame + 1, ReservationReason::Bootloader);
+    frame_allocator.reserve_range(
+        boot_info_frame,
+        boot_info_frame + 1,
+        ReservationReason::Bootloader,
+    );
 
     // Reserve page table frames currently in use
     // The bootloader sets up initial page tables - we need to preserve them
@@ -133,7 +137,11 @@ pub unsafe fn init_from_bootloader(boot_info: &'static bootloader::BootInfo) {
     use x86_64::registers::control::Cr3;
     let (level_4_table_frame, _) = Cr3::read();
     let l4_frame = level_4_table_frame.start_address().as_u64() / 4096;
-    frame_allocator.reserve_range(l4_frame as usize, (l4_frame + 1) as usize, ReservationReason::PageTables);
+    frame_allocator.reserve_range(
+        l4_frame as usize,
+        (l4_frame + 1) as usize,
+        ReservationReason::PageTables,
+    );
 
     // Log reservation statistics
     println!("Memory: {} KiB total", memory_map.usable_memory() / 1024);
@@ -209,7 +217,11 @@ pub unsafe fn deallocate_frame(frame: usize) {
 /// # Safety
 ///
 /// Frame allocator must be initialized.
-pub unsafe fn reserve_frames(start_frame: usize, end_frame: usize, reason: panda_hal::memory::ReservationReason) {
+pub unsafe fn reserve_frames(
+    start_frame: usize,
+    end_frame: usize,
+    reason: panda_hal::memory::ReservationReason,
+) {
     if let Some(allocator) = FRAME_ALLOCATOR.lock().as_mut() {
         allocator.reserve_range(start_frame, end_frame, reason);
     }

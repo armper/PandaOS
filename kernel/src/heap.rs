@@ -108,7 +108,7 @@ pub unsafe fn map_heap() -> Result<(), &'static str> {
         crate::memory::reserve_frames(
             heap_frames[0],
             heap_frames[frames_allocated - 1] + 1,
-            ReservationReason::Heap
+            ReservationReason::Heap,
         );
     }
 

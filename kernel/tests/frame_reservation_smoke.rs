@@ -48,22 +48,22 @@ fn test_runner(tests: &[&dyn Fn()]) {
 #[test_case]
 fn test_frame_allocator_initialized() {
     serial_print!("test_frame_allocator_initialized...");
-    
+
     // Try to allocate a frame - should succeed if allocator is initialized
     let frame = unsafe { panda_kernel::memory::allocate_frame() };
     assert!(frame.is_some(), "Frame allocator not initialized");
-    
+
     serial_println!("[ok]");
 }
 
 #[test_case]
 fn test_reserved_frames_not_allocated() {
     serial_print!("test_reserved_frames_not_allocated...");
-    
+
     // Allocate many frames to test that we skip reserved ones
     const TEST_ALLOC_COUNT: usize = 100;
     let mut allocated_frames = Vec::new();
-    
+
     for _ in 0..TEST_ALLOC_COUNT {
         if let Some(frame) = unsafe { panda_kernel::memory::allocate_frame() } {
             allocated_frames.push(frame);
@@ -71,65 +71,58 @@ fn test_reserved_frames_not_allocated() {
             break; // Out of memory
         }
     }
-    
-    assert!(
-        allocated_frames.len() > 0,
-        "Should be able to allocate at least some frames"
-    );
-    
+
+    assert!(allocated_frames.len() > 0, "Should be able to allocate at least some frames");
+
     // Verify none of the allocated frames are in critical low memory
     // Frame 0 should always be reserved (BIOS/IVT)
     for &frame in &allocated_frames {
         assert_ne!(frame, 0, "Allocated frame 0 - should be reserved!");
-        
+
         // Frames below 16MB (4096 frames) should be reserved for kernel/bootloader
         // But the allocator might give us frames just above this range
         // So we just check that frame 0 is never allocated
     }
-    
+
     serial_println!("[ok] - allocated {} frames", allocated_frames.len());
 }
 
 #[test_case]
 fn test_heap_frames_allocated_only_once() {
     serial_print!("test_heap_frames_allocated_only_once...");
-    
+
     // The heap has already allocated frames during init
     // Try to allocate more frames and verify they don't overlap with heap
-    
+
     const TEST_ALLOC_COUNT: usize = 50;
     let mut allocated_frames = Vec::new();
-    
+
     for _ in 0..TEST_ALLOC_COUNT {
         if let Some(frame) = unsafe { panda_kernel::memory::allocate_frame() } {
             // Check this frame hasn't been allocated before in this test
-            assert!(
-                !allocated_frames.contains(&frame),
-                "Frame {} allocated twice!",
-                frame
-            );
+            assert!(!allocated_frames.contains(&frame), "Frame {} allocated twice!", frame);
             allocated_frames.push(frame);
         } else {
             break;
         }
     }
-    
+
     // Verify we could allocate some frames
     assert!(allocated_frames.len() > 0, "Should allocate some frames");
-    
+
     serial_println!("[ok] - no double allocations in {} frames", allocated_frames.len());
 }
 
 #[test_case]
 fn test_allocation_after_heap_init() {
     serial_print!("test_allocation_after_heap_init...");
-    
+
     // Allocate on heap - this should work
     let mut heap_vec = Vec::new();
     for i in 0..100 {
         heap_vec.push(i);
     }
-    
+
     // Allocate physical frames - this should also work and not conflict
     let mut frame_vec = Vec::new();
     for _ in 0..10 {
@@ -137,13 +130,13 @@ fn test_allocation_after_heap_init() {
             frame_vec.push(frame);
         }
     }
-    
+
     // Verify heap still works
     assert_eq!(heap_vec.len(), 100);
     assert_eq!(heap_vec[50], 50);
-    
+
     // Verify we got some frames
     assert!(frame_vec.len() > 0);
-    
+
     serial_println!("[ok] - heap and frame allocator coexist");
 }

@@ -122,7 +122,12 @@ impl FrameAllocator {
     ///
     /// If the new region overlaps with an existing reservation, they are merged
     /// into a single larger region. Adjacent regions are also merged.
-    pub fn reserve_range(&mut self, start_frame: usize, end_frame: usize, reason: ReservationReason) {
+    pub fn reserve_range(
+        &mut self,
+        start_frame: usize,
+        end_frame: usize,
+        reason: ReservationReason,
+    ) {
         // Validate: non-empty range
         if start_frame >= end_frame {
             return; // Empty range, nothing to reserve
@@ -165,8 +170,9 @@ impl FrameAllocator {
             changed = false;
             for i in 0..self.reserved_count {
                 for j in (i + 1)..self.reserved_count {
-                    if let (Some(region_i), Some(region_j)) = 
-                        (self.reserved_regions[i], self.reserved_regions[j]) {
+                    if let (Some(region_i), Some(region_j)) =
+                        (self.reserved_regions[i], self.reserved_regions[j])
+                    {
                         if let Some(merged) = region_i.try_merge(&region_j) {
                             // Merge into i, remove j
                             self.reserved_regions[i] = Some(merged);
@@ -202,16 +208,12 @@ impl FrameAllocator {
 
     /// Get iterator over reserved regions (for debugging)
     pub fn reserved_regions(&self) -> impl Iterator<Item = &ReservedRegion> {
-        self.reserved_regions[..self.reserved_count]
-            .iter()
-            .filter_map(|r| r.as_ref())
+        self.reserved_regions[..self.reserved_count].iter().filter_map(|r| r.as_ref())
     }
 
     /// Get total number of reserved frames
     pub fn reserved_frames(&self) -> usize {
-        self.reserved_regions()
-            .map(|r| r.end_frame - r.start_frame)
-            .sum()
+        self.reserved_regions().map(|r| r.end_frame - r.start_frame).sum()
     }
 
     /// Get total number of usable frames (total - reserved)
@@ -254,10 +256,7 @@ impl FrameAllocator {
                     self.available_frames.start,
                     self.available_frames.end
                 );
-                assert!(
-                    !self.is_reserved(frame),
-                    "Allocated reserved frame {frame}"
-                );
+                assert!(!self.is_reserved(frame), "Allocated reserved frame {frame}");
             }
 
             return Some(frame);
@@ -429,7 +428,7 @@ mod tests {
     #[test]
     fn test_allocate_skips_reserved() {
         let mut allocator = FrameAllocator::new(0, 20);
-        
+
         // Reserve frames 5-10
         allocator.reserve_range(5, 10, ReservationReason::KernelImage);
 
@@ -447,7 +446,7 @@ mod tests {
     fn test_allocate_never_returns_reserved() {
         extern crate std;
         let mut allocator = FrameAllocator::new(0, 100);
-        
+
         // Reserve multiple ranges
         allocator.reserve_range(10, 20, ReservationReason::KernelImage);
         allocator.reserve_range(50, 60, ReservationReason::Heap);
@@ -471,7 +470,7 @@ mod tests {
     #[test]
     fn test_reserved_region_contains() {
         let region = ReservedRegion::new(10, 20, ReservationReason::KernelImage);
-        
+
         assert!(!region.contains(9));
         assert!(region.contains(10));
         assert!(region.contains(15));
@@ -495,7 +494,7 @@ mod tests {
     fn test_reserved_region_merge() {
         let region1 = ReservedRegion::new(10, 20, ReservationReason::KernelImage);
         let region2 = ReservedRegion::new(15, 25, ReservationReason::Bootloader);
-        
+
         let merged = region1.try_merge(&region2).unwrap();
         assert_eq!(merged.start_frame, 10);
         assert_eq!(merged.end_frame, 25);
@@ -505,7 +504,7 @@ mod tests {
     fn test_reserved_region_merge_adjacent() {
         let region1 = ReservedRegion::new(10, 20, ReservationReason::KernelImage);
         let region2 = ReservedRegion::new(20, 30, ReservationReason::Bootloader);
-        
+
         let merged = region1.try_merge(&region2).unwrap();
         assert_eq!(merged.start_frame, 10);
         assert_eq!(merged.end_frame, 30);
@@ -515,7 +514,7 @@ mod tests {
     fn test_reserved_region_no_merge_disjoint() {
         let region1 = ReservedRegion::new(10, 20, ReservationReason::KernelImage);
         let region2 = ReservedRegion::new(30, 40, ReservationReason::Bootloader);
-        
+
         assert!(region1.try_merge(&region2).is_none());
     }
 
@@ -612,7 +611,7 @@ mod tests {
                 reserve_count in 10usize..30
             ) {
                 let mut allocator = FrameAllocator::new(start, start + count);
-                
+
                 // Reserve some frames
                 let reserve_end = (reserve_start + reserve_count).min(start + count);
                 if reserve_start < reserve_end {
@@ -644,7 +643,7 @@ mod tests {
                 reserve_count in 10usize..30
             ) {
                 let mut allocator = FrameAllocator::new(start, start + count);
-                
+
                 let reserve_end = (reserve_start + reserve_count).min(start + count);
                 if reserve_start < reserve_end {
                     allocator.reserve_range(
