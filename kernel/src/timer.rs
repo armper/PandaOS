@@ -48,10 +48,7 @@ const PIT_CMD_BINARY_MODE_RATE_GEN: u8 = 0b00110110;
 /// Panics if frequency_hz is 0 or greater than PIT_BASE_FREQUENCY
 pub unsafe fn init(frequency_hz: u32) {
     assert!(frequency_hz > 0, "PIT frequency must be greater than 0");
-    assert!(
-        frequency_hz <= PIT_BASE_FREQUENCY,
-        "PIT frequency cannot exceed base frequency"
-    );
+    assert!(frequency_hz <= PIT_BASE_FREQUENCY, "PIT frequency cannot exceed base frequency");
 
     // Calculate divisor for desired frequency
     let divisor = PIT_BASE_FREQUENCY / frequency_hz;

@@ -349,11 +349,7 @@ unsafe fn init_scheduler_and_start() -> ! {
 /// run with interrupts disabled.
 unsafe fn get_scheduler() -> &'static mut scheduler::Scheduler {
     // SAFETY: Caller guarantees interrupts are disabled and scheduler is initialized
-    unsafe {
-        (*core::ptr::addr_of_mut!(SCHEDULER))
-            .as_mut()
-            .expect("Scheduler not initialized")
-    }
+    unsafe { (*core::ptr::addr_of_mut!(SCHEDULER)).as_mut().expect("Scheduler not initialized") }
 }
 
 /// Timer interrupt handler - called on each timer tick
@@ -361,7 +357,7 @@ fn timer_tick_handler() {
     // For now, just acknowledge the timer tick
     // Full preemptive multitasking would require saving interrupt frame state
     // and switching page tables, which is complex. Start with yield-based switching.
-    
+
     // TODO: Implement preemptive scheduling
     // This would require:
     // 1. Saving interrupt frame to process context
@@ -373,14 +369,14 @@ fn timer_tick_handler() {
 /// Yield handler - called when process voluntarily yields CPU  
 fn yield_handler() {
     serial_println!("[YIELD] Process yielding CPU");
-    
+
     // SAFETY: Called from syscall handler with interrupts disabled
     let scheduler = unsafe { get_scheduler() };
 
     // Get next process (current will be moved to ready queue)
     if let Some(next) = scheduler.schedule_next() {
         serial_println!("[YIELD] Switching to process PID {}", next.pid.as_u64());
-        
+
         // For now, just log the yield - actual context switch would happen here
         // This is complex because we're inside a syscall handler
         // TODO: Implement actual context switch from syscall
