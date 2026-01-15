@@ -13,10 +13,6 @@
 use alloc::vec::Vec;
 use spin::Mutex;
 
-/// Maximum number of page table frames to track
-/// This supports up to 512 entries per level * 4 levels = lots of mappings
-const MAX_PAGE_TABLE_FRAMES: usize = 512;
-
 /// Page table frame tracker
 ///
 /// Tracks all allocated page table frames to ensure they're never
