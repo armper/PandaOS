@@ -72,10 +72,7 @@ fn test_reserved_frames_not_allocated() {
         }
     }
 
-    assert!(
-        !allocated_frames.is_empty(),
-        "Should be able to allocate at least some frames"
-    );
+    assert!(!allocated_frames.is_empty(), "Should be able to allocate at least some frames");
 
     // Verify none of the allocated frames are in critical low memory
     // Frame 0 should always be reserved (BIOS/IVT)
