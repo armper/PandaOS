@@ -144,6 +144,8 @@ pub enum ErrorCode {
     EIO = 5,
     /// Bad file descriptor
     EBADF = 9,
+    /// Try again
+    EAGAIN = 11,
     /// Out of memory
     ENOMEM = 12,
     /// Permission denied

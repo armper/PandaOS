@@ -584,7 +584,7 @@ fn waitpid_handler(pid: i64, status_ptr: u64, options: i32) -> syscall::SyscallR
                 serial_println!("[WAITPID] No zombie children yet, yielding");
                 // Return EAGAIN to indicate no child available now
                 // In a full implementation, we'd block the process
-                Err(syscall::ErrorCode::EINTR)
+                Err(syscall::ErrorCode::EAGAIN)
             } else {
                 // No children at all
                 serial_println!("[WAITPID] No children found");

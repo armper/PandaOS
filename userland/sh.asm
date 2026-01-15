@@ -273,7 +273,7 @@ parent_wait:
     xor rdx, rdx  ; options = 0
     syscall
     test rax, rax
-    js parent_wait  ; If EINTR, retry
+    js parent_wait  ; If error (EAGAIN/EINTR), retry
     
     ; Child exited, continue shell
     jmp main_loop
