@@ -323,6 +323,7 @@ unsafe fn init_scheduler_and_start() -> ! {
     syscall::set_getdents64_handler(getdents64_handler);
     syscall::set_getcwd_handler(getcwd_handler);
     syscall::set_chdir_handler(chdir_handler);
+    syscall::set_getenv_handler(getenv_handler);
 
     // Unmask timer interrupt (IRQ 0)
     println!("Enabling timer interrupt...");
@@ -405,16 +406,49 @@ const EXEC_ARG_ADDR: u64 = 0x7FFF_FFFF_C000;
 const EXEC_ARG_MAX: usize = 128;
 
 fn exec_handler(path: &str, arg: Option<&str>) -> Result<(), syscall::ErrorCode> {
-    if !path.starts_with('/') {
-        return Err(syscall::ErrorCode::ENOENT);
-    }
-
-    let elf_data = fs::lookup(path).ok_or(syscall::ErrorCode::ENOENT)?;
-    let elf_info = elf::parse_elf(elf_data).map_err(|_| syscall::ErrorCode::EINVAL)?;
-
+    // Get current process to access PATH environment variable
     // SAFETY: Called from syscall handler with interrupts disabled
     let scheduler = unsafe { get_scheduler() };
     let current = scheduler.current_process_mut().ok_or(syscall::ErrorCode::ESRCH)?;
+
+    // Resolve path: if it contains '/', use as-is; otherwise search PATH
+    let elf_data = if path.contains('/') {
+        // Absolute or relative path - resolve normally
+        let resolved_path = fs::resolve_path(&current.cwd, path)?;
+        fs::lookup(&resolved_path).ok_or(syscall::ErrorCode::ENOENT)?
+    } else {
+        // No '/' in path - search PATH directories
+        let path_env = &current.path_env;
+        let mut found_data = None;
+
+        // Split PATH by ':' and try each directory
+        for dir in path_env.split(':') {
+            // Skip empty components (e.g., "::", leading/trailing ":")
+            // Note: In some Unix shells, empty PATH components mean current directory,
+            // but for security we explicitly skip them rather than using cwd
+            if dir.is_empty() {
+                continue;
+            }
+
+            // Construct full path: dir/path
+            let mut full_path = alloc::string::String::new();
+            full_path.push_str(dir);
+            if !dir.ends_with('/') {
+                full_path.push('/');
+            }
+            full_path.push_str(path);
+
+            // Try to look up this path
+            if let Some(data) = fs::lookup(&full_path) {
+                found_data = Some(data);
+                break;
+            }
+        }
+
+        found_data.ok_or(syscall::ErrorCode::ENOENT)?
+    };
+
+    let elf_info = elf::parse_elf(elf_data).map_err(|_| syscall::ErrorCode::EINVAL)?;
 
     // SAFETY: Frame allocator and GDT are initialized.
     unsafe {
@@ -456,10 +490,10 @@ fn exec_handler(path: &str, arg: Option<&str>) -> Result<(), syscall::ErrorCode>
 fn open_handler(path: &str) -> syscall::SyscallResult {
     let scheduler = unsafe { get_scheduler() };
     let current = scheduler.current_process_mut().ok_or(syscall::ErrorCode::ESRCH)?;
-    
+
     // Resolve path relative to cwd
     let resolved_path = fs::resolve_path(&current.cwd, path)?;
-    
+
     let fd = fs::open_path(&mut current.fd_table, &resolved_path)?;
     Ok(fd as u64)
 }
@@ -703,93 +737,93 @@ fn setpgid_handler(pid: i32, pgid: i32) -> syscall::SyscallResult {
 /// getdents64 handler - read directory entries
 fn getdents64_handler(fd: i32, buf: u64, count: u64) -> syscall::SyscallResult {
     use alloc::vec::Vec;
-    
+
     // SAFETY: Called from syscall handler with interrupts disabled
     let scheduler = unsafe { get_scheduler() };
     let current = scheduler.current_process_mut().ok_or(syscall::ErrorCode::ESRCH)?;
-    
+
     // Get fd kind and verify it's a directory
     let fd_kind = current.fd_table.get(fd)?;
     let open_file = match fd_kind {
         fs::FdKind::Directory(open) => open,
         _ => return Err(syscall::ErrorCode::ENOTDIR),
     };
-    
+
     // Get the directory path from the node
     let node = fs::FILES.get(open_file.node_index).ok_or(syscall::ErrorCode::ENOENT)?;
     if node.file_type != fs::FileType::Directory {
         return Err(syscall::ErrorCode::ENOTDIR);
     }
-    
+
     // List directory entries
     let entries = fs::list_directory(node.path)?;
-    
+
     // Check if we've reached the end (offset >= number of entries)
     if open_file.offset >= entries.len() {
         return Ok(0); // EOF
     }
-    
+
     // Calculate how many entries we can fit in the buffer
     let count = usize::try_from(count).map_err(|_| syscall::ErrorCode::EINVAL)?;
     let mut bytes_written = 0usize;
     let mut entries_read = 0usize;
-    
+
     // Build directory entries in kernel buffer
     let mut kernel_buf = Vec::new();
-    
+
     for (name, file_type) in entries.iter().skip(open_file.offset) {
         // Calculate record size: fixed header (19 bytes) + name + null + padding to 8-byte align
         let name_len = name.len();
         let record_size = 19 + name_len + 1; // header + name + null
         let aligned_size = (record_size + 7) & !7; // align to 8 bytes
-        
+
         // Check if we have space in buffer
         if bytes_written + aligned_size > count {
             break; // Buffer full
         }
-        
+
         // Build the directory entry
         // d_ino (8 bytes)
         let d_ino = (open_file.offset + entries_read + 1) as u64;
         kernel_buf.extend_from_slice(&d_ino.to_le_bytes());
-        
+
         // d_off (8 bytes) - offset to next entry
         let d_off = (open_file.offset + entries_read + 1) as u64;
         kernel_buf.extend_from_slice(&d_off.to_le_bytes());
-        
+
         // d_reclen (2 bytes)
         let d_reclen = aligned_size as u16;
         kernel_buf.extend_from_slice(&d_reclen.to_le_bytes());
-        
+
         // d_type (1 byte)
         let d_type = match file_type {
             fs::FileType::File => 8,      // DT_REG
-            fs::FileType::Directory => 4,  // DT_DIR
+            fs::FileType::Directory => 4, // DT_DIR
         };
         kernel_buf.push(d_type);
-        
+
         // name (null-terminated)
         kernel_buf.extend_from_slice(name.as_bytes());
         kernel_buf.push(0); // null terminator
-        
+
         // padding to 8-byte alignment
         while kernel_buf.len() < bytes_written + aligned_size {
             kernel_buf.push(0);
         }
-        
+
         bytes_written += aligned_size;
         entries_read += 1;
     }
-    
+
     // Copy to user space
     if bytes_written > 0 {
         crate::usermode::copy_to_user_bytes(buf, &kernel_buf[..bytes_written])?;
-        
+
         // Update offset in fd table
         let new_offset = open_file.offset + entries_read;
         current.fd_table.update_directory_offset(fd, new_offset)?;
     }
-    
+
     Ok(bytes_written as u64)
 }
 
@@ -798,26 +832,26 @@ fn getcwd_handler(buf: u64, size: u64) -> syscall::SyscallResult {
     // SAFETY: Called from syscall handler with interrupts disabled
     let scheduler = unsafe { get_scheduler() };
     let current = scheduler.current_process().ok_or(syscall::ErrorCode::ESRCH)?;
-    
+
     let cwd_bytes = current.cwd.as_bytes();
     let size = usize::try_from(size).map_err(|_| syscall::ErrorCode::EINVAL)?;
-    
+
     if size == 0 {
         return Err(syscall::ErrorCode::EINVAL);
     }
-    
+
     // Need space for string + null terminator
     if cwd_bytes.len() + 1 > size {
         return Err(syscall::ErrorCode::ERANGE);
     }
-    
+
     // Copy cwd to user buffer
     crate::usermode::copy_to_user_bytes(buf, cwd_bytes)?;
-    
+
     // Add null terminator
     let null_byte = [0u8];
     crate::usermode::copy_to_user_bytes(buf + cwd_bytes.len() as u64, &null_byte)?;
-    
+
     Ok(buf)
 }
 
@@ -825,23 +859,65 @@ fn getcwd_handler(buf: u64, size: u64) -> syscall::SyscallResult {
 fn chdir_handler(path_ptr: u64) -> syscall::SyscallResult {
     const MAX_PATH_LEN: usize = 256;
     let mut path_buf = [0u8; MAX_PATH_LEN];
-    
+
     let path = crate::usermode::copy_user_cstr(path_ptr, &mut path_buf)?;
-    
+
     // SAFETY: Called from syscall handler with interrupts disabled
     let scheduler = unsafe { get_scheduler() };
     let current = scheduler.current_process_mut().ok_or(syscall::ErrorCode::ESRCH)?;
-    
+
     // Resolve path relative to current cwd
     let resolved_path = fs::resolve_path(&current.cwd, path)?;
-    
+
     // Validate that it's a directory
     fs::validate_directory(&resolved_path)?;
-    
+
     // Update cwd
     current.cwd = resolved_path;
-    
+
     Ok(0)
+}
+
+/// getenv handler - get environment variable value
+fn getenv_handler(name_ptr: u64, buf_ptr: u64, size: u64) -> syscall::SyscallResult {
+    const MAX_NAME_LEN: usize = 64;
+    const ENV_PATH: &str = "PATH";
+    let mut name_buf = [0u8; MAX_NAME_LEN];
+
+    let name = crate::usermode::copy_user_cstr(name_ptr, &mut name_buf)?;
+    let size = usize::try_from(size).map_err(|_| syscall::ErrorCode::EINVAL)?;
+
+    // SAFETY: Called from syscall handler with interrupts disabled
+    let scheduler = unsafe { get_scheduler() };
+    let current = scheduler.current_process().ok_or(syscall::ErrorCode::ESRCH)?;
+
+    // For now, we only support PATH environment variable
+    let value = if name == ENV_PATH {
+        &current.path_env
+    } else {
+        // Environment variable not found
+        return Err(syscall::ErrorCode::ENOENT);
+    };
+
+    let value_bytes = value.as_bytes();
+
+    if size == 0 {
+        return Err(syscall::ErrorCode::EINVAL);
+    }
+
+    // Need space for string + null terminator
+    if value_bytes.len() + 1 > size {
+        return Err(syscall::ErrorCode::ERANGE);
+    }
+
+    // Copy value to user buffer
+    crate::usermode::copy_to_user_bytes(buf_ptr, value_bytes)?;
+
+    // Add null terminator
+    let null_byte = [0u8];
+    crate::usermode::copy_to_user_bytes(buf_ptr + value_bytes.len() as u64, &null_byte)?;
+
+    Ok(value_bytes.len() as u64)
 }
 
 /// fork handler - create a child process
@@ -1122,6 +1198,8 @@ fn exit_handler(status: i32) -> ! {
         serial_println!("TEST PASS ls_smoke");
         #[cfg(feature = "cd-smoke")]
         serial_println!("TEST PASS cd_smoke");
+        #[cfg(feature = "path-smoke")]
+        serial_println!("TEST PASS path_smoke");
         #[cfg(not(any(
             feature = "shell-smoke",
             feature = "vfs-cat-smoke",
@@ -1129,7 +1207,8 @@ fn exit_handler(status: i32) -> ! {
             feature = "pipe-smoke",
             feature = "ctrlc-smoke",
             feature = "ls-smoke",
-            feature = "cd-smoke"
+            feature = "cd-smoke",
+            feature = "path-smoke"
         )))]
         serial_println!("TEST PASS exec_smoke");
         let kernel_pt = usermode::kernel_page_table_phys();

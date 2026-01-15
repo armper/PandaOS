@@ -142,10 +142,89 @@ None yet - hardware access is direct. Future refactoring will add:
 - `kill(pid, sig)` - syscall #37 (sends signal to process or process group)
 - `getpid()` - syscall #39 (returns process ID)
 - `fork()` - syscall #57 (creates child process, returns child PID to parent, 0 to child)
-- `execve(path, arg)` - syscall #59 (replaces current process image, single arg string)
+- `execve(path, arg)` - syscall #59 (replaces current process image, supports PATH lookup)
 - `exit(status)` - syscall #60 (terminates process)
 - `waitpid(pid, status, options)` - syscall #61 (waits for child to exit, reaps zombie)
+- `getenv(name, buf, size)` - syscall #63 (retrieves environment variable value)
+- `getcwd(buf, size)` - syscall #79 (gets current working directory)
+- `chdir(path)` - syscall #80 (changes current working directory)
 - `setpgid(pid, pgid)` - syscall #109 (sets process group ID)
+- `getdents64(fd, buf, count)` - syscall #217 (gets directory entries)
+
+## Environment Variables
+
+**Status:** ✅ **IMPLEMENTED** - Basic environment variable storage and PATH lookup.
+
+### Overview
+
+PandaOS implements per-process environment variable storage to support command lookup
+via the `PATH` variable. This enables running commands without absolute paths.
+
+### Environment Model
+
+**Process Storage** (`kernel/src/process.rs`):
+```rust
+pub struct Process {
+    pub pid: Pid,
+    pub pgid: Pid,
+    pub cwd: String,       // Current working directory
+    pub path_env: String,  // PATH environment variable
+    // ... other fields
+}
+```
+
+**Initialization:**
+- New processes start with `PATH=/bin` by default
+- Environment variables are inherited during `fork()` (copied to child)
+- Currently supports only `PATH` variable (extensible to others)
+
+### PATH Lookup
+
+**Exec Path Resolution** (`kernel/src/main.rs`):
+
+When `execve(path, arg)` is called:
+
+1. **If path contains `/`**: Resolve as absolute or relative path
+   - Example: `/bin/ls`, `./cat`, `../bin/echo`
+   
+2. **If path has no `/`**: Search PATH directories
+   - Split `PATH` by `:` delimiter
+   - Try each directory: construct `<dir>/<path>`
+   - First successful match is executed
+   - Return `ENOENT` if not found in any PATH directory
+
+**Example:**
+- Process has `PATH=/bin:/usr/bin`
+- Command: `execve("ls", NULL)`
+- Kernel tries: `/bin/ls` (found ✓)
+- Result: executes `/bin/ls`
+
+### Getenv Syscall
+
+**Signature:** `getenv(name, buf, size) -> int`
+
+**Parameters:**
+- `name`: Null-terminated environment variable name (e.g., "PATH")
+- `buf`: User buffer to store the value
+- `size`: Size of the buffer
+
+**Returns:**
+- Length of value string (excluding null terminator) on success
+- `-ENOENT` if variable not found
+- `-EINVAL` if size is 0
+- `-ERANGE` if buffer too small
+
+**Current Support:**
+- `PATH`: Returns the process's PATH environment variable
+- Other variables: Return `ENOENT` (extensible in future)
+
+### Future Enhancements
+
+- Full environment variable map (arbitrary key-value pairs)
+- `setenv` syscall to modify environment
+- Pass environment in `execve` (third argument)
+- Export/unexport in shell
+- System-wide environment initialization
 
 ## Job Control (Minimal)
 

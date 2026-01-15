@@ -169,7 +169,7 @@ impl FdTable {
         if fd < FIRST_NONSTD_FD as i32 {
             return Err(ErrorCode::EBADF);
         }
-        
+
         let kind = self.entries[fd as usize].ok_or(ErrorCode::EBADF)?;
         if let FdKind::Directory(open) = kind {
             self.entries[fd as usize] = Some(FdKind::Directory(OpenFile {
@@ -258,14 +258,46 @@ pub static FILES: &[FileNode] = &[
     // /etc directory
     FileNode { path: "/etc", data: b"", file_type: FileType::Directory },
     // Regular files
-    FileNode { path: "/init", data: include_bytes!("../../userland/bin/init"), file_type: FileType::File },
-    FileNode { path: "/bin/sh", data: include_bytes!("../../userland/bin/sh"), file_type: FileType::File },
-    FileNode { path: "/bin/cat", data: include_bytes!("../../userland/bin/cat"), file_type: FileType::File },
-    FileNode { path: "/bin/true", data: include_bytes!("../../userland/bin/true"), file_type: FileType::File },
-    FileNode { path: "/bin/echo", data: include_bytes!("../../userland/bin/echo"), file_type: FileType::File },
-    FileNode { path: "/bin/wc", data: include_bytes!("../../userland/bin/wc"), file_type: FileType::File },
-    FileNode { path: "/bin/ls", data: include_bytes!("../../userland/bin/ls"), file_type: FileType::File },
-    FileNode { path: "/etc/motd", data: b"Welcome to PandaOS.\r\nType 'help' for commands.\r\n", file_type: FileType::File },
+    FileNode {
+        path: "/init",
+        data: include_bytes!("../../userland/bin/init"),
+        file_type: FileType::File,
+    },
+    FileNode {
+        path: "/bin/sh",
+        data: include_bytes!("../../userland/bin/sh"),
+        file_type: FileType::File,
+    },
+    FileNode {
+        path: "/bin/cat",
+        data: include_bytes!("../../userland/bin/cat"),
+        file_type: FileType::File,
+    },
+    FileNode {
+        path: "/bin/true",
+        data: include_bytes!("../../userland/bin/true"),
+        file_type: FileType::File,
+    },
+    FileNode {
+        path: "/bin/echo",
+        data: include_bytes!("../../userland/bin/echo"),
+        file_type: FileType::File,
+    },
+    FileNode {
+        path: "/bin/wc",
+        data: include_bytes!("../../userland/bin/wc"),
+        file_type: FileType::File,
+    },
+    FileNode {
+        path: "/bin/ls",
+        data: include_bytes!("../../userland/bin/ls"),
+        file_type: FileType::File,
+    },
+    FileNode {
+        path: "/etc/motd",
+        data: b"Welcome to PandaOS.\r\nType 'help' for commands.\r\n",
+        file_type: FileType::File,
+    },
     FileNode { path: "/etc/version", data: b"PandaOS 0.1.0\r\n", file_type: FileType::File },
 ];
 
@@ -301,33 +333,31 @@ pub struct DirEntry {
 
 /// List directory entries for a given directory path
 /// Returns a list of (name, file_type) tuples
-pub fn list_directory(dir_path: &str) -> Result<alloc::vec::Vec<(&'static str, FileType)>, ErrorCode> {
+pub fn list_directory(
+    dir_path: &str,
+) -> Result<alloc::vec::Vec<(&'static str, FileType)>, ErrorCode> {
     use alloc::vec::Vec;
-    
+
     // Verify the path is a directory
     let (_, node) = lookup_node(dir_path).ok_or(ErrorCode::ENOENT)?;
     if node.file_type != FileType::Directory {
         return Err(ErrorCode::ENOTDIR);
     }
-    
+
     // Normalize directory path (ensure it ends with '/' or is "/")
-    let dir_prefix = if dir_path == "/" {
-        "/"
-    } else {
-        dir_path
-    };
-    
+    let dir_prefix = if dir_path == "/" { "/" } else { dir_path };
+
     let mut entries = Vec::new();
-    
+
     // Find all files that are direct children of this directory
     for file in FILES.iter() {
         if file.path == dir_path {
             continue; // Skip the directory itself
         }
-        
+
         // Check if this file is a direct child
         if dir_prefix == "/" {
-            // For root directory, find entries with exactly one '/' 
+            // For root directory, find entries with exactly one '/'
             if file.path.starts_with('/') && file.path[1..].find('/').is_none() {
                 let name = &file.path[1..]; // Strip leading '/'
                 if !name.is_empty() {
@@ -346,7 +376,7 @@ pub fn list_directory(dir_path: &str) -> Result<alloc::vec::Vec<(&'static str, F
             }
         }
     }
-    
+
     Ok(entries)
 }
 
@@ -357,14 +387,14 @@ pub fn resolve_path(cwd: &str, path: &str) -> Result<alloc::string::String, Erro
     if path.starts_with('/') {
         return normalize_path(path);
     }
-    
+
     // Otherwise, prepend cwd
     let combined = if cwd.ends_with('/') {
         alloc::format!("{}{}", cwd, path)
     } else {
         alloc::format!("{}/{}", cwd, path)
     };
-    
+
     normalize_path(&combined)
 }
 
@@ -373,13 +403,13 @@ pub fn resolve_path(cwd: &str, path: &str) -> Result<alloc::string::String, Erro
 pub fn normalize_path(path: &str) -> Result<alloc::string::String, ErrorCode> {
     use alloc::string::String;
     use alloc::vec::Vec;
-    
+
     if !path.starts_with('/') {
         return Err(ErrorCode::EINVAL);
     }
-    
+
     let mut components = Vec::new();
-    
+
     for component in path.split('/') {
         match component {
             "" | "." => {
@@ -396,7 +426,7 @@ pub fn normalize_path(path: &str) -> Result<alloc::string::String, ErrorCode> {
             }
         }
     }
-    
+
     // Build the normalized path
     if components.is_empty() {
         Ok(String::from("/"))
