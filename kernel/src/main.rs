@@ -423,6 +423,9 @@ fn exec_handler(path: &str, arg: Option<&str>) -> Result<(), syscall::ErrorCode>
 
         // Split PATH by ':' and try each directory
         for dir in path_env.split(':') {
+            // Skip empty components (e.g., "::", leading/trailing ":")
+            // Note: In some Unix shells, empty PATH components mean current directory,
+            // but for security we explicitly skip them rather than using cwd
             if dir.is_empty() {
                 continue;
             }
@@ -878,6 +881,7 @@ fn chdir_handler(path_ptr: u64) -> syscall::SyscallResult {
 /// getenv handler - get environment variable value
 fn getenv_handler(name_ptr: u64, buf_ptr: u64, size: u64) -> syscall::SyscallResult {
     const MAX_NAME_LEN: usize = 64;
+    const ENV_PATH: &str = "PATH";
     let mut name_buf = [0u8; MAX_NAME_LEN];
 
     let name = crate::usermode::copy_user_cstr(name_ptr, &mut name_buf)?;
@@ -888,7 +892,7 @@ fn getenv_handler(name_ptr: u64, buf_ptr: u64, size: u64) -> syscall::SyscallRes
     let current = scheduler.current_process().ok_or(syscall::ErrorCode::ESRCH)?;
 
     // For now, we only support PATH environment variable
-    let value = if name == "PATH" {
+    let value = if name == ENV_PATH {
         &current.path_env
     } else {
         // Environment variable not found

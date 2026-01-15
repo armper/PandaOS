@@ -82,7 +82,8 @@ pub enum SyscallNumber {
     Yield = 24,
     /// Get directory entries
     Getdents64 = 217,
-    /// Get environment variable
+    /// Get environment variable (custom syscall, not in Linux ABI)
+    /// Uses 63 as it's unused in standard Linux x86_64 ABI
     Getenv = 63,
 }
 
