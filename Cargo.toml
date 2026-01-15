@@ -1,0 +1,28 @@
+[workspace]
+members = [
+    "kernel",
+    "hal",
+    "bootloader",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+authors = ["PandaOS Contributors"]
+edition = "2021"
+license = "GPL-3.0"
+
+[workspace.dependencies]
+# Shared dependencies
+bitflags = "2.4"
+spin = "0.9"
+uart_16550 = "0.3"
+x86_64 = "0.15"
+volatile = "0.5"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+lto = true

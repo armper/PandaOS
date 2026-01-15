@@ -1,0 +1,21 @@
+[package]
+name = "panda-hal"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bitflags = { workspace = true }
+spin = { workspace = true }
+uart_16550 = { workspace = true, optional = true }
+x86_64 = { workspace = true, optional = true }
+volatile = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest = "1.4"
+
+[features]
+default = ["hardware"]
+hardware = ["uart_16550", "x86_64", "volatile"]
+test-mode = []
