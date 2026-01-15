@@ -116,7 +116,7 @@ impl FrameAllocator {
     ///
     /// # Panics
     ///
-    /// Panics if too many regions are reserved (exceeds MAX_RESERVED_REGIONS)
+    /// Panics if too many regions are reserved (exceeds `MAX_RESERVED_REGIONS`)
     ///
     /// # Behavior with Overlaps
     ///
@@ -148,9 +148,10 @@ impl FrameAllocator {
 
         // If not merged, add as new region
         if !merged {
-            if self.reserved_count >= MAX_RESERVED_REGIONS {
-                panic!("Too many reserved regions (max {})", MAX_RESERVED_REGIONS);
-            }
+            assert!(
+                self.reserved_count < MAX_RESERVED_REGIONS,
+                "Too many reserved regions (max {MAX_RESERVED_REGIONS})"
+            );
             self.reserved_regions[self.reserved_count] = Some(new_region);
             self.reserved_count += 1;
         }
@@ -249,15 +250,13 @@ impl FrameAllocator {
             {
                 assert!(
                     frame >= self.available_frames.start && frame < self.available_frames.end,
-                    "Allocated frame {} out of range [{}..{})",
-                    frame,
+                    "Allocated frame {frame} out of range [{}..{})",
                     self.available_frames.start,
                     self.available_frames.end
                 );
                 assert!(
                     !self.is_reserved(frame),
-                    "Allocated reserved frame {}",
-                    frame
+                    "Allocated reserved frame {frame}"
                 );
             }
 
