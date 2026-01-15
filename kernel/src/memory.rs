@@ -117,13 +117,13 @@ pub unsafe fn init_from_bootloader(boot_info: &'static bootloader::BootInfo) {
     // The bootloader loads the kernel at low physical memory
     // Reserve first 16 MB conservatively for kernel, bootloader, and early structures
     // TODO: Get exact kernel range from linker symbols or bootloader API
-    let kernel_reserve_frames = (16 * 1024 * 1024) / 4096; // 16 MB = 4096 frames
+    let kernel_reserve_frames = (16 * 1024 * 1024) / panda_hal::memory::FRAME_SIZE;
     frame_allocator.reserve_range(0, kernel_reserve_frames, ReservationReason::KernelImage);
 
     // Reserve bootloader structures
     // The bootloader memory map itself and boot info structure
     let boot_info_addr = boot_info as *const _ as u64;
-    let boot_info_frame = (boot_info_addr / 4096) as usize;
+    let boot_info_frame = (boot_info_addr / panda_hal::memory::FRAME_SIZE as u64) as usize;
     frame_allocator.reserve_range(
         boot_info_frame,
         boot_info_frame + 1,
@@ -136,7 +136,8 @@ pub unsafe fn init_from_bootloader(boot_info: &'static bootloader::BootInfo) {
     // For now, we reserve the L4 page table frame
     use x86_64::registers::control::Cr3;
     let (level_4_table_frame, _) = Cr3::read();
-    let l4_frame = level_4_table_frame.start_address().as_u64() / 4096;
+    let l4_frame =
+        level_4_table_frame.start_address().as_u64() / panda_hal::memory::FRAME_SIZE as u64;
     frame_allocator.reserve_range(
         l4_frame as usize,
         (l4_frame + 1) as usize,
