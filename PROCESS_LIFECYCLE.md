@@ -8,10 +8,12 @@
 
 ## exit(code)
 - Mark process state as Exited(code).
-- Reclaim user mappings and page tables.
-- Release kernel stack frames.
-- Remove the process from the scheduler run queue.
-- If no runnable processes remain, print `TEST PASS exec_smoke` and exit QEMU.
+- Queue the process for reaping (page table + kernel stack frames).
+- Schedule the next runnable process (or switch to kernel page table if none).
+- Switch CR3 to the next address space before cleanup.
+- Reap user mappings, page tables, and kernel stack frames after the CR3 switch.
+- If no runnable processes remain, print `TEST PASS exec_smoke` (or `shell_smoke` when enabled)
+  and exit QEMU after reaping.
 
 ## exec(path)
 - Requires an absolute path and a valid ELF in the in-memory FS.

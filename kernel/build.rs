@@ -5,25 +5,37 @@ use std::process::Command;
 fn main() {
     // Get the output directory for build artifacts
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+    let build_userland = env::var("CARGO_FEATURE_BUILD_USERLAND").is_ok();
 
-    // Build userland programs
-    println!("cargo:warning=Building userland programs...");
+    if build_userland {
+        if Command::new("nasm").arg("-v").output().is_err() {
+            println!(
+                "cargo:warning=build-userland enabled but nasm is missing; install nasm or \
+disable the feature"
+            );
+            panic!("build-userland requires nasm");
+        }
 
-    let status = Command::new("bash")
-        .args(&["build.sh"])
-        .current_dir("../userland")
-        .status()
-        .expect("Failed to build userland programs");
+        println!("cargo:warning=Building userland programs (build-userland enabled)...");
 
-    if !status.success() {
-        panic!("Failed to build userland programs");
+        let status = Command::new("bash")
+            .args(&["build.sh"])
+            .current_dir("../userland")
+            .status()
+            .expect("Failed to build userland programs");
+
+        if !status.success() {
+            panic!("Failed to build userland programs");
+        }
+    } else {
+        println!("cargo:warning=Using prebuilt userland binaries in userland/bin");
     }
 
     // Copy ELF binaries to output directory
-    let userland_build = PathBuf::from("../userland/build");
+    let userland_bin = PathBuf::from("../userland/bin");
 
     for program in &["hello", "hello1", "hello2", "init", "sh"] {
-        let src = userland_build.join(program);
+        let src = userland_bin.join(program);
         let dst = out_dir.join(format!("{}_elf", program));
 
         if src.exists() {
@@ -43,5 +55,9 @@ fn main() {
     println!("cargo:rerun-if-changed=../userland/init.asm");
     println!("cargo:rerun-if-changed=../userland/sh.asm");
     println!("cargo:rerun-if-changed=../userland/build.sh");
-    println!("cargo:rerun-if-changed=../userland/build/hello");
+    println!("cargo:rerun-if-changed=../userland/bin/hello");
+    println!("cargo:rerun-if-changed=../userland/bin/hello1");
+    println!("cargo:rerun-if-changed=../userland/bin/hello2");
+    println!("cargo:rerun-if-changed=../userland/bin/init");
+    println!("cargo:rerun-if-changed=../userland/bin/sh");
 }

@@ -14,13 +14,21 @@ A minimal "Hello World" program that demonstrates:
 
 Requirements:
 - NASM (Netwide Assembler)
-- GNU ld (linker)
+- GNU ld or lld (linker)
 
 ```bash
 ./build.sh
 ```
 
-This creates `build/hello` - a flat binary that can be loaded by the kernel.
+This creates userland ELF binaries under `build/` and copies them into `bin/`.
+The kernel embeds the prebuilt binaries from `bin/` by default.
+
+To rebuild userland during kernel builds, enable the feature:
+
+```bash
+cd kernel
+cargo build --features build-userland
+```
 
 ## Binary Format
 

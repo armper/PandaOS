@@ -112,7 +112,7 @@ None yet - hardware access is direct. Future refactoring will add:
 
 ### Syscall Implementation Plan
 
-1. **Phase 1**: Basic syscalls (exit, write to serial) - ✅ **COMPLETED**
+1. **Phase 1**: Basic syscalls (exit, read/write to serial) - ✅ **COMPLETED**
 2. **Phase 2**: File operations (open, read, write, close)
 3. **Phase 3**: Process management (fork, exec, wait)
 4. **Phase 4**: Advanced features (mmap, signals, etc.)
@@ -132,6 +132,7 @@ None yet - hardware access is direct. Future refactoring will add:
 - **rcx, r11**: Preserved by hardware (store user RIP and RFLAGS)
 
 **Implemented Syscalls:**
+- `read(fd, buf, count)` - syscall #0 (stdin from serial, polled)
 - `write(fd, buf, count)` - syscall #1 (stdout/stderr to serial)
 - `exit(status)` - syscall #60 (terminates process)
 - `getpid()` - syscall #39 (returns process ID)
@@ -153,9 +154,9 @@ None yet - hardware access is direct. Future refactoring will add:
 5. Assign PID from allocator
 
 **Process Lifecycle:**
-- `exit(code)` marks the process as `Exited(code)` and removes it from scheduling
-- User-space mappings and page tables are reclaimed on exit
-- Kernel stack frames are released on exit
+- `exit(code)` marks the process as `Exited(code)` and queues it for reaping
+- CR3 switches to the next runnable process (or kernel table if none)
+- User-space mappings, page tables, and kernel stack frames are reclaimed after the switch
 - Exited processes are never scheduled again
 
 **exec() Semantics:**

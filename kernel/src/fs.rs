@@ -6,8 +6,8 @@ pub struct FileEntry {
 }
 
 static FILES: &[FileEntry] = &[
-    FileEntry { path: "/init", data: include_bytes!("../../userland/build/init") },
-    FileEntry { path: "/bin/sh", data: include_bytes!("../../userland/build/sh") },
+    FileEntry { path: "/init", data: include_bytes!("../../userland/bin/init") },
+    FileEntry { path: "/bin/sh", data: include_bytes!("../../userland/bin/sh") },
 ];
 
 /// Look up a file by absolute path.

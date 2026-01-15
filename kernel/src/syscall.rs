@@ -19,6 +19,9 @@
 
 // Import macros for logging
 use panda_hal::{serial_print, serial_println};
+#[cfg(feature = "shell-smoke")]
+use core::sync::atomic::{AtomicUsize, Ordering};
+use spin::Once;
 
 /// Syscall numbers (Linux-compatible)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -194,6 +197,7 @@ pub fn handle_syscall(
 
     let result = match syscall {
         SyscallNumber::Exit => sys_exit(arg1 as i32),
+        SyscallNumber::Read => sys_read(arg1 as i32, arg2, arg3),
         SyscallNumber::Write => sys_write(arg1 as i32, arg2, arg3),
         SyscallNumber::Getpid => sys_getpid(),
         SyscallNumber::Yield => sys_yield(),
@@ -216,8 +220,7 @@ fn sys_exit(status: i32) -> SyscallResult {
     serial_println!("Process exiting with status: {}", status);
 
     // Exit QEMU if exit handler is set (for testing)
-    // SAFETY: EXIT_HANDLER is set during initialization before any processes run
-    if let Some(exit_fn) = unsafe { EXIT_HANDLER } {
+    if let Some(exit_fn) = EXIT_HANDLER.get() {
         // This call never returns - exit_fn has signature fn(i32) -> !
         exit_fn(status);
     }
@@ -233,19 +236,14 @@ fn sys_exit(status: i32) -> SyscallResult {
 }
 
 /// Exit handler function pointer for testing
-static mut EXIT_HANDLER: Option<fn(i32) -> !> = None;
+static EXIT_HANDLER: Once<fn(i32) -> !> = Once::new();
 
 /// Set the exit handler for syscall exit
 ///
-/// # Safety
-///
 /// Must be called before any user processes run.
 /// Handler must never return.
-pub unsafe fn set_exit_handler(handler: fn(i32) -> !) {
-    // SAFETY: Caller guarantees this is called before any user processes run
-    unsafe {
-        EXIT_HANDLER = Some(handler);
-    }
+pub fn set_exit_handler(handler: fn(i32) -> !) {
+    EXIT_HANDLER.call_once(|| handler);
 }
 
 /// sys_write - Write to file descriptor
@@ -265,9 +263,10 @@ fn sys_write(fd: i32, buf: u64, count: u64) -> SyscallResult {
         return Err(ErrorCode::EINVAL);
     }
 
-    // SAFETY: We perform basic validation of the buffer
-    // In a real kernel, this would check user memory permissions
-    let slice = unsafe { core::slice::from_raw_parts(buf as *const u8, count as usize) };
+    let mut local_buf = [0u8; 4096];
+    let count = usize::try_from(count).map_err(|_| ErrorCode::EINVAL)?;
+    let copied = crate::usermode::copy_user_bytes(buf, count, &mut local_buf)?;
+    let slice = &local_buf[..copied];
 
     // Write to serial output
     for &byte in slice {
@@ -277,7 +276,69 @@ fn sys_write(fd: i32, buf: u64, count: u64) -> SyscallResult {
         }
     }
 
-    Ok(count)
+    Ok(count as u64)
+}
+
+#[cfg(feature = "shell-smoke")]
+const SHELL_SMOKE_SCRIPT: &[u8] = b"help\nexit\n";
+
+#[cfg(feature = "shell-smoke")]
+static SHELL_SMOKE_POS: AtomicUsize = AtomicUsize::new(0);
+
+fn read_byte() -> Option<u8> {
+    #[cfg(feature = "shell-smoke")]
+    {
+        let pos = SHELL_SMOKE_POS.fetch_add(1, Ordering::Relaxed);
+        return SHELL_SMOKE_SCRIPT.get(pos).copied();
+    }
+
+    #[cfg(not(feature = "shell-smoke"))]
+    {
+        return panda_hal::serial::serial_read_byte();
+    }
+}
+
+/// sys_read - Read from file descriptor
+fn sys_read(fd: i32, buf: u64, count: u64) -> SyscallResult {
+    if fd != 0 {
+        return Err(ErrorCode::EBADF);
+    }
+
+    if count == 0 {
+        return Ok(0);
+    }
+
+    if buf == 0 {
+        return Err(ErrorCode::EFAULT);
+    }
+
+    let count = usize::try_from(count).map_err(|_| ErrorCode::EINVAL)?;
+    if count > 4096 {
+        return Err(ErrorCode::EINVAL);
+    }
+
+    let mut read = 0usize;
+    loop {
+        match read_byte() {
+            Some(byte) => {
+                let tmp = [byte];
+                let dst = buf.checked_add(read as u64).ok_or(ErrorCode::EFAULT)?;
+                crate::usermode::copy_to_user_bytes(dst, &tmp)?;
+                read += 1;
+                if read == count {
+                    break;
+                }
+            }
+            None => {
+                if read > 0 {
+                    break;
+                }
+                core::hint::spin_loop();
+            }
+        }
+    }
+
+    Ok(read as u64)
 }
 
 /// sys_getpid - Get process ID
@@ -290,7 +351,7 @@ fn sys_getpid() -> SyscallResult {
 /// sys_yield - Voluntarily yield the CPU to another process
 fn sys_yield() -> SyscallResult {
     // Get scheduler instance if available
-    if let Some(yield_fn) = unsafe { YIELD_HANDLER } {
+    if let Some(yield_fn) = YIELD_HANDLER.get() {
         yield_fn();
     }
 
@@ -303,9 +364,9 @@ fn sys_exec(path_ptr: u64) -> SyscallResult {
     const MAX_PATH_LEN: usize = 64;
     let mut path_buf = [0u8; MAX_PATH_LEN];
 
-    let path = copy_user_cstr(path_ptr, &mut path_buf)?;
+    let path = crate::usermode::copy_user_cstr(path_ptr, &mut path_buf)?;
 
-    if let Some(exec_fn) = unsafe { EXEC_HANDLER } {
+    if let Some(exec_fn) = EXEC_HANDLER.get() {
         match exec_fn(path) {
             Ok(()) => Err(ErrorCode::EIO),
             Err(err) => Err(err),
@@ -315,49 +376,22 @@ fn sys_exec(path_ptr: u64) -> SyscallResult {
     }
 }
 
-fn copy_user_cstr<'a>(ptr: u64, buf: &'a mut [u8]) -> Result<&'a str, ErrorCode> {
-    if ptr == 0 {
-        return Err(ErrorCode::EFAULT);
-    }
-
-    for i in 0..buf.len() {
-        // SAFETY: We validate the pointer is non-null and cap the read length.
-        let byte = unsafe { *(ptr as *const u8).add(i) };
-        if byte == 0 {
-            return core::str::from_utf8(&buf[..i]).map_err(|_| ErrorCode::EINVAL);
-        }
-        buf[i] = byte;
-    }
-
-    Err(ErrorCode::EINVAL)
-}
-
 /// Yield handler function pointer for scheduler integration
-static mut YIELD_HANDLER: Option<fn()> = None;
-static mut EXEC_HANDLER: Option<fn(&str) -> Result<(), ErrorCode>> = None;
+static YIELD_HANDLER: Once<fn()> = Once::new();
+static EXEC_HANDLER: Once<fn(&str) -> Result<(), ErrorCode>> = Once::new();
 
 /// Set the yield handler for syscall yield
 ///
-/// # Safety
-///
 /// Must be called before any user processes run.
-pub unsafe fn set_yield_handler(handler: fn()) {
-    // SAFETY: Caller guarantees this is called before any user processes run
-    unsafe {
-        YIELD_HANDLER = Some(handler);
-    }
+pub fn set_yield_handler(handler: fn()) {
+    YIELD_HANDLER.call_once(|| handler);
 }
 
 /// Set the exec handler for syscall execve
 ///
-/// # Safety
-///
 /// Must be called before any user processes run.
-pub unsafe fn set_exec_handler(handler: fn(&str) -> Result<(), ErrorCode>) {
-    // SAFETY: Caller guarantees this is called before any user processes run
-    unsafe {
-        EXEC_HANDLER = Some(handler);
-    }
+pub fn set_exec_handler(handler: fn(&str) -> Result<(), ErrorCode>) {
+    EXEC_HANDLER.call_once(|| handler);
 }
 
 #[cfg(test)]
@@ -396,5 +430,20 @@ mod tests {
     fn test_handle_getpid() {
         let result = handle_syscall(39, 0, 0, 0, 0, 0, 0);
         assert_eq!(result, 1); // Fake PID
+    }
+
+    #[test]
+    fn test_sys_read_invalid_fd() {
+        assert_eq!(sys_read(1, 0x1000, 1), Err(ErrorCode::EBADF));
+    }
+
+    #[test]
+    fn test_sys_read_null_buf() {
+        assert_eq!(sys_read(0, 0, 1), Err(ErrorCode::EFAULT));
+    }
+
+    #[test]
+    fn test_sys_read_zero_count() {
+        assert_eq!(sys_read(0, 0x1000, 0), Ok(0));
     }
 }

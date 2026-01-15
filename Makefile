@@ -12,32 +12,32 @@ install-deps:
 # Build the kernel
 build:
 	@echo "Building PandaOS kernel..."
-	cd kernel && cargo build
+	cargo build --manifest-path kernel/Cargo.toml --target x86_64-unknown-none
 	@echo "Build complete!"
 
 # Build release version
 release:
 	@echo "Building PandaOS kernel (release)..."
-	cd kernel && cargo build --release
+	cargo build --manifest-path kernel/Cargo.toml --release --target x86_64-unknown-none
 	@echo "Release build complete!"
 
 # Create bootable image
 bootimage: build
 	@echo "Creating bootable disk image..."
-	cd kernel && cargo bootimage
+	cargo bootimage --manifest-path kernel/Cargo.toml --target x86_64-unknown-none
 	@echo "Bootimage created!"
 
 # Run in QEMU
 run: bootimage
 	@echo "Starting QEMU..."
-	cd kernel && cargo run
+	cargo run --manifest-path kernel/Cargo.toml --target x86_64-unknown-none
 
 # Run tests
 test:
 	@echo "Running host tests..."
 	cargo test --lib --workspace --target x86_64-unknown-linux-gnu
 	@echo "Running kernel tests..."
-	cd kernel && cargo ktest
+	cargo test --manifest-path kernel/Cargo.toml --target x86_64-unknown-none
 
 # Run tests for HAL
 test-hal:
@@ -47,7 +47,7 @@ test-hal:
 # Run tests for kernel
 test-kernel:
 	@echo "Running kernel tests..."
-	cd kernel && cargo test
+	cargo test --manifest-path kernel/Cargo.toml --target x86_64-unknown-none
 
 # Format code
 fmt:

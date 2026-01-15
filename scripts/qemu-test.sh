@@ -5,6 +5,14 @@
 set -e
 
 TIMEOUT=${QEMU_TIMEOUT:-30}
+TIMEOUT_BIN="timeout"
+if ! command -v timeout >/dev/null 2>&1; then
+    if command -v gtimeout >/dev/null 2>&1; then
+        TIMEOUT_BIN="gtimeout"
+    else
+        TIMEOUT_BIN=""
+    fi
+fi
 SERIAL_LOG="/tmp/panda-qemu-serial.log"
 
 echo "==================================="
@@ -13,12 +21,14 @@ echo "==================================="
 
 # Build kernel first
 echo "Building kernel..."
-cd kernel
-cargo bootimage --release 2>&1 | tail -3
-cd ..
+FEATURES=()
+if [ "${SHELL_SMOKE:-0}" -eq 1 ]; then
+    FEATURES+=(--features shell-smoke)
+fi
+cargo bootimage --manifest-path kernel/Cargo.toml --release --target x86_64-unknown-none "${FEATURES[@]}" 2>&1 | tail -3
 
 # Find the kernel image
-KERNEL_IMAGE=$(find kernel/target -name "*.bin" -type f | head -1)
+KERNEL_IMAGE=$(find target -name "bootimage-panda-kernel.bin" -type f | head -1)
 
 if [ -z "$KERNEL_IMAGE" ]; then
     echo "Error: Could not find kernel image"
@@ -30,12 +40,21 @@ echo ""
 
 # Run QEMU with serial output capture
 echo "Starting QEMU (timeout: ${TIMEOUT}s)..."
-timeout $TIMEOUT qemu-system-x86_64 \
-    -drive format=raw,file="$KERNEL_IMAGE" \
-    -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
-    -serial stdio \
-    -display none \
-    2>&1 | tee "$SERIAL_LOG" &
+if [ -n "$TIMEOUT_BIN" ]; then
+    $TIMEOUT_BIN $TIMEOUT qemu-system-x86_64 \
+        -drive format=raw,file="$KERNEL_IMAGE" \
+        -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
+        -serial stdio \
+        -display none \
+        2>&1 | tee "$SERIAL_LOG" &
+else
+    qemu-system-x86_64 \
+        -drive format=raw,file="$KERNEL_IMAGE" \
+        -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
+        -serial stdio \
+        -display none \
+        2>&1 | tee "$SERIAL_LOG" &
+fi
 
 QEMU_PID=$!
 

@@ -53,6 +53,22 @@ pub fn _print(args: core::fmt::Arguments) {
     });
 }
 
+/// Read a byte from the serial port if available.
+pub fn serial_read_byte() -> Option<u8> {
+    use x86_64::instructions::interrupts;
+
+    let mut byte = None;
+    interrupts::without_interrupts(|| {
+        if let Some(serial) = SERIAL1.lock().as_mut() {
+            if let Ok(data) = serial.try_receive() {
+                byte = Some(data);
+            }
+        }
+    });
+
+    byte
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

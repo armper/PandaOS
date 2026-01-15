@@ -87,6 +87,15 @@ cargo bootimage --target x86_64-unknown-none -Z build-std=core,compiler_builtins
 
 **Result**: ✅ Bootimage created at `target/x86_64-unknown-none/debug/bootimage-panda-kernel.bin`
 
+**Note**: Userland binaries are prebuilt under `userland/bin`. To rebuild them during kernel
+builds, enable `--features build-userland` (requires `nasm` + a GNU-compatible linker or lld).
+
+**macOS prerequisites**:
+```
+rustup component add rust-src llvm-tools-preview
+cargo install bootimage --version "^0.10"
+```
+
 #### Running Tests Manually
 
 The integration tests can be run via the test framework once the build system supports it:
@@ -114,6 +123,23 @@ test_heap_multiple_allocations...[ok] - 3 vectors allocated successfully
 test_function_pointer_execution...[ok]
 test_kernel_constants...[ok] - virt_base=0xffff800000000000, phys_base=0x100000
 TEST PASS higher_half_smoke
+```
+
+### Shell Smoke (QEMU)
+
+This boots the kernel, runs `/init`, execs `/bin/sh`, and feeds a scripted input
+(`help`, then `exit`) for deterministic serial testing.
+
+```bash
+SHELL_SMOKE=1 ./scripts/qemu-test.sh
+```
+
+**Expected Output (serial):**
+```
+panda> help
+commands: help, echo, exit
+panda> exit
+TEST PASS shell_smoke
 ```
 
 ### Current Test Status
