@@ -12,14 +12,14 @@ _start:
     mov rdi, 1              ; fd = stdout
     lea rsi, [rel message]  ; buffer
     mov rdx, message_len    ; count
-    int 0x80                ; syscall via interrupt (simplified)
+    syscall                 ; syscall instruction
 
     ; exit(0)
     mov rax, 60             ; syscall number for exit
-    mov rdi, 0              ; status = 0
-    int 0x80                ; syscall via interrupt
+    xor rdi, rdi            ; status = 0
+    syscall                 ; syscall instruction
 
 section .rodata
 message:
-    db "Hello from userland!", 0x0A
+    db "hello from user", 0x0A
 message_len equ $ - message

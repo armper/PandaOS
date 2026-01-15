@@ -23,10 +23,12 @@ pub const DOUBLE_FAULT_IST_INDEX: u16 = 0;
 const STACK_SIZE: usize = 4096 * 4;
 
 /// GDT and segment selectors
-struct Selectors {
-    #[allow(dead_code)] // Will be used for usermode transitions
-    code_selector: SegmentSelector,
-    tss_selector: SegmentSelector,
+pub struct Selectors {
+    pub kernel_code: SegmentSelector,
+    pub kernel_data: SegmentSelector,
+    pub user_code: SegmentSelector,
+    pub user_data: SegmentSelector,
+    pub tss: SegmentSelector,
 }
 
 /// Global GDT instance (initialized once at boot)
@@ -51,16 +53,21 @@ pub unsafe fn init() {
     let stack_end = stack_start + STACK_SIZE as u64;
     tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] = stack_end;
 
-    // Create GDT with kernel code segment and TSS
+    // Create GDT with kernel and user segments
+    // Order matters: kernel segments must come before user segments for syscall/sysret
     let mut gdt = GlobalDescriptorTable::new();
-    let code_selector = gdt.append(Descriptor::kernel_code_segment());
-    let tss_selector = gdt.append(Descriptor::tss_segment(tss));
+    let kernel_code = gdt.append(Descriptor::kernel_code_segment());
+    let kernel_data = gdt.append(Descriptor::kernel_data_segment());
+    let user_code = gdt.append(Descriptor::user_code_segment());
+    let user_data = gdt.append(Descriptor::user_data_segment());
+    let tss = gdt.append(Descriptor::tss_segment(tss));
 
     // SAFETY: We're storing the GDT in a static, which is fine for this use case
     // The GDT must remain valid for the lifetime of the program
     unsafe {
         *core::ptr::addr_of_mut!(GDT) = Some(gdt);
-        *core::ptr::addr_of_mut!(SELECTORS) = Some(Selectors { code_selector, tss_selector });
+        *core::ptr::addr_of_mut!(SELECTORS) =
+            Some(Selectors { kernel_code, kernel_data, user_code, user_data, tss });
     }
 
     // Load GDT
@@ -73,8 +80,22 @@ pub unsafe fn init() {
     // SAFETY: We just initialized selectors and the TSS is valid
     if let Some(selectors) = unsafe { &*core::ptr::addr_of!(SELECTORS) } {
         unsafe {
-            x86_64::instructions::tables::load_tss(selectors.tss_selector);
+            x86_64::instructions::tables::load_tss(selectors.tss);
         }
+    }
+}
+
+/// Get the current GDT selectors
+///
+/// # Safety
+///
+/// Must be called after GDT has been initialized via `init()`
+pub unsafe fn get_selectors() -> &'static Selectors {
+    // SAFETY: Caller guarantees GDT is initialized
+    unsafe {
+        (*core::ptr::addr_of!(SELECTORS))
+            .as_ref()
+            .expect("GDT not initialized - call gdt::init() first")
     }
 }
 

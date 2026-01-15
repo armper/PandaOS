@@ -324,6 +324,199 @@ pub unsafe fn switch_to_new_page_table(page_table_phys_addr: u64) -> Result<(), 
     Ok(())
 }
 
+/// Page size constant
+const PAGE_SIZE: u64 = 4096;
+
+/// Create a new user page table with kernel mappings
+///
+/// Creates a fresh L4 page table and copies kernel mappings from the current
+/// page table. This ensures kernel code remains accessible after switching.
+///
+/// # Safety
+///
+/// Frame allocator must be initialized.
+#[allow(clippy::cast_ptr_alignment)]
+pub unsafe fn create_user_page_table() -> Result<u64, &'static str> {
+    // Allocate a new L4 page table
+    // SAFETY: Caller guarantees frame allocator is initialized
+    let l4_frame = unsafe {
+        crate::page_table_tracker::allocate_page_table_frame()
+            .ok_or("Failed to allocate L4 page table")?
+    };
+
+    let l4_phys_addr = l4_frame as u64 * panda_hal::memory::FRAME_SIZE as u64;
+
+    // Zero out the new page table
+    // NOTE: This assumes identity mapping of physical memory
+    // TODO: Use proper virtual address translation
+    // SAFETY: We just allocated this frame and assume identity mapping
+    let l4_table = unsafe { &mut *(l4_phys_addr as *mut PageTable) };
+    l4_table.zero();
+
+    // Copy kernel mappings from current page table (upper half)
+    // SAFETY: Reading CR3 is safe
+    use x86_64::registers::control::Cr3;
+    let (current_l4_frame, _) = Cr3::read();
+    let current_l4_phys = current_l4_frame.start_address().as_u64();
+
+    // NOTE: This assumes identity mapping of physical memory
+    // TODO: Use proper virtual address translation
+    // SAFETY: Current L4 is valid and we assume identity mapping
+    let current_l4 = unsafe { &*(current_l4_phys as *const PageTable) };
+
+    // Copy upper half entries (256-511) for kernel space
+    for i in 256..512 {
+        l4_table[i] = current_l4[i];
+    }
+
+    Ok(l4_phys_addr)
+}
+
+/// Map a page in the page table
+///
+/// Maps a virtual page to a physical frame with given flags.
+/// Creates intermediate page tables as needed.
+///
+/// # Safety
+///
+/// - page_table_phys must point to a valid L4 page table
+/// - Frame allocator must be initialized
+/// - Physical frame must be valid
+#[allow(clippy::cast_ptr_alignment)]
+pub unsafe fn map_page(
+    page_table_phys: u64,
+    virt_addr: VirtAddr,
+    phys_addr: PhysAddr,
+    flags: PageTableFlags,
+) -> Result<(), &'static str> {
+    // SAFETY: Caller guarantees page table is valid
+    // NOTE: All pointer casts assume identity mapping of physical memory
+    // TODO: Use proper virtual address translation
+    let l4_table = unsafe { &mut *(page_table_phys as *mut PageTable) };
+
+    let p4_index = virt_addr.p4_index();
+    let p3_index = virt_addr.p3_index();
+    let p2_index = virt_addr.p2_index();
+    let p1_index = virt_addr.p1_index();
+
+    // Get or create L3 table
+    if !l4_table[p4_index].is_present() {
+        // SAFETY: Caller guarantees frame allocator is initialized
+        let p3_frame = unsafe {
+            crate::page_table_tracker::allocate_page_table_frame()
+                .ok_or("Failed to allocate L3 page table")?
+        };
+        let p3_phys = p3_frame as u64 * panda_hal::memory::FRAME_SIZE as u64;
+
+        // SAFETY: Frame was just allocated
+        let p3_table = unsafe { &mut *(p3_phys as *mut PageTable) };
+        p3_table.zero();
+
+        let p3_flags = PageTableFlags::PRESENT
+            .or(PageTableFlags::WRITABLE)
+            .or(PageTableFlags::USER_ACCESSIBLE);
+        l4_table[p4_index].set(p3_phys, p3_flags);
+    }
+
+    // SAFETY: Entry is now present
+    let l3_table = unsafe { &mut *(l4_table[p4_index].addr() as *mut PageTable) };
+
+    // Get or create L2 table
+    if !l3_table[p3_index].is_present() {
+        // SAFETY: Caller guarantees frame allocator is initialized
+        let p2_frame = unsafe {
+            crate::page_table_tracker::allocate_page_table_frame()
+                .ok_or("Failed to allocate L2 page table")?
+        };
+        let p2_phys = p2_frame as u64 * panda_hal::memory::FRAME_SIZE as u64;
+
+        // SAFETY: Frame was just allocated
+        let p2_table = unsafe { &mut *(p2_phys as *mut PageTable) };
+        p2_table.zero();
+
+        let p2_flags = PageTableFlags::PRESENT
+            .or(PageTableFlags::WRITABLE)
+            .or(PageTableFlags::USER_ACCESSIBLE);
+        l3_table[p3_index].set(p2_phys, p2_flags);
+    }
+
+    // SAFETY: Entry is now present
+    let l2_table = unsafe { &mut *(l3_table[p3_index].addr() as *mut PageTable) };
+
+    // Get or create L1 table
+    if !l2_table[p2_index].is_present() {
+        // SAFETY: Caller guarantees frame allocator is initialized
+        let p1_frame = unsafe {
+            crate::page_table_tracker::allocate_page_table_frame()
+                .ok_or("Failed to allocate L1 page table")?
+        };
+        let p1_phys = p1_frame as u64 * panda_hal::memory::FRAME_SIZE as u64;
+
+        // SAFETY: Frame was just allocated
+        let p1_table = unsafe { &mut *(p1_phys as *mut PageTable) };
+        p1_table.zero();
+
+        let p1_flags = PageTableFlags::PRESENT
+            .or(PageTableFlags::WRITABLE)
+            .or(PageTableFlags::USER_ACCESSIBLE);
+        l2_table[p2_index].set(p1_phys, p1_flags);
+    }
+
+    // SAFETY: Entry is now present
+    let l1_table = unsafe { &mut *(l2_table[p2_index].addr() as *mut PageTable) };
+
+    // Map the page
+    l1_table[p1_index].set(phys_addr.as_u64(), flags);
+
+    Ok(())
+}
+
+/// Allocate and map user stack
+///
+/// Allocates physical frames and maps them to a user stack region.
+/// Stack grows down from the specified top address.
+///
+/// # Safety
+///
+/// - page_table_phys must point to a valid L4 page table
+/// - Frame allocator must be initialized
+pub unsafe fn allocate_user_stack(
+    page_table_phys: u64,
+    stack_top: u64,
+    num_pages: usize,
+) -> Result<(), &'static str> {
+    let flags = PageTableFlags::PRESENT
+        .or(PageTableFlags::WRITABLE)
+        .or(PageTableFlags::USER_ACCESSIBLE)
+        .or(PageTableFlags::NO_EXECUTE);
+
+    for i in 0..num_pages {
+        // SAFETY: Caller guarantees frame allocator is initialized
+        let frame =
+            unsafe { crate::memory::allocate_frame().ok_or("Failed to allocate stack frame")? };
+        let phys_addr = PhysAddr::new(frame as u64 * panda_hal::memory::FRAME_SIZE as u64);
+
+        // Stack grows down, so subtract from top
+        let virt_addr = VirtAddr::new(stack_top - ((i + 1) as u64 * PAGE_SIZE));
+
+        // SAFETY: Caller guarantees page table is valid
+        unsafe {
+            map_page(page_table_phys, virt_addr, phys_addr, flags)?;
+        }
+
+        // Zero the stack page
+        // NOTE: This assumes identity mapping of physical memory
+        // TODO: Use proper virtual address translation
+        // SAFETY: We just mapped this page and assume identity mapping
+        let page_ptr = phys_addr.as_u64() as *mut u8;
+        unsafe {
+            core::ptr::write_bytes(page_ptr, 0, PAGE_SIZE as usize);
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
