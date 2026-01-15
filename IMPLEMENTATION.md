@@ -122,7 +122,7 @@ PandaOS is a Unix-like x86_64 kernel written in Rust with a focus on:
 - [x] **Page table tracking**:
   - PageTableTracker tracks all page table frames (L4, L3, L2, L1)
   - Page table frames allocated via allocate_page_table_frame()
-  - Immediate reservation with ReservationReason::PageTables
+  - Tracked frames are excluded from allocation via the bitmap
   - Bootloader's L4 frame tracked during paging init
   - API for testing and debugging (get_page_table_frames, is_page_table_frame)
 - [x] **Higher-half mapping infrastructure**:
@@ -141,6 +141,7 @@ PandaOS is a Unix-like x86_64 kernel written in Rust with a focus on:
   - **higher_half_smoke** - higher-half kernel operation (static vars, heap, function pointers)
   - **page_table_reservation_smoke** - page table frame tracking and reservation
   - **yield_cooperative_smoke** - cooperative multitasking via yield()
+  - **exec_smoke** - init → exec `/bin/sh` → exit
 
 #### 4. Core Kernel Features
 - [x] **Process management**:
@@ -149,10 +150,12 @@ PandaOS is a Unix-like x86_64 kernel written in Rust with a focus on:
   - User address space isolation
   - User stack allocation (16KB default)
   - CPU context for context switching
+  - Exit cleanup frees user mappings, page tables, and kernel stack frames
+  - exec() replaces the current process image without changing PID
 - [x] **System call interface**:
   - syscall/sysret infrastructure via MSRs
   - Linux x86_64 ABI compatibility
-  - Implemented: write(), exit(), getpid(), yield()
+  - Implemented: write(), exit(), getpid(), yield(), execve()
   - Syscall entry/exit with explicit context save/restore
 - [x] **GDT with user segments**:
   - Kernel code/data segments (ring 0)
@@ -166,6 +169,8 @@ PandaOS is a Unix-like x86_64 kernel written in Rust with a focus on:
   - hello.asm - test program using syscalls
   - hello1.asm - scheduler test with yield
   - hello2.asm - scheduler test with yield
+  - init.asm - exec stub for `/bin/sh`
+  - sh.asm - dummy shell prompt
   - Build system to create static ELF executables
   - Embedding mechanism via build.rs
 - [x] **Scheduler and Cooperative Multitasking**:

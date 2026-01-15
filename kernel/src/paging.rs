@@ -567,6 +567,160 @@ pub unsafe fn allocate_kernel_stack(
     Ok(())
 }
 
+/// Free a process address space and optionally its kernel stack frames.
+///
+/// # Safety
+///
+/// - page_table_phys must point to a valid L4 page table.
+/// - Caller must ensure no further allocations occur before switching CR3.
+pub unsafe fn free_process_address_space(
+    page_table_phys: u64,
+    free_kernel_stack: bool,
+) -> Result<(), &'static str> {
+    // SAFETY: Caller guarantees the L4 page table is valid.
+    let l4_table = unsafe { &mut *(page_table_phys as *mut PageTable) };
+
+    for p4_index in 0..256 {
+        if !l4_table[p4_index].is_present() {
+            continue;
+        }
+
+        let l3_phys = l4_table[p4_index].addr();
+        // SAFETY: L3 table address is from a present L4 entry.
+        let l3_table = unsafe { &mut *(l3_phys as *mut PageTable) };
+
+        for p3_index in 0..ENTRY_COUNT {
+            if !l3_table[p3_index].is_present() {
+                continue;
+            }
+
+            let l2_phys = l3_table[p3_index].addr();
+            // SAFETY: L2 table address is from a present L3 entry.
+            let l2_table = unsafe { &mut *(l2_phys as *mut PageTable) };
+
+            for p2_index in 0..ENTRY_COUNT {
+                if !l2_table[p2_index].is_present() {
+                    continue;
+                }
+
+                if l2_table[p2_index].flags().contains(PageTableFlags::HUGE_PAGE) {
+                    return Err("Huge pages not supported in cleanup");
+                }
+
+                let l1_phys = l2_table[p2_index].addr();
+                // SAFETY: L1 table address is from a present L2 entry.
+                let l1_table = unsafe { &mut *(l1_phys as *mut PageTable) };
+
+                for p1_index in 0..ENTRY_COUNT {
+                    if !l1_table[p1_index].is_present() {
+                        continue;
+                    }
+
+                    let frame =
+                        (l1_table[p1_index].addr() / panda_hal::memory::FRAME_SIZE as u64)
+                            as usize;
+                    // SAFETY: Frame was allocated via the global allocator.
+                    unsafe {
+                        crate::memory::deallocate_frame(frame);
+                    }
+                    l1_table[p1_index].clear();
+                }
+
+                let l1_frame = (l1_phys / panda_hal::memory::FRAME_SIZE as u64) as usize;
+                // SAFETY: L1 table frame was allocated via the global allocator.
+                unsafe {
+                    crate::memory::deallocate_frame(l1_frame);
+                }
+                l2_table[p2_index].clear();
+            }
+
+            let l2_frame = (l2_phys / panda_hal::memory::FRAME_SIZE as u64) as usize;
+            // SAFETY: L2 table frame was allocated via the global allocator.
+            unsafe {
+                crate::memory::deallocate_frame(l2_frame);
+            }
+            l3_table[p3_index].clear();
+        }
+
+        let l3_frame = (l3_phys / panda_hal::memory::FRAME_SIZE as u64) as usize;
+        // SAFETY: L3 table frame was allocated via the global allocator.
+        unsafe {
+            crate::memory::deallocate_frame(l3_frame);
+        }
+        l4_table[p4_index].clear();
+    }
+
+    if free_kernel_stack {
+        // SAFETY: Caller guarantees the page table is valid.
+        unsafe {
+            free_kernel_stack_pages(page_table_phys)?;
+        }
+    }
+
+    let l4_frame = (page_table_phys / panda_hal::memory::FRAME_SIZE as u64) as usize;
+    // SAFETY: L4 table frame was allocated via the global allocator.
+    unsafe {
+        crate::memory::deallocate_frame(l4_frame);
+    }
+
+    Ok(())
+}
+
+#[allow(clippy::cast_ptr_alignment)]
+unsafe fn lookup_phys_addr(page_table_phys: u64, virt: VirtAddr) -> Option<u64> {
+    // SAFETY: Caller guarantees the L4 page table is valid.
+    let l4_table = unsafe { &*(page_table_phys as *const PageTable) };
+    let l4_entry = l4_table[virt.p4_index()];
+    if !l4_entry.is_present() {
+        return None;
+    }
+
+    // SAFETY: L3 table address is from a present L4 entry.
+    let l3_table = unsafe { &*(l4_entry.addr() as *const PageTable) };
+    let l3_entry = l3_table[virt.p3_index()];
+    if !l3_entry.is_present() {
+        return None;
+    }
+
+    // SAFETY: L2 table address is from a present L3 entry.
+    let l2_table = unsafe { &*(l3_entry.addr() as *const PageTable) };
+    let l2_entry = l2_table[virt.p2_index()];
+    if !l2_entry.is_present() || l2_entry.flags().contains(PageTableFlags::HUGE_PAGE) {
+        return None;
+    }
+
+    // SAFETY: L1 table address is from a present L2 entry.
+    let l1_table = unsafe { &*(l2_entry.addr() as *const PageTable) };
+    let l1_entry = l1_table[virt.p1_index()];
+    if !l1_entry.is_present() {
+        return None;
+    }
+
+    Some(l1_entry.addr())
+}
+
+#[allow(clippy::cast_ptr_alignment)]
+unsafe fn free_kernel_stack_pages(page_table_phys: u64) -> Result<(), &'static str> {
+    for i in 0..KERNEL_STACK_PAGES {
+        let vaddr = KERNEL_STACK_TOP - ((i + 1) as u64 * PAGE_SIZE);
+        let virt = VirtAddr::new(vaddr);
+
+        // SAFETY: Caller guarantees the page table is valid.
+        let phys = unsafe {
+            lookup_phys_addr(page_table_phys, virt).ok_or("Kernel stack page not mapped")?
+        };
+
+        let frame = (phys / panda_hal::memory::FRAME_SIZE as u64) as usize;
+        // SAFETY: Frame was allocated via the global allocator.
+        unsafe {
+            crate::memory::deallocate_frame(frame);
+        }
+
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

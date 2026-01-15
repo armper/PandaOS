@@ -30,7 +30,10 @@ pub fn test_runner(tests: &[&dyn Fn()]) {
 #[test_case]
 fn test_frame_allocator_subsystem() {
     use panda_hal::memory::FrameAllocator;
-    let mut allocator = FrameAllocator::new(0, 10);
+    static mut BITMAP_STORAGE: [u8; 2] = [0; 2];
+    // SAFETY: This test uses a single-threaded static buffer.
+    let bitmap = unsafe { &mut BITMAP_STORAGE };
+    let mut allocator = FrameAllocator::new(0, 10, bitmap);
     assert_eq!(allocator.allocate_frame(), Some(0));
 }
 

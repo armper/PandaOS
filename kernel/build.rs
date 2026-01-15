@@ -22,7 +22,7 @@ fn main() {
     // Copy ELF binaries to output directory
     let userland_build = PathBuf::from("../userland/build");
 
-    for program in &["hello", "hello1", "hello2"] {
+    for program in &["hello", "hello1", "hello2", "init", "sh"] {
         let src = userland_build.join(program);
         let dst = out_dir.join(format!("{}_elf", program));
 
@@ -40,6 +40,8 @@ fn main() {
     println!("cargo:rerun-if-changed=../userland/hello.asm");
     println!("cargo:rerun-if-changed=../userland/hello1.asm");
     println!("cargo:rerun-if-changed=../userland/hello2.asm");
+    println!("cargo:rerun-if-changed=../userland/init.asm");
+    println!("cargo:rerun-if-changed=../userland/sh.asm");
     println!("cargo:rerun-if-changed=../userland/build.sh");
     println!("cargo:rerun-if-changed=../userland/build/hello");
 }

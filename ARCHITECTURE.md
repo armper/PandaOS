@@ -135,6 +135,7 @@ None yet - hardware access is direct. Future refactoring will add:
 - `write(fd, buf, count)` - syscall #1 (stdout/stderr to serial)
 - `exit(status)` - syscall #60 (terminates process)
 - `getpid()` - syscall #39 (returns process ID)
+- `execve(path)` - syscall #59 (replaces current process image)
 
 ## Process Model
 
@@ -150,6 +151,19 @@ None yet - hardware access is direct. Future refactoring will add:
 3. Map PT_LOAD segments with correct permissions (R/W/X)
 4. Allocate and map user stack (RW, NX, user-accessible)
 5. Assign PID from allocator
+
+**Process Lifecycle:**
+- `exit(code)` marks the process as `Exited(code)` and removes it from scheduling
+- User-space mappings and page tables are reclaimed on exit
+- Kernel stack frames are released on exit
+- Exited processes are never scheduled again
+
+**exec() Semantics:**
+- Replaces the current process image without changing PID
+- Destroys user address space and builds a fresh one from ELF
+- Resets user stack and CPU context
+- Preserves the kernel stack mapping for the process
+- Does not return on success
 
 **Memory Isolation:**
 - Each process has its own L4 page table

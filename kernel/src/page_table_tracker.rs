@@ -7,7 +7,7 @@
 //!
 //! - All page table frames are tracked and reserved
 //! - Page table frames are allocated from the frame allocator
-//! - Page table frames are immediately reserved with ReservationReason::PageTables
+//! - Page table frames are tracked for debugging and validation
 //! - No page table frame is ever returned by allocate_frame()
 
 use alloc::vec::Vec;
@@ -32,22 +32,11 @@ impl PageTableTracker {
     /// Track a page table frame
     ///
     /// This should be called immediately after allocating a frame for page tables.
-    /// The frame will be reserved in the frame allocator.
     ///
     /// # Safety
     ///
     /// Frame must be a valid page table frame that was allocated from the frame allocator.
     pub unsafe fn track_frame(&mut self, frame: usize) {
-        // Reserve the frame in the frame allocator
-        // SAFETY: Caller guarantees frame is valid and was allocated
-        unsafe {
-            crate::memory::reserve_frames(
-                frame,
-                frame + 1,
-                panda_hal::memory::ReservationReason::PageTables,
-            );
-        }
-
         // Add to tracked list
         if !self.frames.contains(&frame) {
             self.frames.push(frame);

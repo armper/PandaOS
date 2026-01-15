@@ -197,6 +197,7 @@ pub fn handle_syscall(
         SyscallNumber::Write => sys_write(arg1 as i32, arg2, arg3),
         SyscallNumber::Getpid => sys_getpid(),
         SyscallNumber::Yield => sys_yield(),
+        SyscallNumber::Execve => sys_exec(arg1),
         // All other syscalls return ENOSYS for now
         _ => Err(ErrorCode::ENOSYS),
     };
@@ -297,8 +298,43 @@ fn sys_yield() -> SyscallResult {
     Ok(0)
 }
 
+/// sys_exec - Replace the current process image
+fn sys_exec(path_ptr: u64) -> SyscallResult {
+    const MAX_PATH_LEN: usize = 64;
+    let mut path_buf = [0u8; MAX_PATH_LEN];
+
+    let path = copy_user_cstr(path_ptr, &mut path_buf)?;
+
+    if let Some(exec_fn) = unsafe { EXEC_HANDLER } {
+        match exec_fn(path) {
+            Ok(()) => Err(ErrorCode::EIO),
+            Err(err) => Err(err),
+        }
+    } else {
+        Err(ErrorCode::ENOSYS)
+    }
+}
+
+fn copy_user_cstr<'a>(ptr: u64, buf: &'a mut [u8]) -> Result<&'a str, ErrorCode> {
+    if ptr == 0 {
+        return Err(ErrorCode::EFAULT);
+    }
+
+    for i in 0..buf.len() {
+        // SAFETY: We validate the pointer is non-null and cap the read length.
+        let byte = unsafe { *(ptr as *const u8).add(i) };
+        if byte == 0 {
+            return core::str::from_utf8(&buf[..i]).map_err(|_| ErrorCode::EINVAL);
+        }
+        buf[i] = byte;
+    }
+
+    Err(ErrorCode::EINVAL)
+}
+
 /// Yield handler function pointer for scheduler integration
 static mut YIELD_HANDLER: Option<fn()> = None;
+static mut EXEC_HANDLER: Option<fn(&str) -> Result<(), ErrorCode>> = None;
 
 /// Set the yield handler for syscall yield
 ///
@@ -309,6 +345,18 @@ pub unsafe fn set_yield_handler(handler: fn()) {
     // SAFETY: Caller guarantees this is called before any user processes run
     unsafe {
         YIELD_HANDLER = Some(handler);
+    }
+}
+
+/// Set the exec handler for syscall execve
+///
+/// # Safety
+///
+/// Must be called before any user processes run.
+pub unsafe fn set_exec_handler(handler: fn(&str) -> Result<(), ErrorCode>) {
+    // SAFETY: Caller guarantees this is called before any user processes run
+    unsafe {
+        EXEC_HANDLER = Some(handler);
     }
 }
 

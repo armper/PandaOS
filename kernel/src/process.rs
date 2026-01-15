@@ -114,6 +114,63 @@ impl Process {
         })
     }
 
+    /// Replace the current process image with a new ELF.
+    ///
+    /// # Safety
+    ///
+    /// Frame allocator and GDT must be initialized.
+    pub unsafe fn replace_image(
+        &mut self,
+        elf_info: &ElfInfo,
+        elf_data: &[u8],
+    ) -> Result<(), &'static str> {
+        let old_page_table = self.page_table_phys;
+
+        // SAFETY: Caller guarantees frame allocator is initialized
+        let new_page_table = unsafe { crate::paging::create_user_page_table()? };
+
+        let result = (|| {
+            // SAFETY: Caller guarantees frame allocator is initialized
+            unsafe {
+                crate::elf::load_elf_segments(elf_info, elf_data, new_page_table)?;
+            }
+
+            let user_stack_top = 0x7FFF_FFFF_F000u64;
+            // SAFETY: Caller guarantees frame allocator is initialized
+            unsafe {
+                crate::paging::allocate_user_stack(new_page_table, user_stack_top, 4)?;
+            }
+
+            // SAFETY: GDT must be initialized before creating processes
+            let selectors = unsafe { crate::gdt::get_selectors() };
+            let user_cs = selectors.user_code.0 as u64;
+            let user_ss = selectors.user_data.0 as u64;
+
+            self.entry_point = elf_info.entry_point;
+            self.user_stack_ptr = user_stack_top;
+            self.page_table_phys = new_page_table;
+            self.context =
+                CpuContext::new_user(elf_info.entry_point, user_stack_top, user_cs, user_ss);
+
+            Ok(())
+        })();
+
+        if let Err(err) = result {
+            // SAFETY: new_page_table is valid; keep kernel stack frames.
+            unsafe {
+                crate::paging::free_process_address_space(new_page_table, false)?;
+            }
+            return Err(err);
+        }
+
+        // SAFETY: old page table is valid; keep kernel stack frames.
+        unsafe {
+            crate::paging::free_process_address_space(old_page_table, false)?;
+        }
+
+        Ok(())
+    }
+
     /// Mark process as running
     pub fn set_running(&mut self) {
         self.state = ProcessState::Running;

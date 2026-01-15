@@ -5,6 +5,8 @@
 
 use core::ops::Range;
 
+use crate::bitmap::Bitmap;
+
 /// Size of a physical memory frame (4 KiB)
 pub const FRAME_SIZE: usize = 4096;
 
@@ -88,6 +90,8 @@ pub struct FrameAllocator {
     reserved_regions: [Option<ReservedRegion>; MAX_RESERVED_REGIONS],
     /// Number of reserved regions
     reserved_count: usize,
+    /// Allocation bitmap for tracking used frames
+    allocation_bitmap: Bitmap,
 }
 
 impl FrameAllocator {
@@ -97,12 +101,20 @@ impl FrameAllocator {
     ///
     /// * `start_frame` - First available frame number
     /// * `end_frame` - Last available frame number (exclusive)
-    pub const fn new(start_frame: usize, end_frame: usize) -> Self {
+    pub fn new(
+        start_frame: usize,
+        end_frame: usize,
+        bitmap_storage: &'static mut [u8],
+    ) -> Self {
+        let total_frames = end_frame.saturating_sub(start_frame);
+        let allocation_bitmap = Bitmap::new(bitmap_storage, total_frames);
+
         Self {
             available_frames: start_frame..end_frame,
             next_frame: start_frame,
             reserved_regions: [None; MAX_RESERVED_REGIONS],
             reserved_count: 0,
+            allocation_bitmap,
         }
     }
 
@@ -206,6 +218,36 @@ impl FrameAllocator {
         false
     }
 
+    /// Convert a frame number to a bitmap index
+    fn frame_index(&self, frame: usize) -> Option<usize> {
+        if frame < self.available_frames.start || frame >= self.available_frames.end {
+            None
+        } else {
+            Some(frame - self.available_frames.start)
+        }
+    }
+
+    /// Check if a frame is allocated
+    fn is_allocated(&self, frame: usize) -> bool {
+        self.frame_index(frame)
+            .map(|index| self.allocation_bitmap.is_set(index))
+            .unwrap_or(false)
+    }
+
+    /// Mark a frame as allocated
+    fn set_allocated(&mut self, frame: usize) {
+        if let Some(index) = self.frame_index(frame) {
+            self.allocation_bitmap.set(index);
+        }
+    }
+
+    /// Mark a frame as free
+    fn clear_allocated(&mut self, frame: usize) {
+        if let Some(index) = self.frame_index(frame) {
+            self.allocation_bitmap.clear(index);
+        }
+    }
+
     /// Get iterator over reserved regions (for debugging)
     pub fn reserved_regions(&self) -> impl Iterator<Item = &ReservedRegion> {
         self.reserved_regions[..self.reserved_count].iter().filter_map(|r| r.as_ref())
@@ -237,29 +279,30 @@ impl FrameAllocator {
             );
         }
 
-        // Find next unreserved frame
-        while self.next_frame < self.available_frames.end {
-            let frame = self.next_frame;
-            self.next_frame += 1;
+        let total_frames = self.total_frames();
+        if total_frames == 0 {
+            return None;
+        }
 
-            // Skip reserved frames
-            if self.is_reserved(frame) {
-                continue;
+        let mut checked = 0;
+        let mut frame = self.next_frame;
+        if frame < self.available_frames.start || frame >= self.available_frames.end {
+            frame = self.available_frames.start;
+        }
+
+        while checked < total_frames {
+            if frame >= self.available_frames.end {
+                frame = self.available_frames.start;
             }
 
-            // Invariant: allocated frame must be in valid range and not reserved
-            #[cfg(debug_assertions)]
-            {
-                assert!(
-                    frame >= self.available_frames.start && frame < self.available_frames.end,
-                    "Allocated frame {frame} out of range [{}..{})",
-                    self.available_frames.start,
-                    self.available_frames.end
-                );
-                assert!(!self.is_reserved(frame), "Allocated reserved frame {frame}");
+            if !self.is_reserved(frame) && !self.is_allocated(frame) {
+                self.set_allocated(frame);
+                self.next_frame = frame + 1;
+                return Some(frame);
             }
 
-            return Some(frame);
+            frame += 1;
+            checked += 1;
         }
 
         None
@@ -267,15 +310,27 @@ impl FrameAllocator {
 
     /// Deallocate a frame
     ///
-    /// Note: Current implementation doesn't support deallocation
-    /// This is a placeholder for future implementation
-    pub fn deallocate_frame(&mut self, _frame: usize) {
-        // TODO: Implement proper deallocation with bitmap
+    /// Clears the allocation bitmap so the frame can be reused.
+    pub fn deallocate_frame(&mut self, frame: usize) {
+        if self.is_reserved(frame) {
+            return;
+        }
+
+        if !self.is_allocated(frame) {
+            debug_assert!(false, "Deallocating unallocated frame {frame}");
+            return;
+        }
+
+        self.clear_allocated(frame);
+
+        if frame < self.next_frame {
+            self.next_frame = frame;
+        }
     }
 
     /// Get the number of available frames
     pub fn available_frames(&self) -> usize {
-        self.available_frames.end.saturating_sub(self.next_frame)
+        self.usable_frames().saturating_sub(self.allocated_frames())
     }
 
     /// Get the total number of frames managed by this allocator
@@ -285,7 +340,7 @@ impl FrameAllocator {
 
     /// Get the number of allocated frames
     pub fn allocated_frames(&self) -> usize {
-        self.next_frame - self.available_frames.start
+        self.allocation_bitmap.count_set()
     }
 
     /// Convert frame number to physical address
@@ -302,10 +357,21 @@ impl FrameAllocator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    extern crate std;
+    use std::boxed::Box;
+    use std::vec;
+
+    fn create_allocator(start: usize, end: usize) -> FrameAllocator {
+        let total_frames = end.saturating_sub(start);
+        let bytes = total_frames.div_ceil(8).max(1);
+        let storage = vec![0u8; bytes];
+        let static_storage: &'static mut [u8] = Box::leak(storage.into_boxed_slice());
+        FrameAllocator::new(start, end, static_storage)
+    }
 
     #[test]
     fn test_frame_allocator_creation() {
-        let allocator = FrameAllocator::new(0, 100);
+        let allocator = create_allocator(0, 100);
         assert_eq!(allocator.total_frames(), 100);
         assert_eq!(allocator.available_frames(), 100);
         assert_eq!(allocator.allocated_frames(), 0);
@@ -315,7 +381,7 @@ mod tests {
 
     #[test]
     fn test_frame_allocation() {
-        let mut allocator = FrameAllocator::new(0, 10);
+        let mut allocator = create_allocator(0, 10);
 
         assert_eq!(allocator.allocate_frame(), Some(0));
         assert_eq!(allocator.allocate_frame(), Some(1));
@@ -327,7 +393,7 @@ mod tests {
 
     #[test]
     fn test_frame_exhaustion() {
-        let mut allocator = FrameAllocator::new(0, 3);
+        let mut allocator = create_allocator(0, 3);
 
         assert_eq!(allocator.allocate_frame(), Some(0));
         assert_eq!(allocator.allocate_frame(), Some(1));
@@ -349,7 +415,7 @@ mod tests {
 
     #[test]
     fn test_frame_range() {
-        let mut allocator = FrameAllocator::new(100, 200);
+        let mut allocator = create_allocator(100, 200);
 
         assert_eq!(allocator.allocate_frame(), Some(100));
         assert_eq!(allocator.allocate_frame(), Some(101));
@@ -358,7 +424,7 @@ mod tests {
 
     #[test]
     fn test_empty_allocator() {
-        let mut allocator = FrameAllocator::new(0, 0);
+        let mut allocator = create_allocator(0, 0);
 
         assert_eq!(allocator.total_frames(), 0);
         assert_eq!(allocator.allocate_frame(), None);
@@ -367,7 +433,7 @@ mod tests {
     // Reservation tests
     #[test]
     fn test_reserve_range_basic() {
-        let mut allocator = FrameAllocator::new(0, 100);
+        let mut allocator = create_allocator(0, 100);
         allocator.reserve_range(10, 20, ReservationReason::KernelImage);
 
         assert_eq!(allocator.reserved_frames(), 10);
@@ -377,7 +443,7 @@ mod tests {
 
     #[test]
     fn test_reserve_range_multiple() {
-        let mut allocator = FrameAllocator::new(0, 100);
+        let mut allocator = create_allocator(0, 100);
         allocator.reserve_range(10, 20, ReservationReason::KernelImage);
         allocator.reserve_range(30, 40, ReservationReason::Bootloader);
 
@@ -388,7 +454,7 @@ mod tests {
 
     #[test]
     fn test_reserve_empty_range() {
-        let mut allocator = FrameAllocator::new(0, 100);
+        let mut allocator = create_allocator(0, 100);
         allocator.reserve_range(10, 10, ReservationReason::KernelImage);
 
         assert_eq!(allocator.reserved_frames(), 0);
@@ -397,7 +463,7 @@ mod tests {
 
     #[test]
     fn test_reserve_overlapping_ranges_merge() {
-        let mut allocator = FrameAllocator::new(0, 100);
+        let mut allocator = create_allocator(0, 100);
         allocator.reserve_range(10, 20, ReservationReason::KernelImage);
         allocator.reserve_range(15, 25, ReservationReason::Bootloader);
 
@@ -412,7 +478,7 @@ mod tests {
 
     #[test]
     fn test_reserve_adjacent_ranges_merge() {
-        let mut allocator = FrameAllocator::new(0, 100);
+        let mut allocator = create_allocator(0, 100);
         allocator.reserve_range(10, 20, ReservationReason::KernelImage);
         allocator.reserve_range(20, 30, ReservationReason::Bootloader);
 
@@ -427,7 +493,7 @@ mod tests {
 
     #[test]
     fn test_allocate_skips_reserved() {
-        let mut allocator = FrameAllocator::new(0, 20);
+        let mut allocator = create_allocator(0, 20);
 
         // Reserve frames 5-10
         allocator.reserve_range(5, 10, ReservationReason::KernelImage);
@@ -445,7 +511,7 @@ mod tests {
     #[test]
     fn test_allocate_never_returns_reserved() {
         extern crate std;
-        let mut allocator = FrameAllocator::new(0, 100);
+        let mut allocator = create_allocator(0, 100);
 
         // Reserve multiple ranges
         allocator.reserve_range(10, 20, ReservationReason::KernelImage);
@@ -528,7 +594,7 @@ mod tests {
             /// Property: Allocated frames are always within the valid range
             #[test]
             fn prop_allocated_frames_in_range(start in 0usize..1000, count in 1usize..100) {
-                let mut allocator = FrameAllocator::new(start, start + count);
+                let mut allocator = super::create_allocator(start, start + count);
                 let mut allocated = std::vec::Vec::new();
 
                 // Allocate all frames
@@ -547,7 +613,7 @@ mod tests {
             /// Property: No frame is allocated twice
             #[test]
             fn prop_no_double_allocation(start in 0usize..1000, count in 1usize..100) {
-                let mut allocator = FrameAllocator::new(start, start + count);
+                let mut allocator = super::create_allocator(start, start + count);
                 let mut allocated = std::vec::Vec::new();
 
                 // Allocate all frames
@@ -563,7 +629,7 @@ mod tests {
             /// Property: Total frames equals allocated + available
             #[test]
             fn prop_frame_count_invariant(start in 0usize..1000, count in 1usize..100, alloc_count in 0usize..100) {
-                let mut allocator = FrameAllocator::new(start, start + count);
+                let mut allocator = super::create_allocator(start, start + count);
                 let alloc_count = alloc_count.min(count);
 
                 // Allocate some frames
@@ -589,7 +655,7 @@ mod tests {
             /// Property: Exhausted allocator always returns None
             #[test]
             fn prop_exhausted_allocator(start in 0usize..1000, count in 1usize..50) {
-                let mut allocator = FrameAllocator::new(start, start + count);
+                let mut allocator = super::create_allocator(start, start + count);
 
                 // Exhaust the allocator
                 for _ in 0..count {
@@ -610,7 +676,7 @@ mod tests {
                 reserve_start in 0usize..50,
                 reserve_count in 10usize..30
             ) {
-                let mut allocator = FrameAllocator::new(start, start + count);
+                let mut allocator = super::create_allocator(start, start + count);
 
                 // Reserve some frames
                 let reserve_end = (reserve_start + reserve_count).min(start + count);
@@ -642,7 +708,7 @@ mod tests {
                 reserve_start in 0usize..50,
                 reserve_count in 10usize..30
             ) {
-                let mut allocator = FrameAllocator::new(start, start + count);
+                let mut allocator = super::create_allocator(start, start + count);
 
                 let reserve_end = (reserve_start + reserve_count).min(start + count);
                 if reserve_start < reserve_end {

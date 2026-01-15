@@ -70,6 +70,9 @@ impl MemoryMapInfo {
 
 /// Global frame allocator
 static FRAME_ALLOCATOR: Mutex<Option<FrameAllocator>> = Mutex::new(None);
+const MAX_TRACKED_FRAMES: usize = 1_048_576;
+const FRAME_BITMAP_BYTES: usize = (MAX_TRACKED_FRAMES + 7) / 8;
+static mut FRAME_BITMAP_STORAGE: [u8; FRAME_BITMAP_BYTES] = [0; FRAME_BITMAP_BYTES];
 
 /// Initialize memory management from bootloader memory map
 ///
@@ -107,8 +110,19 @@ pub unsafe fn init_from_bootloader(boot_info: &'static bootloader::BootInfo) {
     let usable_start_frame = find_first_usable_frame(&memory_map);
     let usable_end_frame = find_last_usable_frame(&memory_map);
 
+    let total_frames = usable_end_frame.saturating_sub(usable_start_frame);
+    assert!(
+        total_frames <= MAX_TRACKED_FRAMES,
+        "Frame allocator exceeds bitmap capacity: {} frames",
+        total_frames
+    );
+    let bitmap_bytes = (total_frames + 7) / 8;
+
     // Initialize HAL frame allocator
-    let mut frame_allocator = FrameAllocator::new(usable_start_frame, usable_end_frame);
+    // SAFETY: FRAME_BITMAP_STORAGE is a global buffer used only during init.
+    let bitmap_storage = unsafe { &mut FRAME_BITMAP_STORAGE[..bitmap_bytes] };
+    let mut frame_allocator =
+        FrameAllocator::new(usable_start_frame, usable_end_frame, bitmap_storage);
 
     // Reserve frame 0 (BIOS/IVT data - should never be used)
     frame_allocator.reserve_range(0, 1, ReservationReason::NullFrame);

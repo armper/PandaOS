@@ -35,6 +35,7 @@ pub mod boot_phases;
 pub mod context;
 pub mod context_switch;
 pub mod elf;
+pub mod fs;
 pub mod gdt;
 pub mod heap;
 pub mod interrupts;
@@ -266,27 +267,16 @@ unsafe fn init_scheduler_and_start() -> ! {
     // Create PID allocator
     let pid_allocator = PidAllocator::new(1);
 
-    // Load hello1 program
-    let hello1_data = include_bytes!("../../userland/build/hello1");
-    println!("Loading hello1 program ({} bytes)...", hello1_data.len());
-    let hello1_elf = elf::parse_elf(hello1_data).expect("Failed to parse hello1 ELF");
-    let hello1_process = unsafe {
-        process::Process::new(&hello1_elf, hello1_data, &pid_allocator)
-            .expect("Failed to create hello1 process")
+    // Load init program from in-memory FS
+    let init_data = fs::lookup("/init").expect("init not found in in-memory FS");
+    println!("Loading init program ({} bytes)...", init_data.len());
+    let init_elf = elf::parse_elf(init_data).expect("Failed to parse init ELF");
+    let init_process = unsafe {
+        process::Process::new(&init_elf, init_data, &pid_allocator)
+            .expect("Failed to create init process")
     };
-    println!("Created process PID {}", hello1_process.pid.as_u64());
-    sched.add_process(hello1_process);
-
-    // Load hello2 program
-    let hello2_data = include_bytes!("../../userland/build/hello2");
-    println!("Loading hello2 program ({} bytes)...", hello2_data.len());
-    let hello2_elf = elf::parse_elf(hello2_data).expect("Failed to parse hello2 ELF");
-    let hello2_process = unsafe {
-        process::Process::new(&hello2_elf, hello2_data, &pid_allocator)
-            .expect("Failed to create hello2 process")
-    };
-    println!("Created process PID {}", hello2_process.pid.as_u64());
-    sched.add_process(hello2_process);
+    println!("Created process PID {}", init_process.pid.as_u64());
+    sched.add_process(init_process);
 
     // Store scheduler in global
     // SAFETY: This is the only place that initializes the scheduler
@@ -319,6 +309,11 @@ unsafe fn init_scheduler_and_start() -> ! {
     // Set exit syscall handler
     unsafe {
         syscall::set_exit_handler(exit_handler);
+    }
+
+    // Set exec syscall handler
+    unsafe {
+        syscall::set_exec_handler(exec_handler);
     }
 
     // Unmask timer interrupt (IRQ 0)
@@ -397,6 +392,36 @@ fn yield_handler() {
     }
 }
 
+/// Exec handler - called when process replaces its image
+fn exec_handler(path: &str) -> Result<(), syscall::ErrorCode> {
+    if !path.starts_with('/') {
+        return Err(syscall::ErrorCode::ENOENT);
+    }
+
+    let elf_data = fs::lookup(path).ok_or(syscall::ErrorCode::ENOENT)?;
+    let elf_info =
+        elf::parse_elf(elf_data).map_err(|_| syscall::ErrorCode::EINVAL)?;
+
+    // SAFETY: Called from syscall handler with interrupts disabled
+    let scheduler = unsafe { get_scheduler() };
+    let current = scheduler.current_process_mut().ok_or(syscall::ErrorCode::ESRCH)?;
+
+    // SAFETY: Frame allocator and GDT are initialized.
+    unsafe {
+        current.replace_image(&elf_info, elf_data).map_err(|_| syscall::ErrorCode::ENOMEM)?;
+    }
+
+    // SAFETY: Scheduler is initialized and interrupts are disabled here.
+    unsafe {
+        usermode::set_current_syscall_context(core::ptr::addr_of_mut!(current.context));
+    }
+
+    // SAFETY: Context and page table are valid after replace_image.
+    unsafe {
+        usermode::switch_to_user(core::ptr::addr_of!(current.context), current.page_table_phys);
+    }
+}
+
 /// Exit handler - called when process exits
 fn exit_handler(status: i32) -> ! {
     serial_println!("Process exiting with status: {}", status);
@@ -406,6 +431,15 @@ fn exit_handler(status: i32) -> ! {
 
     // Mark current process as exited
     scheduler.exit_current(status);
+
+    if let Some(current) = scheduler.current_process_mut() {
+        let page_table = current.page_table_phys;
+        // SAFETY: Page table is valid; reclaim all process frames.
+        unsafe {
+            crate::paging::free_process_address_space(page_table, true)
+                .expect("Failed to free process address space");
+        }
+    }
 
     // Schedule next process
     if let Some(next) = scheduler.schedule_next() {
@@ -422,7 +456,7 @@ fn exit_handler(status: i32) -> ! {
         }
     } else {
         // No more processes - report success and exit QEMU deterministically.
-        serial_println!("TEST PASS yield_cooperative_smoke");
+        serial_println!("TEST PASS exec_smoke");
         exit_qemu(QemuExitCode::Success);
     }
 }
