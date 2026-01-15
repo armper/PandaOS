@@ -177,6 +177,8 @@ pub enum ErrorCode {
     EINVAL = 22,
     /// Too many open files
     EMFILE = 24,
+    /// Result too large
+    ERANGE = 34,
     /// Broken pipe
     EPIPE = 32,
     /// Function not implemented
@@ -230,6 +232,8 @@ pub fn handle_syscall(
         SyscallNumber::Kill => sys_kill(arg1 as i32, arg2 as i32),
         SyscallNumber::Setpgid => sys_setpgid(arg1 as i32, arg2 as i32),
         SyscallNumber::Getdents64 => sys_getdents64(arg1 as i32, arg2, arg3),
+        SyscallNumber::Getcwd => sys_getcwd(arg1, arg2),
+        SyscallNumber::Chdir => sys_chdir(arg1),
         // All other syscalls return ENOSYS for now
         _ => Err(ErrorCode::ENOSYS),
     };
@@ -606,6 +610,24 @@ fn sys_getdents64(fd: i32, buf: u64, count: u64) -> SyscallResult {
     }
 }
 
+/// sys_getcwd - Get current working directory
+fn sys_getcwd(buf: u64, size: u64) -> SyscallResult {
+    if let Some(getcwd_fn) = GETCWD_HANDLER.get() {
+        getcwd_fn(buf, size)
+    } else {
+        Err(ErrorCode::ENOSYS)
+    }
+}
+
+/// sys_chdir - Change current working directory
+fn sys_chdir(path: u64) -> SyscallResult {
+    if let Some(chdir_fn) = CHDIR_HANDLER.get() {
+        chdir_fn(path)
+    } else {
+        Err(ErrorCode::ENOSYS)
+    }
+}
+
 /// Yield handler function pointer for scheduler integration
 static YIELD_HANDLER: Once<fn()> = Once::new();
 static EXEC_HANDLER: Once<fn(&str, Option<&str>) -> Result<(), ErrorCode>> = Once::new();
@@ -621,6 +643,8 @@ static DUP2_HANDLER: Once<fn(i32, i32) -> SyscallResult> = Once::new();
 static KILL_HANDLER: Once<fn(i32, i32) -> SyscallResult> = Once::new();
 static SETPGID_HANDLER: Once<fn(i32, i32) -> SyscallResult> = Once::new();
 static GETDENTS64_HANDLER: Once<fn(i32, u64, u64) -> SyscallResult> = Once::new();
+static GETCWD_HANDLER: Once<fn(u64, u64) -> SyscallResult> = Once::new();
+static CHDIR_HANDLER: Once<fn(u64) -> SyscallResult> = Once::new();
 
 /// Set the yield handler for syscall yield
 ///
@@ -695,6 +719,16 @@ pub fn set_setpgid_handler(handler: fn(i32, i32) -> SyscallResult) {
 /// Set the getdents64 handler for syscall getdents64
 pub fn set_getdents64_handler(handler: fn(i32, u64, u64) -> SyscallResult) {
     GETDENTS64_HANDLER.call_once(|| handler);
+}
+
+/// Set the getcwd handler for syscall getcwd
+pub fn set_getcwd_handler(handler: fn(u64, u64) -> SyscallResult) {
+    GETCWD_HANDLER.call_once(|| handler);
+}
+
+/// Set the chdir handler for syscall chdir
+pub fn set_chdir_handler(handler: fn(u64) -> SyscallResult) {
+    CHDIR_HANDLER.call_once(|| handler);
 }
 
 #[cfg(test)]

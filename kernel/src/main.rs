@@ -321,6 +321,8 @@ unsafe fn init_scheduler_and_start() -> ! {
     syscall::set_kill_handler(kill_handler);
     syscall::set_setpgid_handler(setpgid_handler);
     syscall::set_getdents64_handler(getdents64_handler);
+    syscall::set_getcwd_handler(getcwd_handler);
+    syscall::set_chdir_handler(chdir_handler);
 
     // Unmask timer interrupt (IRQ 0)
     println!("Enabling timer interrupt...");
@@ -454,7 +456,11 @@ fn exec_handler(path: &str, arg: Option<&str>) -> Result<(), syscall::ErrorCode>
 fn open_handler(path: &str) -> syscall::SyscallResult {
     let scheduler = unsafe { get_scheduler() };
     let current = scheduler.current_process_mut().ok_or(syscall::ErrorCode::ESRCH)?;
-    let fd = fs::open_path(&mut current.fd_table, path)?;
+    
+    // Resolve path relative to cwd
+    let resolved_path = fs::resolve_path(&current.cwd, path)?;
+    
+    let fd = fs::open_path(&mut current.fd_table, &resolved_path)?;
     Ok(fd as u64)
 }
 
@@ -785,6 +791,57 @@ fn getdents64_handler(fd: i32, buf: u64, count: u64) -> syscall::SyscallResult {
     }
     
     Ok(bytes_written as u64)
+}
+
+/// getcwd handler - get current working directory
+fn getcwd_handler(buf: u64, size: u64) -> syscall::SyscallResult {
+    // SAFETY: Called from syscall handler with interrupts disabled
+    let scheduler = unsafe { get_scheduler() };
+    let current = scheduler.current_process().ok_or(syscall::ErrorCode::ESRCH)?;
+    
+    let cwd_bytes = current.cwd.as_bytes();
+    let size = usize::try_from(size).map_err(|_| syscall::ErrorCode::EINVAL)?;
+    
+    if size == 0 {
+        return Err(syscall::ErrorCode::EINVAL);
+    }
+    
+    // Need space for string + null terminator
+    if cwd_bytes.len() + 1 > size {
+        return Err(syscall::ErrorCode::ERANGE);
+    }
+    
+    // Copy cwd to user buffer
+    crate::usermode::copy_to_user_bytes(buf, cwd_bytes)?;
+    
+    // Add null terminator
+    let null_byte = [0u8];
+    crate::usermode::copy_to_user_bytes(buf + cwd_bytes.len() as u64, &null_byte)?;
+    
+    Ok(buf)
+}
+
+/// chdir handler - change current working directory
+fn chdir_handler(path_ptr: u64) -> syscall::SyscallResult {
+    const MAX_PATH_LEN: usize = 256;
+    let mut path_buf = [0u8; MAX_PATH_LEN];
+    
+    let path = crate::usermode::copy_user_cstr(path_ptr, &mut path_buf)?;
+    
+    // SAFETY: Called from syscall handler with interrupts disabled
+    let scheduler = unsafe { get_scheduler() };
+    let current = scheduler.current_process_mut().ok_or(syscall::ErrorCode::ESRCH)?;
+    
+    // Resolve path relative to current cwd
+    let resolved_path = fs::resolve_path(&current.cwd, path)?;
+    
+    // Validate that it's a directory
+    fs::validate_directory(&resolved_path)?;
+    
+    // Update cwd
+    current.cwd = resolved_path;
+    
+    Ok(0)
 }
 
 /// fork handler - create a child process

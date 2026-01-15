@@ -350,6 +350,77 @@ pub fn list_directory(dir_path: &str) -> Result<alloc::vec::Vec<(&'static str, F
     Ok(entries)
 }
 
+/// Resolve a relative path against a current working directory
+/// Returns an absolute path
+pub fn resolve_path(cwd: &str, path: &str) -> Result<alloc::string::String, ErrorCode> {
+    // If path is absolute, use it directly
+    if path.starts_with('/') {
+        return normalize_path(path);
+    }
+    
+    // Otherwise, prepend cwd
+    let combined = if cwd.ends_with('/') {
+        alloc::format!("{}{}", cwd, path)
+    } else {
+        alloc::format!("{}/{}", cwd, path)
+    };
+    
+    normalize_path(&combined)
+}
+
+/// Normalize a path by resolving . and .. components
+/// Prevents escaping beyond root (/)
+pub fn normalize_path(path: &str) -> Result<alloc::string::String, ErrorCode> {
+    use alloc::string::String;
+    use alloc::vec::Vec;
+    
+    if !path.starts_with('/') {
+        return Err(ErrorCode::EINVAL);
+    }
+    
+    let mut components = Vec::new();
+    
+    for component in path.split('/') {
+        match component {
+            "" | "." => {
+                // Skip empty components and current directory
+            }
+            ".." => {
+                // Go up one level (but don't go above root)
+                if !components.is_empty() {
+                    components.pop();
+                }
+            }
+            name => {
+                components.push(name);
+            }
+        }
+    }
+    
+    // Build the normalized path
+    if components.is_empty() {
+        Ok(String::from("/"))
+    } else {
+        let mut result = String::from("/");
+        for (i, component) in components.iter().enumerate() {
+            if i > 0 {
+                result.push('/');
+            }
+            result.push_str(component);
+        }
+        Ok(result)
+    }
+}
+
+/// Validate that a path exists and is a directory
+pub fn validate_directory(path: &str) -> Result<(), ErrorCode> {
+    let (_, node) = lookup_node(path).ok_or(ErrorCode::ENOENT)?;
+    if node.file_type != FileType::Directory {
+        return Err(ErrorCode::ENOTDIR);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
