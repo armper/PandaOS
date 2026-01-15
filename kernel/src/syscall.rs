@@ -25,6 +25,7 @@
     feature = "pipe-smoke",
     feature = "ctrlc-smoke",
     feature = "ls-smoke",
+    feature = "ls-stat-smoke",
     feature = "cd-smoke",
     feature = "path-smoke"
 ))]
