@@ -537,8 +537,7 @@ pub unsafe fn allocate_kernel_stack(
     stack_top: u64,
     num_pages: usize,
 ) -> Result<(), &'static str> {
-    let flags =
-        PageTableFlags::PRESENT.or(PageTableFlags::WRITABLE).or(PageTableFlags::NO_EXECUTE);
+    let flags = PageTableFlags::PRESENT.or(PageTableFlags::WRITABLE).or(PageTableFlags::NO_EXECUTE);
 
     for i in 0..num_pages {
         // SAFETY: Caller guarantees frame allocator is initialized
@@ -617,8 +616,7 @@ pub unsafe fn free_process_address_space(
                     }
 
                     let frame =
-                        (l1_table[p1_index].addr() / panda_hal::memory::FRAME_SIZE as u64)
-                            as usize;
+                        (l1_table[p1_index].addr() / panda_hal::memory::FRAME_SIZE as u64) as usize;
                     // SAFETY: Frame was allocated via the global allocator.
                     unsafe {
                         crate::memory::deallocate_frame(frame);
@@ -715,7 +713,6 @@ unsafe fn free_kernel_stack_pages(page_table_phys: u64) -> Result<(), &'static s
         unsafe {
             crate::memory::deallocate_frame(frame);
         }
-
     }
 
     Ok(())

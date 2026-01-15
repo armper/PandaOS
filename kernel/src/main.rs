@@ -187,8 +187,7 @@ pub unsafe fn init_for_test(boot_info: &'static bootloader::BootInfo) {
         paging::init_higher_half_mapping().expect("Failed to initialize higher-half mapping");
     }
 
-    let kernel_cr3 =
-        x86_64::registers::control::Cr3::read().0.start_address().as_u64();
+    let kernel_cr3 = x86_64::registers::control::Cr3::read().0.start_address().as_u64();
     usermode::set_kernel_page_table_phys(kernel_cr3);
 
     // Map and initialize heap
@@ -402,8 +401,7 @@ fn exec_handler(path: &str, arg: Option<&str>) -> Result<(), syscall::ErrorCode>
     }
 
     let elf_data = fs::lookup(path).ok_or(syscall::ErrorCode::ENOENT)?;
-    let elf_info =
-        elf::parse_elf(elf_data).map_err(|_| syscall::ErrorCode::EINVAL)?;
+    let elf_info = elf::parse_elf(elf_data).map_err(|_| syscall::ErrorCode::EINVAL)?;
 
     // SAFETY: Called from syscall handler with interrupts disabled
     let scheduler = unsafe { get_scheduler() };
@@ -482,9 +480,9 @@ fn fork_handler() -> syscall::SyscallResult {
 
     // SAFETY: Called from syscall handler with interrupts disabled
     let scheduler = unsafe { get_scheduler() };
-    
+
     let current = scheduler.current_process_mut().ok_or(syscall::ErrorCode::ESRCH)?;
-    
+
     // Allocate PID for child
     // Note: In a full implementation, we'd have a global PID allocator
     // For now, we'll use a simple incrementing scheme
@@ -499,10 +497,8 @@ fn fork_handler() -> syscall::SyscallResult {
 
     // Fork the process
     // SAFETY: Frame allocator and GDT are initialized
-    let mut child = unsafe {
-        current.fork_from(child_pid)
-            .map_err(|_| syscall::ErrorCode::ENOMEM)?
-    };
+    let mut child =
+        unsafe { current.fork_from(child_pid).map_err(|_| syscall::ErrorCode::ENOMEM)? };
 
     // Set child's return value to 0
     child.context.rax = 0;
@@ -530,7 +526,7 @@ fn waitpid_handler(pid: i64, status_ptr: u64, options: i32) -> syscall::SyscallR
 
     // SAFETY: Called from syscall handler with interrupts disabled
     let scheduler = unsafe { get_scheduler() };
-    
+
     let parent = scheduler.current_process().ok_or(syscall::ErrorCode::ESRCH)?;
     let parent_pid = parent.pid;
 
@@ -541,8 +537,7 @@ fn waitpid_handler(pid: i64, status_ptr: u64, options: i32) -> syscall::SyscallR
     } else if pid > 0 {
         // Wait for specific child
         let child_pid = panda_hal::pid::Pid::new(pid as u64);
-        scheduler.find_zombie_child(parent_pid)
-            .filter(|p| p.pid == child_pid)
+        scheduler.find_zombie_child(parent_pid).filter(|p| p.pid == child_pid)
     } else {
         // pid == 0 or pid < -1 not supported yet
         return Err(syscall::ErrorCode::EINVAL);
@@ -552,8 +547,12 @@ fn waitpid_handler(pid: i64, status_ptr: u64, options: i32) -> syscall::SyscallR
         Some(child) => {
             let exit_code = child.exit_code().unwrap_or(0);
             let child_pid = child.pid.as_u64();
-            
-            serial_println!("[WAITPID] Found zombie child PID {} with exit code {}", child_pid, exit_code);
+
+            serial_println!(
+                "[WAITPID] Found zombie child PID {} with exit code {}",
+                child_pid,
+                exit_code
+            );
 
             // Write exit status to user if pointer is non-null
             if status_ptr != 0 {
@@ -584,7 +583,7 @@ fn waitpid_handler(pid: i64, status_ptr: u64, options: i32) -> syscall::SyscallR
                 serial_println!("[WAITPID] No zombie children yet, yielding");
                 // Return EAGAIN to indicate no child available now
                 // In a full implementation, we'd block the process
-                Err(syscall::ErrorCode::EINTR)
+                Err(syscall::ErrorCode::EAGAIN)
             } else {
                 // No children at all
                 serial_println!("[WAITPID] No children found");
@@ -609,7 +608,7 @@ fn exit_handler(status: i32) -> ! {
         exited_pid = Some(current.pid.as_u64());
         exited_pt = Some(current.page_table_phys);
         has_parent = current.parent_pid.is_some();
-        
+
         // If process has a parent, become a zombie. Otherwise, exit immediately.
         if has_parent {
             current.set_zombie(status);
@@ -631,19 +630,14 @@ fn exit_handler(status: i32) -> ! {
     // If no parent, mark for reaping
     if !has_parent {
         if let (Some(pid), Some(pt)) = (exited_pid, exited_pt) {
-            serial_println!(
-                "[EXIT] Marked PID {} for reaping (pt={:#x})",
-                pid,
-                pt
-            );
+            serial_println!("[EXIT] Marked PID {} for reaping (pt={:#x})", pid, pt);
             usermode::set_pending_reap(pt, pid);
         }
     }
 
     // Schedule next process
     if let Some(next) = scheduler.schedule_next() {
-        let current_cr3 =
-            x86_64::registers::control::Cr3::read().0.start_address().as_u64();
+        let current_cr3 = x86_64::registers::control::Cr3::read().0.start_address().as_u64();
         serial_println!(
             "[EXIT] Switching CR3: from {:#x} to {:#x}",
             current_cr3,
@@ -660,10 +654,7 @@ fn exit_handler(status: i32) -> ! {
         unsafe {
             if has_parent {
                 // Zombie - don't reap yet, just switch
-                usermode::switch_to_user(
-                    core::ptr::addr_of!(next.context),
-                    next.page_table_phys,
-                );
+                usermode::switch_to_user(core::ptr::addr_of!(next.context), next.page_table_phys);
             } else {
                 // No parent - reap immediately
                 usermode::switch_to_user_with_reap(
@@ -680,11 +671,14 @@ fn exit_handler(status: i32) -> ! {
         serial_println!("TEST PASS vfs_cat_smoke");
         #[cfg(feature = "fork-exec-smoke")]
         serial_println!("TEST PASS fork_exec_smoke");
-        #[cfg(not(any(feature = "shell-smoke", feature = "vfs-cat-smoke", feature = "fork-exec-smoke")))]
+        #[cfg(not(any(
+            feature = "shell-smoke",
+            feature = "vfs-cat-smoke",
+            feature = "fork-exec-smoke"
+        )))]
         serial_println!("TEST PASS exec_smoke");
         let kernel_pt = usermode::kernel_page_table_phys();
-        let current_cr3 =
-            x86_64::registers::control::Cr3::read().0.start_address().as_u64();
+        let current_cr3 = x86_64::registers::control::Cr3::read().0.start_address().as_u64();
         serial_println!(
             "[EXIT] Switching CR3 to kernel table: from {:#x} to {:#x}",
             current_cr3,

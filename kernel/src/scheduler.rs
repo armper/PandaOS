@@ -216,9 +216,9 @@ impl Scheduler {
         }
 
         // Check ready queue
-        if let Some(pos) = self.ready_queue.iter().position(|p| {
-            p.is_zombie() && p.parent_pid == Some(parent_pid)
-        }) {
+        if let Some(pos) =
+            self.ready_queue.iter().position(|p| p.is_zombie() && p.parent_pid == Some(parent_pid))
+        {
             return Some(self.ready_queue.remove(pos).expect("Position exists"));
         }
 

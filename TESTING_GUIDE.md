@@ -134,6 +134,8 @@ This boots the kernel, runs `/init`, execs `/bin/sh`, and feeds a scripted input
 SHELL_SMOKE=1 ./scripts/qemu-test.sh
 ```
 
+**Serial log:** `target/qemu/shell_smoke.log`
+
 **Expected Output (serial):**
 ```
 panda> help
@@ -151,6 +153,8 @@ the read-only VFS via `/bin/cat`.
 VFS_CAT_SMOKE=1 ./scripts/qemu-test.sh
 ```
 
+**Serial log:** `target/qemu/vfs_cat_smoke.log`
+
 **Expected Output (serial, excerpt):**
 ```
 panda> cat /etc/motd
@@ -160,14 +164,80 @@ panda> exit
 TEST PASS vfs_cat_smoke
 ```
 
+### Fork/Exec Smoke (QEMU)
+
+This boots the kernel, runs `/init`, execs `/bin/sh`, and feeds scripted input to validate
+fork, exec, and wait system calls by running external programs.
+
+```bash
+FORK_EXEC_SMOKE=1 ./scripts/qemu-test.sh
+```
+
+**Serial log:** `target/qemu/fork_exec_smoke.log`
+
+**Expected Output (serial, excerpt):**
+```
+panda> cat /etc/version
+PandaOS 0.1.0
+panda> true
+panda> exit
+TEST PASS fork_exec_smoke
+```
+
+**What it tests:**
+- Shell prompts appear before each command
+- `cat /etc/version` forks, execs `/bin/cat`, and waits for completion
+- `/bin/true` forks, execs, exits with status 0, and parent continues
+- Parent shell survives fork+exec+wait cycles and reprompts correctly
+- Shell exits cleanly after `exit` command
+
+### Debugging Smoke Tests
+
+All QEMU smoke tests write serial output to `target/qemu/<test_name>.log`:
+- `target/qemu/shell_smoke.log`
+- `target/qemu/vfs_cat_smoke.log`
+- `target/qemu/fork_exec_smoke.log`
+
+The test script uses QEMU's `-serial file:` option to write serial output directly to these
+log files without buffering. This ensures reliable capture of kernel output.
+
+**Viewing logs after a test:**
+```bash
+# Run a test
+FORK_EXEC_SMOKE=1 ./scripts/qemu-test.sh
+
+# View the full log
+cat target/qemu/fork_exec_smoke.log
+
+# Search for specific markers
+grep "TEST" target/qemu/fork_exec_smoke.log
+```
+
+**Manual QEMU testing:**
+```bash
+# Build kernel with a feature
+cargo bootimage --manifest-path kernel/Cargo.toml --release \
+  --target x86_64-unknown-none --features fork-exec-smoke
+
+# Run directly with QEMU
+qemu-system-x86_64 \
+  -drive format=raw,file=target/x86_64-unknown-none/release/bootimage-panda-kernel.bin \
+  -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
+  -serial file:target/qemu/manual.log \
+  -display none
+
+# Check the log
+cat target/qemu/manual.log
+```
+
 ### Current Test Status
 
 | Test Type | Status | Count | Notes |
 |-----------|--------|-------|-------|
 | Host Unit Tests | ✅ Passing | 51 | All HAL and kernel logic tests pass |
-| Clippy Lints | ✅ Passing | 0 warnings | Zero warnings on all code |
+| Clippy Lints | ⚠️  Partial | Some pre-existing | Code I changed has zero warnings |
 | Code Formatting | ✅ Passing | - | rustfmt passes |
-| QEMU Integration Tests | 📝 Created | 2 | Framework ready, tests implemented |
+| QEMU Integration Tests | 📝 Created | 3 | shell-smoke, vfs-cat-smoke, fork-exec-smoke |
 | Bootimage Creation | ✅ Working | - | Successfully creates bootable image |
 
 ## Quality Assurance

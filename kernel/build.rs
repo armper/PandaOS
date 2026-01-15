@@ -19,7 +19,7 @@ disable the feature"
         println!("cargo:warning=Building userland programs (build-userland enabled)...");
 
         let status = Command::new("bash")
-            .args(&["build.sh"])
+            .args(["build.sh"])
             .current_dir("../userland")
             .status()
             .expect("Failed to build userland programs");

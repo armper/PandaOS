@@ -185,15 +185,11 @@ impl Process {
     /// # Safety
     ///
     /// Frame allocator and GDT must be initialized.
-    pub unsafe fn fork_from(
-        &self,
-        child_pid: Pid,
-    ) -> Result<Self, &'static str> {
+    pub unsafe fn fork_from(&self, child_pid: Pid) -> Result<Self, &'static str> {
         // Clone the parent's address space
         // SAFETY: Caller guarantees frame allocator is initialized
-        let child_page_table = unsafe {
-            crate::paging::clone_user_address_space(self.page_table_phys)?
-        };
+        let child_page_table =
+            unsafe { crate::paging::clone_user_address_space(self.page_table_phys)? };
 
         // Allocate kernel stack for child (per-process mapping)
         let kernel_stack_top = crate::paging::KERNEL_STACK_TOP;
@@ -247,12 +243,12 @@ impl Process {
             _ => None,
         }
     }
-    
+
     /// Mark process as zombie (exited but awaiting parent's wait)
     pub fn set_zombie(&mut self, code: i32) {
         self.state = ProcessState::Zombie(code);
     }
-    
+
     /// Check if process is a zombie
     pub const fn is_zombie(&self) -> bool {
         matches!(self.state, ProcessState::Zombie(_))
@@ -313,7 +309,7 @@ mod tests {
     #[test]
     fn test_parent_child_relationship() {
         let pid_allocator = PidAllocator::new(1);
-        
+
         let parent = Process {
             pid: pid_allocator.allocate(),
             parent_pid: None,
@@ -334,7 +330,7 @@ mod tests {
     #[test]
     fn test_zombie_state() {
         let pid_allocator = PidAllocator::new(1);
-        
+
         let mut process = Process {
             pid: pid_allocator.allocate(),
             parent_pid: None,
