@@ -39,7 +39,11 @@ pub mod vga;
 /// It performs hardware initialization that affects global state.
 #[cfg(feature = "hardware")]
 pub unsafe fn init() {
-    // HAL initialization logic will go here
+    // SAFETY: Caller guarantees this is called once during boot
+    unsafe {
+        serial::init();
+        vga::init();
+    }
 }
 
 #[cfg(test)]

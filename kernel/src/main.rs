@@ -29,6 +29,7 @@ extern crate panda_hal;
 
 pub mod boot_phases;
 pub mod elf;
+pub mod gdt;
 pub mod interrupts;
 pub mod invariants;
 pub mod memory;
@@ -47,13 +48,11 @@ pub extern "C" fn _start() -> ! {
 
     let state = KernelState::new();
 
-    println!("PandaOS v{}", env!("CARGO_PKG_VERSION"));
-    println!("Initializing kernel with boot phase enforcement...");
-
     // SAFETY: This is the first initialization call during boot
     let state = unsafe { state.init_hal() };
 
     serial_println!("Serial output initialized");
+    println!("PandaOS v{}", env!("CARGO_PKG_VERSION"));
     println!("Hardware abstraction layer initialized");
 
     // SAFETY: HAL is now initialized, safe to proceed
@@ -62,6 +61,10 @@ pub extern "C" fn _start() -> ! {
 
     // SAFETY: Memory is now initialized, safe to proceed
     let state = unsafe { state.init_interrupts() };
+
+    // Initialize GDT (must be before interrupts)
+    unsafe { gdt::init() };
+    println!("GDT initialized");
 
     // Initialize interrupts
     interrupts::init();
