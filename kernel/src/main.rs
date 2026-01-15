@@ -14,13 +14,15 @@
 #![no_main]
 #![feature(custom_test_frameworks)]
 #![feature(abi_x86_interrupt)]
-#![feature(naked_functions)]
+#![feature(alloc_error_handler)]
 #![test_runner(crate::test_runner)]
 #![reexport_test_harness_main = "test_main"]
 #![deny(unsafe_op_in_unsafe_fn)]
 #![deny(clippy::all)]
 #![warn(clippy::pedantic)]
 #![allow(clippy::missing_panics_doc)]
+
+extern crate alloc;
 
 use core::panic::PanicInfo;
 
@@ -30,6 +32,8 @@ extern crate panda_hal;
 
 pub mod boot_phases;
 pub mod elf;
+pub mod gdt;
+pub mod heap;
 pub mod interrupts;
 pub mod invariants;
 pub mod memory;
@@ -41,32 +45,58 @@ pub mod usermode;
 /// Entry point for the kernel
 ///
 /// This function is called by the bootloader and never returns.
+/// The bootloader passes a BootInfo structure with memory map and other info.
 #[no_mangle]
-pub extern "C" fn _start() -> ! {
+pub extern "C" fn _start(boot_info: &'static bootloader::BootInfo) -> ! {
     // Use boot phase state machine to enforce initialization order
     use boot_phases::KernelState;
 
     let state = KernelState::new();
 
-    println!("PandaOS v{}", env!("CARGO_PKG_VERSION"));
-    println!("Initializing kernel with boot phase enforcement...");
-
     // SAFETY: This is the first initialization call during boot
     let state = unsafe { state.init_hal() };
 
     serial_println!("Serial output initialized");
+    println!("PandaOS v{}", env!("CARGO_PKG_VERSION"));
     println!("Hardware abstraction layer initialized");
 
     // SAFETY: HAL is now initialized, safe to proceed
     let state = unsafe { state.init_memory() };
-    println!("Memory management initialized");
+
+    // Initialize memory management with bootloader info (no bootloader types exposed)
+    unsafe { memory::init_from_bootloader(boot_info) };
 
     // SAFETY: Memory is now initialized, safe to proceed
     let state = unsafe { state.init_interrupts() };
 
-    // Initialize interrupts
+    // Initialize GDT (must be before interrupts are enabled)
+    unsafe { gdt::init() };
+    println!("GDT initialized");
+
+    // Initialize interrupts (after GDT)
     interrupts::init();
     println!("Interrupt handling initialized");
+
+    // Map heap region (allocate frames and map pages)
+    // MUST happen before heap allocator init
+    unsafe {
+        heap::map_heap().expect("Failed to map heap");
+    }
+    println!("Heap region mapped");
+
+    // Initialize heap allocator (after heap is mapped)
+    unsafe { heap::init() };
+    println!("Heap allocator initialized");
+
+    // Test heap allocation
+    {
+        use alloc::vec::Vec;
+        let mut test_vec = Vec::new();
+        test_vec.push(1);
+        test_vec.push(2);
+        test_vec.push(3);
+        println!("Heap test passed: {:?}", test_vec);
+    }
 
     // Finalize boot
     let _state = state.finalize();
@@ -92,6 +122,44 @@ fn panic(info: &PanicInfo) -> ! {
     }
 }
 
+/// Allocation error handler
+#[alloc_error_handler]
+fn alloc_error_handler(layout: alloc::alloc::Layout) -> ! {
+    panic!("Allocation error: {:?}", layout)
+}
+
+/// Initialize kernel for testing
+///
+/// # Safety
+///
+/// Must be called once at test start with valid boot info
+pub unsafe fn init_for_test(boot_info: &'static bootloader::BootInfo) {
+    // Use boot phase state machine
+    use boot_phases::KernelState;
+
+    let state = KernelState::new();
+
+    // Initialize HAL
+    let state = unsafe { state.init_hal() };
+
+    // Initialize memory
+    let state = unsafe { state.init_memory() };
+    unsafe { memory::init_from_bootloader(boot_info) };
+
+    // Initialize GDT and interrupts
+    let state = unsafe { state.init_interrupts() };
+    unsafe { gdt::init() };
+    interrupts::init();
+
+    // Map and initialize heap
+    unsafe {
+        heap::map_heap().expect("Failed to map heap");
+        heap::init();
+    }
+
+    let _state = state.finalize();
+}
+
 #[cfg(test)]
 fn test_runner(tests: &[&dyn Fn()]) {
     serial_println!("Running {} tests", tests.len());
@@ -102,7 +170,7 @@ fn test_runner(tests: &[&dyn Fn()]) {
 }
 
 /// QEMU exit codes for integration testing
-#[cfg(test)]
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub enum QemuExitCode {
@@ -111,7 +179,7 @@ pub enum QemuExitCode {
 }
 
 /// Exit QEMU using isa-debug-exit device
-#[cfg(test)]
+
 pub fn exit_qemu(exit_code: QemuExitCode) -> ! {
     use x86_64::instructions::port::Port;
 
