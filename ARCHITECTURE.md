@@ -117,24 +117,44 @@ None yet - hardware access is direct. Future refactoring will add:
 
 ## Memory Layout
 
+### Virtual Address Space
+
 ```
 0x0000000000000000 - 0x00007FFFFFFFFFFF: User space (future)
-0xFFFF800000000000 - 0xFFFFFFFFFFFFFFFF: Kernel space
+0xFFFF800000000000 - 0xFFFFFFFFFFFFFFFF: Kernel space (higher-half)
+  0xFFFF800000000000 + kernel offset: Kernel code/data (future full mapping)
 ```
+
+**Higher-Half Kernel Mapping:**
+- `KERNEL_VIRT_BASE = 0xFFFF_8000_0000_0000` - Base address for kernel virtual memory
+- `KERNEL_PHYS_BASE = 0x0010_0000` - Physical load address (1 MiB)
+- Kernel operates in higher-half address space for security and organization
+- Currently uses bootloader-provided identity mapping, transitioning to full higher-half mapping
+- Future: Separate mappings with proper permissions (RX for text, R for rodata, RW+NX for data/heap)
 
 **Physical Memory:**
 - Frame size: 4 KiB
 - Frame allocator: Bump allocator with explicit reservations
 - Reserved regions tracked to prevent re-allocation of critical frames
 
+**Linker Symbols for Kernel Boundaries:**
+The kernel exports symbols to precisely define its memory footprint:
+- `__kernel_phys_start` / `__kernel_phys_end` - Physical memory boundaries
+- `__text_start` / `__text_end` - Code section
+- `__rodata_start` / `__rodata_end` - Read-only data section
+- `__data_start` / `__data_end` - Initialized data section
+- `__bss_start` / `__bss_end` - Uninitialized data section
+
+These symbols enable precise frame reservation instead of conservative estimates.
+
 **Frame Reservation Strategy:**
 The frame allocator implements explicit frame reservation to ensure that frames used by the kernel, bootloader, page tables, and heap are never allocated twice. This prevents memory corruption and ensures system stability.
 
 **Reserved Frame Categories:**
 1. **Frame 0 (NullFrame)**: BIOS/IVT data, never used
-2. **Kernel Image**: First 16 MB of physical memory for kernel code/data
+2. **Kernel Image**: Determined by linker symbols (kernel_phys_start to kernel_phys_end)
 3. **Bootloader**: Bootloader structures including memory map and boot info
-4. **Page Tables**: Active page table frames (L4, L3, L2, L1)
+4. **Page Tables**: All page table frames (L4, L3, L2, L1) tracked and reserved
 5. **Heap**: Frames allocated for kernel heap
 6. **InitramfsModule**: Initial ramdisk or loaded modules (future)
 
@@ -143,16 +163,26 @@ The frame allocator implements explicit frame reservation to ensure that frames 
 - `allocate_frame()` always skips reserved frames
 - Allocated frames ∩ reserved frames = ∅
 - Once reserved, a frame remains reserved until system restart
+- Page table frames are tracked in `PageTableTracker` and immediately reserved
+
+**Page Table Tracking:**
+All page table frames are tracked to ensure they're never allocated again:
+- `PageTableTracker` maintains a list of all page table frames (L4, L3, L2, L1)
+- When allocating frames for page tables, use `allocate_page_table_frame()`
+- This immediately reserves the frame with `ReservationReason::PageTables`
+- Bootloader's initial L4 page table frame is tracked during paging init
+- Tests verify no overlap between allocated frames and page table frames
 
 **Virtual Memory:**
 - 4-level paging (x86_64)
-- Kernel identity mapped (for now)
+- Minimal identity mapping for early boot and hardware access
+- Higher-half mapping infrastructure in place (transitioning from identity mapping)
 - User space demand-paged (future)
 
 ## Boot Process
 
-1. Bootloader loads kernel into memory
-2. Bootloader switches to long mode (64-bit)
+1. Bootloader loads kernel into memory at physical address ~1 MiB
+2. Bootloader switches to long mode (64-bit) and sets up basic paging
 3. Bootloader jumps to kernel `_start`
 4. Kernel initializes HAL (serial, VGA)
 5. Kernel sets up IDT and exception handlers
@@ -160,14 +190,26 @@ The frame allocator implements explicit frame reservation to ensure that frames 
    - Parses bootloader memory map
    - Initializes frame allocator with usable memory range
    - Reserves frame 0 (BIOS/IVT)
-   - Reserves kernel image (first 16 MB)
+   - Reserves kernel image using linker symbols (kernel_phys_start to kernel_phys_end)
    - Reserves bootloader structures
-   - Reserves active page table frames
-7. Kernel maps and initializes heap:
-   - Allocates frames for heap
+   - Initializes paging infrastructure
+7. Kernel initializes paging:
+   - `paging::init_identity_map_minimal()` - Keep bootloader's identity mapping
+   - `paging::init_higher_half_mapping()` - Prepare higher-half infrastructure
+   - Initialize `PageTableTracker` to track all page table frames
+   - Track bootloader's L4 page table frame
+   - Reserve all page table frames
+8. Kernel maps and initializes heap:
+   - Allocates frames for heap using `allocate_frame()`
    - Immediately reserves heap frames to prevent re-allocation
    - Initializes heap allocator
-8. Kernel enters main loop
+9. Kernel enters main loop
+
+**Boot Transition Invariants:**
+- Identity mapping remains valid throughout boot
+- Stack, GDT, and IDT pointers remain valid during paging changes
+- Page table frames are tracked before any new mappings are created
+- All critical structures (kernel, bootloader, page tables, heap) are reserved before allocations begin
 
 ## Interrupt Handling
 

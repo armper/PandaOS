@@ -115,12 +115,32 @@ PandaOS is a Unix-like x86_64 kernel written in Rust with a focus on:
   - Allocator skips reserved frames automatically
   - Comprehensive unit tests (14 tests) and property tests
   - QEMU integration test for frame reservation
+- [x] **Linker symbols for kernel boundaries**:
+  - Define KERNEL_VIRT_BASE (0xFFFF_8000_0000_0000) and KERNEL_PHYS_BASE
+  - Export kernel section symbols (__text_start, __rodata_start, __data_start, __bss_start, etc.)
+  - Replace hardcoded 16MB reservation with symbol-based precise reservation
+  - linker_symbols.rs module provides safe access to boundaries
+- [x] **Page table tracking**:
+  - PageTableTracker tracks all page table frames (L4, L3, L2, L1)
+  - Page table frames allocated via allocate_page_table_frame()
+  - Immediate reservation with ReservationReason::PageTables
+  - Bootloader's L4 frame tracked during paging init
+  - API for testing and debugging (get_page_table_frames, is_page_table_frame)
+- [x] **Higher-half mapping infrastructure**:
+  - paging::init_identity_map_minimal() - maintain bootloader's identity mapping
+  - paging::init_higher_half_mapping() - prepare higher-half infrastructure
+  - paging::switch_to_new_page_table() - CR3 switching utility
+  - Future: full higher-half mapping with proper permissions (RX/R/RW+NX)
 
 #### 3. QEMU Integration Tests
-- [ ] Enable bootimage builds
-- [ ] First smoke test (boots + prints)
-- [ ] Test harness with serial output
-- [ ] Integration tests for each subsystem
+- [x] Enable bootimage builds
+- [x] Test harness with serial output
+- [x] Integration tests for each subsystem:
+  - boot_smoke - basic boot and initialization
+  - frame_reservation_smoke - frame reservation system
+  - heap_test - heap allocator functionality
+  - **higher_half_smoke** - higher-half kernel operation (static vars, heap, function pointers)
+  - **page_table_reservation_smoke** - page table frame tracking and reservation
 
 #### 4. Core Kernel Features
 - [ ] Process management

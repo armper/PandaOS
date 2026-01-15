@@ -36,7 +36,9 @@ pub mod gdt;
 pub mod heap;
 pub mod interrupts;
 pub mod invariants;
+pub mod linker_symbols;
 pub mod memory;
+pub mod page_table_tracker;
 pub mod paging;
 pub mod process;
 pub mod syscall;
@@ -68,6 +70,13 @@ pub extern "C" fn _start(boot_info: &'static bootloader::BootInfo) -> ! {
 
     // SAFETY: Memory is now initialized, safe to proceed
     let state = unsafe { state.init_interrupts() };
+
+    // Initialize paging infrastructure
+    unsafe {
+        paging::init_identity_map_minimal().expect("Failed to initialize identity mapping");
+        paging::init_higher_half_mapping().expect("Failed to initialize higher-half mapping");
+    }
+    println!("Paging infrastructure initialized");
 
     // Initialize GDT (must be before interrupts are enabled)
     unsafe { gdt::init() };
@@ -150,6 +159,12 @@ pub unsafe fn init_for_test(boot_info: &'static bootloader::BootInfo) {
     let state = unsafe { state.init_interrupts() };
     unsafe { gdt::init() };
     interrupts::init();
+
+    // Initialize paging
+    unsafe {
+        paging::init_identity_map_minimal().expect("Failed to initialize identity mapping");
+        paging::init_higher_half_mapping().expect("Failed to initialize higher-half mapping");
+    }
 
     // Map and initialize heap
     unsafe {

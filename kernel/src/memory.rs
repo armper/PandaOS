@@ -113,12 +113,27 @@ pub unsafe fn init_from_bootloader(boot_info: &'static bootloader::BootInfo) {
     // Reserve frame 0 (BIOS/IVT data - should never be used)
     frame_allocator.reserve_range(0, 1, ReservationReason::NullFrame);
 
-    // Reserve kernel physical range
+    // Reserve kernel physical range using linker symbols
     // The bootloader loads the kernel at low physical memory
-    // Reserve first 16 MB conservatively for kernel, bootloader, and early structures
-    // TODO: Get exact kernel range from linker symbols or bootloader API
-    let kernel_reserve_frames = (16 * 1024 * 1024) / panda_hal::memory::FRAME_SIZE;
-    frame_allocator.reserve_range(0, kernel_reserve_frames, ReservationReason::KernelImage);
+    let kernel_phys_start = crate::linker_symbols::kernel_phys_start();
+    let kernel_phys_end = crate::linker_symbols::kernel_phys_end();
+
+    let kernel_start_frame = (kernel_phys_start / panda_hal::memory::FRAME_SIZE as u64) as usize;
+    let kernel_end_frame = ((kernel_phys_end + panda_hal::memory::FRAME_SIZE as u64 - 1)
+        / panda_hal::memory::FRAME_SIZE as u64) as usize;
+
+    frame_allocator.reserve_range(
+        kernel_start_frame,
+        kernel_end_frame,
+        ReservationReason::KernelImage,
+    );
+
+    println!(
+        "Kernel image: {:#x}..{:#x} ({} frames)",
+        kernel_phys_start,
+        kernel_phys_end,
+        kernel_end_frame - kernel_start_frame
+    );
 
     // Reserve bootloader structures
     // The bootloader memory map itself and boot info structure
