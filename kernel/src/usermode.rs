@@ -10,9 +10,11 @@
 //! - User stacks are separate from kernel stacks
 
 /// GDT selector for kernel code segment
+#[allow(dead_code)]
 const KERNEL_CS: u16 = 0x08;
 
-/// GDT selector for kernel data segment  
+/// GDT selector for kernel data segment
+#[allow(dead_code)]
 const KERNEL_DS: u16 = 0x10;
 
 /// GDT selector for user code segment (ring 3)

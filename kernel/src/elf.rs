@@ -10,8 +10,6 @@
 //! - Only PT_LOAD segments are processed
 //! - Memory is not allocated until validation succeeds
 
-use core::slice;
-
 /// ELF magic number
 const ELF_MAGIC: [u8; 4] = [0x7f, b'E', b'L', b'F'];
 

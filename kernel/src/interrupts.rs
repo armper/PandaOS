@@ -4,7 +4,6 @@
 //! various CPU exceptions and hardware interrupts.
 
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame};
-use x86_64::structures::DescriptorTablePointer;
 
 static mut IDT: InterruptDescriptorTable = InterruptDescriptorTable::new();
 
@@ -12,9 +11,10 @@ static mut IDT: InterruptDescriptorTable = InterruptDescriptorTable::new();
 pub fn init() {
     // SAFETY: This is called once during kernel init, we're setting up the IDT
     unsafe {
-        IDT.breakpoint.set_handler_fn(breakpoint_handler);
-        IDT.double_fault.set_handler_fn(double_fault_handler);
-        IDT.load();
+        let idt = &mut *core::ptr::addr_of_mut!(IDT);
+        idt.breakpoint.set_handler_fn(breakpoint_handler);
+        idt.double_fault.set_handler_fn(double_fault_handler);
+        idt.load();
     }
 }
 
