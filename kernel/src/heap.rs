@@ -67,6 +67,15 @@ static ALLOCATOR: CheckedAllocator = CheckedAllocator;
 /// # Panics
 ///
 /// Panics if called more than once (idempotency check)
+///
+/// # TODO
+///
+/// Currently this initializes the heap allocator with a virtual address
+/// that hasn't been mapped yet. Before heap allocations can work, the
+/// memory region (HEAP_START..HEAP_START+HEAP_SIZE) must be:
+/// 1. Allocated from physical memory
+/// 2. Mapped in the kernel's page tables
+/// 3. Marked as writable
 pub unsafe fn init() {
     // Check if already initialized (idempotency)
     if HEAP_INITIALIZED.swap(true, Ordering::SeqCst) {
