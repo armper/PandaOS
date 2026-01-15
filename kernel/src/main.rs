@@ -323,6 +323,7 @@ unsafe fn init_scheduler_and_start() -> ! {
     syscall::set_getdents64_handler(getdents64_handler);
     syscall::set_getcwd_handler(getcwd_handler);
     syscall::set_chdir_handler(chdir_handler);
+    syscall::set_getenv_handler(getenv_handler);
 
     // Unmask timer interrupt (IRQ 0)
     println!("Enabling timer interrupt...");
@@ -405,16 +406,46 @@ const EXEC_ARG_ADDR: u64 = 0x7FFF_FFFF_C000;
 const EXEC_ARG_MAX: usize = 128;
 
 fn exec_handler(path: &str, arg: Option<&str>) -> Result<(), syscall::ErrorCode> {
-    if !path.starts_with('/') {
-        return Err(syscall::ErrorCode::ENOENT);
-    }
-
-    let elf_data = fs::lookup(path).ok_or(syscall::ErrorCode::ENOENT)?;
-    let elf_info = elf::parse_elf(elf_data).map_err(|_| syscall::ErrorCode::EINVAL)?;
-
+    // Get current process to access PATH environment variable
     // SAFETY: Called from syscall handler with interrupts disabled
     let scheduler = unsafe { get_scheduler() };
     let current = scheduler.current_process_mut().ok_or(syscall::ErrorCode::ESRCH)?;
+    
+    // Resolve path: if it contains '/', use as-is; otherwise search PATH
+    let elf_data = if path.contains('/') {
+        // Absolute or relative path - resolve normally
+        let resolved_path = fs::resolve_path(&current.cwd, path)?;
+        fs::lookup(&resolved_path).ok_or(syscall::ErrorCode::ENOENT)?
+    } else {
+        // No '/' in path - search PATH directories
+        let path_env = &current.path_env;
+        let mut found_data = None;
+        
+        // Split PATH by ':' and try each directory
+        for dir in path_env.split(':') {
+            if dir.is_empty() {
+                continue;
+            }
+            
+            // Construct full path: dir/path
+            let mut full_path = alloc::string::String::new();
+            full_path.push_str(dir);
+            if !dir.ends_with('/') {
+                full_path.push('/');
+            }
+            full_path.push_str(path);
+            
+            // Try to look up this path
+            if let Some(data) = fs::lookup(&full_path) {
+                found_data = Some(data);
+                break;
+            }
+        }
+        
+        found_data.ok_or(syscall::ErrorCode::ENOENT)?
+    };
+    
+    let elf_info = elf::parse_elf(elf_data).map_err(|_| syscall::ErrorCode::EINVAL)?;
 
     // SAFETY: Frame allocator and GDT are initialized.
     unsafe {
@@ -842,6 +873,47 @@ fn chdir_handler(path_ptr: u64) -> syscall::SyscallResult {
     current.cwd = resolved_path;
     
     Ok(0)
+}
+
+/// getenv handler - get environment variable value
+fn getenv_handler(name_ptr: u64, buf_ptr: u64, size: u64) -> syscall::SyscallResult {
+    const MAX_NAME_LEN: usize = 64;
+    let mut name_buf = [0u8; MAX_NAME_LEN];
+    
+    let name = crate::usermode::copy_user_cstr(name_ptr, &mut name_buf)?;
+    let size = usize::try_from(size).map_err(|_| syscall::ErrorCode::EINVAL)?;
+    
+    // SAFETY: Called from syscall handler with interrupts disabled
+    let scheduler = unsafe { get_scheduler() };
+    let current = scheduler.current_process().ok_or(syscall::ErrorCode::ESRCH)?;
+    
+    // For now, we only support PATH environment variable
+    let value = if name == "PATH" {
+        &current.path_env
+    } else {
+        // Environment variable not found
+        return Err(syscall::ErrorCode::ENOENT);
+    };
+    
+    let value_bytes = value.as_bytes();
+    
+    if size == 0 {
+        return Err(syscall::ErrorCode::EINVAL);
+    }
+    
+    // Need space for string + null terminator
+    if value_bytes.len() + 1 > size {
+        return Err(syscall::ErrorCode::ERANGE);
+    }
+    
+    // Copy value to user buffer
+    crate::usermode::copy_to_user_bytes(buf_ptr, value_bytes)?;
+    
+    // Add null terminator
+    let null_byte = [0u8];
+    crate::usermode::copy_to_user_bytes(buf_ptr + value_bytes.len() as u64, &null_byte)?;
+    
+    Ok(value_bytes.len() as u64)
 }
 
 /// fork handler - create a child process

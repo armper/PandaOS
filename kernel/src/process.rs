@@ -85,6 +85,8 @@ pub struct Process {
     pub pending_signals: u32,
     /// Current working directory (absolute path)
     pub cwd: String,
+    /// PATH environment variable for command lookup
+    pub path_env: String,
 }
 
 impl Process {
@@ -162,6 +164,7 @@ impl Process {
             fd_table: FdTable::new(),
             pending_signals: 0,
             cwd: String::from("/"),
+            path_env: String::from("/bin"),
         })
     }
 
@@ -264,6 +267,7 @@ impl Process {
             fd_table: child_fd_table,
             pending_signals: 0,
             cwd: self.cwd.clone(),
+            path_env: self.path_env.clone(),
         })
     }
 

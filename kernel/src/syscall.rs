@@ -81,6 +81,8 @@ pub enum SyscallNumber {
     Yield = 24,
     /// Get directory entries
     Getdents64 = 217,
+    /// Get environment variable
+    Getenv = 63,
 }
 
 impl SyscallNumber {
@@ -110,6 +112,7 @@ impl SyscallNumber {
             80 => Some(Self::Chdir),
             109 => Some(Self::Setpgid),
             217 => Some(Self::Getdents64),
+            63 => Some(Self::Getenv),
             _ => None,
         }
     }
@@ -140,6 +143,7 @@ impl SyscallNumber {
             Self::Setpgid => "setpgid",
             Self::Yield => "yield",
             Self::Getdents64 => "getdents64",
+            Self::Getenv => "getenv",
         }
     }
 }
@@ -235,6 +239,7 @@ pub fn handle_syscall(
         SyscallNumber::Getdents64 => sys_getdents64(arg1 as i32, arg2, arg3),
         SyscallNumber::Getcwd => sys_getcwd(arg1, arg2),
         SyscallNumber::Chdir => sys_chdir(arg1),
+        SyscallNumber::Getenv => sys_getenv(arg1, arg2, arg3),
         // All other syscalls return ENOSYS for now
         _ => Err(ErrorCode::ENOSYS),
     };
@@ -641,6 +646,15 @@ fn sys_chdir(path: u64) -> SyscallResult {
     }
 }
 
+/// sys_getenv - Get environment variable value
+fn sys_getenv(name_ptr: u64, buf_ptr: u64, size: u64) -> SyscallResult {
+    if let Some(getenv_fn) = GETENV_HANDLER.get() {
+        getenv_fn(name_ptr, buf_ptr, size)
+    } else {
+        Err(ErrorCode::ENOSYS)
+    }
+}
+
 /// Yield handler function pointer for scheduler integration
 static YIELD_HANDLER: Once<fn()> = Once::new();
 static EXEC_HANDLER: Once<fn(&str, Option<&str>) -> Result<(), ErrorCode>> = Once::new();
@@ -658,6 +672,7 @@ static SETPGID_HANDLER: Once<fn(i32, i32) -> SyscallResult> = Once::new();
 static GETDENTS64_HANDLER: Once<fn(i32, u64, u64) -> SyscallResult> = Once::new();
 static GETCWD_HANDLER: Once<fn(u64, u64) -> SyscallResult> = Once::new();
 static CHDIR_HANDLER: Once<fn(u64) -> SyscallResult> = Once::new();
+static GETENV_HANDLER: Once<fn(u64, u64, u64) -> SyscallResult> = Once::new();
 
 /// Set the yield handler for syscall yield
 ///
@@ -742,6 +757,11 @@ pub fn set_getcwd_handler(handler: fn(u64, u64) -> SyscallResult) {
 /// Set the chdir handler for syscall chdir
 pub fn set_chdir_handler(handler: fn(u64) -> SyscallResult) {
     CHDIR_HANDLER.call_once(|| handler);
+}
+
+/// Set the getenv handler for syscall getenv
+pub fn set_getenv_handler(handler: fn(u64, u64, u64) -> SyscallResult) {
+    GETENV_HANDLER.call_once(|| handler);
 }
 
 #[cfg(test)]
