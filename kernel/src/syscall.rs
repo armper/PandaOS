@@ -19,7 +19,7 @@
 
 // Import macros for logging
 use panda_hal::serial_println;
-#[cfg(any(feature = "shell-smoke", feature = "vfs-cat-smoke"))]
+#[cfg(any(feature = "shell-smoke", feature = "vfs-cat-smoke", feature = "fork-exec-smoke"))]
 use core::sync::atomic::{AtomicUsize, Ordering};
 use spin::Once;
 
@@ -288,20 +288,33 @@ const SCRIPTED_INPUT: &[u8] = b"help\nexit\n";
 #[cfg(feature = "vfs-cat-smoke")]
 const SCRIPTED_INPUT: &[u8] = b"cat /etc/motd\nexit\n";
 
-#[cfg(all(feature = "shell-smoke", feature = "vfs-cat-smoke"))]
-compile_error!("shell-smoke and vfs-cat-smoke are mutually exclusive");
+#[cfg(feature = "fork-exec-smoke")]
+const SCRIPTED_INPUT: &[u8] = b"cat /etc/version\ntrue\nexit\n";
 
-#[cfg(any(feature = "shell-smoke", feature = "vfs-cat-smoke"))]
+#[cfg(all(
+    feature = "shell-smoke",
+    any(feature = "vfs-cat-smoke", feature = "fork-exec-smoke")
+))]
+compile_error!("shell-smoke, vfs-cat-smoke, and fork-exec-smoke are mutually exclusive");
+
+#[cfg(all(feature = "vfs-cat-smoke", feature = "fork-exec-smoke"))]
+compile_error!("shell-smoke, vfs-cat-smoke, and fork-exec-smoke are mutually exclusive");
+
+#[cfg(any(feature = "shell-smoke", feature = "vfs-cat-smoke", feature = "fork-exec-smoke"))]
 static SCRIPTED_POS: AtomicUsize = AtomicUsize::new(0);
 
 fn read_byte() -> Option<u8> {
-    #[cfg(any(feature = "shell-smoke", feature = "vfs-cat-smoke"))]
+    #[cfg(any(feature = "shell-smoke", feature = "vfs-cat-smoke", feature = "fork-exec-smoke"))]
     {
         let pos = SCRIPTED_POS.fetch_add(1, Ordering::Relaxed);
         return SCRIPTED_INPUT.get(pos).copied();
     }
 
-    #[cfg(not(any(feature = "shell-smoke", feature = "vfs-cat-smoke")))]
+    #[cfg(not(any(
+        feature = "shell-smoke",
+        feature = "vfs-cat-smoke",
+        feature = "fork-exec-smoke"
+    )))]
     {
         return panda_hal::serial::serial_read_byte();
     }

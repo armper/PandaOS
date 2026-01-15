@@ -23,8 +23,19 @@ echo "==================================="
 echo "Building kernel..."
 FEATURES=()
 EXPECTED_MARKER=""
-if [ "${SHELL_SMOKE:-0}" -eq 1 ] && [ "${VFS_CAT_SMOKE:-0}" -eq 1 ]; then
-    echo "Error: SHELL_SMOKE and VFS_CAT_SMOKE are mutually exclusive"
+# Check for mutually exclusive features
+FEATURE_COUNT=0
+if [ "${SHELL_SMOKE:-0}" -eq 1 ]; then
+    FEATURE_COUNT=$((FEATURE_COUNT + 1))
+fi
+if [ "${VFS_CAT_SMOKE:-0}" -eq 1 ]; then
+    FEATURE_COUNT=$((FEATURE_COUNT + 1))
+fi
+if [ "${FORK_EXEC_SMOKE:-0}" -eq 1 ]; then
+    FEATURE_COUNT=$((FEATURE_COUNT + 1))
+fi
+if [ $FEATURE_COUNT -gt 1 ]; then
+    echo "Error: SHELL_SMOKE, VFS_CAT_SMOKE, and FORK_EXEC_SMOKE are mutually exclusive"
     exit 1
 fi
 if [ "${SHELL_SMOKE:-0}" -eq 1 ]; then
@@ -34,6 +45,10 @@ fi
 if [ "${VFS_CAT_SMOKE:-0}" -eq 1 ]; then
     FEATURES+=(--features vfs-cat-smoke)
     EXPECTED_MARKER="TEST PASS vfs_cat_smoke"
+fi
+if [ "${FORK_EXEC_SMOKE:-0}" -eq 1 ]; then
+    FEATURES+=(--features fork-exec-smoke)
+    EXPECTED_MARKER="TEST PASS fork_exec_smoke"
 fi
 cargo bootimage --manifest-path kernel/Cargo.toml --release --target x86_64-unknown-none "${FEATURES[@]}" 2>&1 | tail -3
 

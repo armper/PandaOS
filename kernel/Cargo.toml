@@ -22,6 +22,7 @@ path = "src/main.rs"
 default = []
 shell-smoke = []
 vfs-cat-smoke = []
+fork-exec-smoke = []
 build-userland = []
 
 [package.metadata.bootimage]
