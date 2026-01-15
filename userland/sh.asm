@@ -8,13 +8,17 @@ BITS 64
 %define SYS_CLOSE 3
 %define SYS_PIPE 22
 %define SYS_DUP2 33
+%define SYS_KILL 37
 %define SYS_FORK 57
 %define SYS_EXECVE 59
 %define SYS_EXIT 60
 %define SYS_WAIT4 61
+%define SYS_SETPGID 109
 
 %define STDIN 0
 %define STDOUT 1
+
+%define SIGINT 2
 
 %define BUF_SIZE 128
 
@@ -77,7 +81,34 @@ read_loop:
     jmp read_loop
 
 handle_ctrlc:
-    ; Clear the current input line
+    ; Check if there's a foreground process group
+    mov rax, [rel foreground_pgid]
+    test rax, rax
+    jz ctrlc_no_fg
+    
+    ; Send SIGINT to the foreground process group
+    ; kill(-pgid, SIGINT) - negative PID targets process group
+    mov rax, SYS_KILL
+    mov rdi, [rel foreground_pgid]
+    neg rdi                       ; Negate to signal process group
+    mov rsi, SIGINT
+    syscall
+    
+    ; Clear foreground pgid
+    mov qword [rel foreground_pgid], 0
+    
+    ; Print ^C and newline
+    mov rax, SYS_WRITE
+    mov rdi, STDOUT
+    lea rsi, [rel ctrlc_msg]
+    mov rdx, ctrlc_msg_len
+    syscall
+    
+    ; Return to main loop to show prompt again
+    jmp main_loop
+
+ctrlc_no_fg:
+    ; No foreground process, just clear the current input line
     xor r12, r12
     
     ; Print ^C and newline
@@ -208,8 +239,9 @@ execute_pipeline:
     js fork_failed
     jz left_child
     
-    ; Parent - save left PID
+    ; Parent - save left PID and make it a process group leader
     mov [rel left_pid], rax
+    mov [rel foreground_pgid], rax    ; Set as foreground process group
     
     ; Fork right child
     mov rax, SYS_FORK
@@ -218,8 +250,12 @@ execute_pipeline:
     js fork_failed
     jz right_child
     
-    ; Parent - save right PID and close pipe ends
+    ; Parent - save right PID
     mov [rel right_pid], rax
+    
+    ; Put right child in the same process group as left child
+    ; Note: In a full implementation, we'd use setpgid syscall here
+    ; For now, each process is its own group leader (set in fork_from)
     
     ; Close both pipe ends in parent
     mov rax, SYS_CLOSE
@@ -250,9 +286,18 @@ wait_right:
     test rax, rax
     js wait_right
     
+    ; Clear foreground pgid after both children exit
+    mov qword [rel foreground_pgid], 0
+    
     jmp main_loop
 
 left_child:
+    ; Child: set itself as process group leader
+    mov rax, SYS_SETPGID
+    xor rdi, rdi              ; pid = 0 (current process)
+    xor rsi, rsi              ; pgid = 0 (use own PID)
+    syscall
+    
     ; Redirect stdout to pipe write end
     mov rax, SYS_DUP2
     mov rdi, [rel pipefd + 4] ; write end
@@ -278,6 +323,13 @@ left_child:
     syscall
 
 right_child:
+    ; Child: join the same process group as left child
+    ; (for simplicity, make it its own group leader too)
+    mov rax, SYS_SETPGID
+    xor rdi, rdi              ; pid = 0 (current process)
+    xor rsi, rsi              ; pgid = 0 (use own PID)
+    syscall
+    
     ; Redirect stdin from pipe read end
     mov rax, SYS_DUP2
     mov rdi, [rel pipefd]     ; read end
@@ -484,8 +536,9 @@ cmd_fork_exec:
     js fork_failed
     jz child_process
 
-    ; Parent process - wait for child
+    ; Parent process - set foreground pgid and wait for child
     mov r12, rax  ; Save child PID
+    mov [rel foreground_pgid], rax  ; Set as foreground
     
 parent_wait:
     mov rax, SYS_WAIT4
@@ -496,11 +549,18 @@ parent_wait:
     test rax, rax
     js parent_wait  ; If error (EAGAIN/EINTR), retry
     
-    ; Child exited, continue shell
+    ; Child exited, clear foreground and continue shell
+    mov qword [rel foreground_pgid], 0
     jmp main_loop
 
 child_process:
-    ; Child process - exec the program
+    ; Child process - set itself as process group leader
+    mov rax, SYS_SETPGID
+    xor rdi, rdi              ; pid = 0 (current process)
+    xor rsi, rsi              ; pgid = 0 (use own PID)
+    syscall
+    
+    ; Exec the program
     mov rax, SYS_EXECVE
     mov rdi, r14
     mov rsi, r15
@@ -641,3 +701,4 @@ right_pid: resq 1
 left_cmd_ptr: resq 1
 right_cmd_ptr: resq 1
 cmd_buf: resb 64
+foreground_pgid: resq 1

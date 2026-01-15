@@ -331,13 +331,21 @@ const SCRIPTED_INPUT: &[u8] = b"echo test\x03\nhelp\nexit\n";
 
 #[cfg(all(
     feature = "shell-smoke",
-    any(feature = "vfs-cat-smoke", feature = "fork-exec-smoke", feature = "pipe-smoke", feature = "ctrlc-smoke")
+    any(
+        feature = "vfs-cat-smoke",
+        feature = "fork-exec-smoke",
+        feature = "pipe-smoke",
+        feature = "ctrlc-smoke"
+    )
 ))]
 compile_error!(
     "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, and ctrlc-smoke are mutually exclusive"
 );
 
-#[cfg(all(feature = "vfs-cat-smoke", any(feature = "fork-exec-smoke", feature = "pipe-smoke", feature = "ctrlc-smoke")))]
+#[cfg(all(
+    feature = "vfs-cat-smoke",
+    any(feature = "fork-exec-smoke", feature = "pipe-smoke", feature = "ctrlc-smoke")
+))]
 compile_error!(
     "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, and ctrlc-smoke are mutually exclusive"
 );

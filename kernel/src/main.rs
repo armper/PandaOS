@@ -630,9 +630,9 @@ fn kill_handler(pid: i32, sig: i32) -> syscall::SyscallResult {
         // Signal a process group (negative PID means process group)
         let pgid = panda_hal::pid::Pid::new((-pid) as u64);
         serial_println!("[KILL] Signaling process group {}", pgid.as_u64());
-        
+
         let count = scheduler.signal_process_group(pgid, signal);
-        
+
         if count > 0 {
             serial_println!("[KILL] Signaled {} processes in group {}", count, pgid.as_u64());
             Ok(0)
@@ -664,18 +664,17 @@ fn setpgid_handler(pid: i32, pgid: i32) -> syscall::SyscallResult {
     let current_pid = current.pid;
 
     // If pgid == 0, set to current process's PID (make it a group leader)
-    let new_pgid = if pgid == 0 {
-        current_pid
-    } else {
-        panda_hal::pid::Pid::new(pgid as u64)
-    };
+    let new_pgid = if pgid == 0 { current_pid } else { panda_hal::pid::Pid::new(pgid as u64) };
 
-    serial_println!("[SETPGID] Setting process {} to group {}", current_pid.as_u64(), new_pgid.as_u64());
+    serial_println!(
+        "[SETPGID] Setting process {} to group {}",
+        current_pid.as_u64(),
+        new_pgid.as_u64()
+    );
     current.pgid = new_pgid;
 
     Ok(0)
 }
-
 
 /// fork handler - create a child process
 fn fork_handler() -> syscall::SyscallResult {
@@ -783,9 +782,9 @@ fn waitpid_handler(pid: i64, status_ptr: u64, options: i32) -> syscall::SyscallR
             if scheduler.has_children(parent_pid) {
                 // Has children but none are zombies yet - block the process
                 serial_println!("[WAITPID] No zombie children yet, blocking parent");
-                
+
                 let parent = scheduler.current_process_mut().ok_or(syscall::ErrorCode::ESRCH)?;
-                
+
                 // Block the parent based on what it's waiting for
                 if pid == -1 {
                     parent.block_on_any_child();
@@ -795,17 +794,17 @@ fn waitpid_handler(pid: i64, status_ptr: u64, options: i32) -> syscall::SyscallR
                 } else {
                     return Err(syscall::ErrorCode::EINVAL);
                 }
-                
+
                 // Trigger a context switch to another process
                 // The yield handler will call schedule_next which will skip blocked processes
                 yield_handler();
-                
+
                 // After returning from yield (when woken), retry to find zombie
                 // Get fresh scheduler reference after context switch
                 let scheduler = unsafe { get_scheduler() };
                 let parent = scheduler.current_process().ok_or(syscall::ErrorCode::ESRCH)?;
                 let parent_pid = parent.pid;
-                
+
                 let zombie_after_wake = if pid == -1 {
                     scheduler.find_any_zombie_child(parent_pid)
                 } else if pid > 0 {
@@ -814,30 +813,37 @@ fn waitpid_handler(pid: i64, status_ptr: u64, options: i32) -> syscall::SyscallR
                 } else {
                     return Err(syscall::ErrorCode::EINVAL);
                 };
-                
+
                 match zombie_after_wake {
                     Some(child) => {
                         let exit_code = child.exit_code().unwrap_or(0);
                         let child_pid = child.pid.as_u64();
-                        
-                        serial_println!("[WAITPID] After wake, found zombie child PID {}", child_pid);
-                        
+
+                        serial_println!(
+                            "[WAITPID] After wake, found zombie child PID {}",
+                            child_pid
+                        );
+
                         // Write exit status to user if pointer is non-null
                         if status_ptr != 0 {
                             let status = (exit_code << 8) as u32;
                             let status_bytes = status.to_ne_bytes();
                             crate::usermode::copy_to_user_bytes(status_ptr, &status_bytes)?;
                         }
-                        
+
                         // Reap the child process
                         // SAFETY: Child page table is valid
                         unsafe {
                             let pt = child.page_table_phys;
-                            serial_println!("[WAITPID] Reaping child PID {} (pt={:#x})", child_pid, pt);
+                            serial_println!(
+                                "[WAITPID] Reaping child PID {} (pt={:#x})",
+                                child_pid,
+                                pt
+                            );
                             crate::paging::free_process_address_space(pt, true)
                                 .map_err(|_| syscall::ErrorCode::EIO)?;
                         }
-                        
+
                         Ok(child_pid)
                     }
                     None => {
