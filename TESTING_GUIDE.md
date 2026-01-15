@@ -134,6 +134,8 @@ This boots the kernel, runs `/init`, execs `/bin/sh`, and feeds a scripted input
 SHELL_SMOKE=1 ./scripts/qemu-test.sh
 ```
 
+**Serial log:** `target/qemu/shell_smoke.log`
+
 **Expected Output (serial):**
 ```
 panda> help
@@ -150,6 +152,8 @@ the read-only VFS via `/bin/cat`.
 ```bash
 VFS_CAT_SMOKE=1 ./scripts/qemu-test.sh
 ```
+
+**Serial log:** `target/qemu/vfs_cat_smoke.log`
 
 **Expected Output (serial, excerpt):**
 ```
@@ -169,6 +173,8 @@ fork, exec, and wait system calls by running external programs.
 FORK_EXEC_SMOKE=1 ./scripts/qemu-test.sh
 ```
 
+**Serial log:** `target/qemu/fork_exec_smoke.log`
+
 **Expected Output (serial, excerpt):**
 ```
 panda> cat /etc/version
@@ -184,6 +190,45 @@ TEST PASS fork_exec_smoke
 - `/bin/true` forks, execs, exits with status 0, and parent continues
 - Parent shell survives fork+exec+wait cycles and reprompts correctly
 - Shell exits cleanly after `exit` command
+
+### Debugging Smoke Tests
+
+All QEMU smoke tests write serial output to `target/qemu/<test_name>.log`:
+- `target/qemu/shell_smoke.log`
+- `target/qemu/vfs_cat_smoke.log`
+- `target/qemu/fork_exec_smoke.log`
+
+The test script uses QEMU's `-serial file:` option to write serial output directly to these
+log files without buffering. This ensures reliable capture of kernel output.
+
+**Viewing logs after a test:**
+```bash
+# Run a test
+FORK_EXEC_SMOKE=1 ./scripts/qemu-test.sh
+
+# View the full log
+cat target/qemu/fork_exec_smoke.log
+
+# Search for specific markers
+grep "TEST" target/qemu/fork_exec_smoke.log
+```
+
+**Manual QEMU testing:**
+```bash
+# Build kernel with a feature
+cargo bootimage --manifest-path kernel/Cargo.toml --release \
+  --target x86_64-unknown-none --features fork-exec-smoke
+
+# Run directly with QEMU
+qemu-system-x86_64 \
+  -drive format=raw,file=target/x86_64-unknown-none/release/bootimage-panda-kernel.bin \
+  -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
+  -serial file:target/qemu/manual.log \
+  -display none
+
+# Check the log
+cat target/qemu/manual.log
+```
 
 ### Current Test Status
 
