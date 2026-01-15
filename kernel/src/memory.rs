@@ -75,13 +75,15 @@ static FRAME_ALLOCATOR: Mutex<Option<FrameAllocator>> = Mutex::new(None);
 ///
 /// This function:
 /// 1. Converts bootloader memory map to normalized abstraction
-/// 2. Reserves kernel, bootloader, and page table frames
-/// 3. Initializes HAL frame allocator with usable memory
+/// 2. Initializes HAL frame allocator with usable memory
+/// 3. Reserves kernel, bootloader, page table, and critical frames
 ///
 /// # Safety
 ///
 /// Must be called exactly once during boot with valid memory map.
 pub unsafe fn init_from_bootloader(boot_info: &'static bootloader::BootInfo) {
+    use panda_hal::memory::ReservationReason;
+
     // Convert bootloader memory map to normalized format
     let mut memory_map = MemoryMapInfo::new();
 
@@ -101,19 +103,61 @@ pub unsafe fn init_from_bootloader(boot_info: &'static bootloader::BootInfo) {
         });
     }
 
-    // Reserve kernel image (approximation - bootloader already marks this)
-    // The kernel is loaded by bootloader, so its frames are not in usable regions
-
     // Calculate usable memory for frame allocator
     let usable_start_frame = find_first_usable_frame(&memory_map);
     let usable_end_frame = find_last_usable_frame(&memory_map);
 
     // Initialize HAL frame allocator
-    let frame_allocator = FrameAllocator::new(usable_start_frame, usable_end_frame);
-    *FRAME_ALLOCATOR.lock() = Some(frame_allocator);
+    let mut frame_allocator = FrameAllocator::new(usable_start_frame, usable_end_frame);
 
-    println!("Memory: {} KiB usable", memory_map.usable_memory() / 1024);
+    // Reserve frame 0 (BIOS/IVT data - should never be used)
+    frame_allocator.reserve_range(0, 1, ReservationReason::NullFrame);
+
+    // Reserve kernel physical range
+    // The bootloader loads the kernel at low physical memory
+    // Reserve first 16 MB conservatively for kernel, bootloader, and early structures
+    // TODO: Get exact kernel range from linker symbols or bootloader API
+    let kernel_reserve_frames = (16 * 1024 * 1024) / 4096; // 16 MB = 4096 frames
+    frame_allocator.reserve_range(0, kernel_reserve_frames, ReservationReason::KernelImage);
+
+    // Reserve bootloader structures
+    // The bootloader memory map itself and boot info structure
+    let boot_info_addr = boot_info as *const _ as u64;
+    let boot_info_frame = (boot_info_addr / 4096) as usize;
+    frame_allocator.reserve_range(boot_info_frame, boot_info_frame + 1, ReservationReason::Bootloader);
+
+    // Reserve page table frames currently in use
+    // The bootloader sets up initial page tables - we need to preserve them
+    // TODO: Walk page tables and reserve all PT frames
+    // For now, we reserve the L4 page table frame
+    use x86_64::registers::control::Cr3;
+    let (level_4_table_frame, _) = Cr3::read();
+    let l4_frame = level_4_table_frame.start_address().as_u64() / 4096;
+    frame_allocator.reserve_range(l4_frame as usize, (l4_frame + 1) as usize, ReservationReason::PageTables);
+
+    // Log reservation statistics
+    println!("Memory: {} KiB total", memory_map.usable_memory() / 1024);
     println!("Frame allocator: frames {}..{}", usable_start_frame, usable_end_frame);
+    println!("  Total frames: {}", frame_allocator.total_frames());
+    println!("  Reserved frames: {}", frame_allocator.reserved_frames());
+    println!("  Usable frames: {}", frame_allocator.usable_frames());
+
+    // Debug: log reserved regions
+    #[cfg(debug_assertions)]
+    {
+        println!("Reserved regions:");
+        for region in frame_allocator.reserved_regions() {
+            println!(
+                "  {}..{} ({} frames): {:?}",
+                region.start_frame,
+                region.end_frame,
+                region.end_frame - region.start_frame,
+                region.reason
+            );
+        }
+    }
+
+    *FRAME_ALLOCATOR.lock() = Some(frame_allocator);
 }
 
 /// Find first usable frame from memory map
@@ -154,6 +198,20 @@ pub unsafe fn allocate_frame() -> Option<usize> {
 pub unsafe fn deallocate_frame(frame: usize) {
     if let Some(allocator) = FRAME_ALLOCATOR.lock().as_mut() {
         allocator.deallocate_frame(frame);
+    }
+}
+
+/// Reserve a range of frames in the global allocator
+///
+/// This is used to mark frames as unavailable for allocation.
+/// Typically called to reserve heap frames after heap mapping.
+///
+/// # Safety
+///
+/// Frame allocator must be initialized.
+pub unsafe fn reserve_frames(start_frame: usize, end_frame: usize, reason: panda_hal::memory::ReservationReason) {
+    if let Some(allocator) = FRAME_ALLOCATOR.lock().as_mut() {
+        allocator.reserve_range(start_frame, end_frame, reason);
     }
 }
 
