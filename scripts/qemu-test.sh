@@ -71,14 +71,20 @@ if [ "${CD_SMOKE:-0}" -eq 1 ]; then
     FEATURES+=(--features cd-smoke)
     EXPECTED_MARKER="TEST PASS cd_smoke"
 fi
+if [ "${PATH_SMOKE:-0}" -eq 1 ]; then
+    FEATURE_COUNT=$((FEATURE_COUNT + 1))
+    TEST_NAME="path_smoke"
+    FEATURES+=(--features path-smoke)
+    EXPECTED_MARKER="TEST PASS path_smoke"
+fi
 
 if [ $FEATURE_COUNT -gt 1 ]; then
-    echo "Error: SHELL_SMOKE, VFS_CAT_SMOKE, FORK_EXEC_SMOKE, PIPE_SMOKE, CTRLC_SMOKE, LS_SMOKE, and CD_SMOKE are mutually exclusive"
+    echo "Error: SHELL_SMOKE, VFS_CAT_SMOKE, FORK_EXEC_SMOKE, PIPE_SMOKE, CTRLC_SMOKE, LS_SMOKE, CD_SMOKE, and PATH_SMOKE are mutually exclusive"
     exit 1
 fi
 
 if [ $FEATURE_COUNT -eq 0 ]; then
-    echo "Error: Must set one of SHELL_SMOKE, VFS_CAT_SMOKE, FORK_EXEC_SMOKE, PIPE_SMOKE, CTRLC_SMOKE, LS_SMOKE, or CD_SMOKE"
+    echo "Error: Must set one of SHELL_SMOKE, VFS_CAT_SMOKE, FORK_EXEC_SMOKE, PIPE_SMOKE, CTRLC_SMOKE, LS_SMOKE, CD_SMOKE, or PATH_SMOKE"
     exit 1
 fi
 
