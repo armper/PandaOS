@@ -241,13 +241,28 @@ Exit syscall:
 - No priority inversion problems
 - Fair but not optimized for latency
 
-### No Advanced Features
+### No Advanced Features (Legacy List)
 
-- No sleep/wake
+- ~~No sleep/wake~~ **Now implemented**: Blocking wait states
 - No process groups
-- No signals (yet)
-- No fork (yet)
-- No exec (yet)
+- ~~No signals (yet)~~ **Now implemented**: SIGINT support
+- ~~No fork (yet)~~ **Now implemented**: fork() syscall
+- ~~No exec (yet)~~ **Now implemented**: execve() syscall
+
+## Blocking and Wait States
+
+**Implementation Status**: Complete
+
+Processes can be blocked while waiting for events:
+- **WaitState::NotWaiting**: Process is runnable
+- **WaitState::WaitingForAnyChild**: Blocked in waitpid(-1)
+- **WaitState::WaitingForChild(pid)**: Blocked waiting for specific child
+
+**Scheduler Behavior:**
+- Blocked processes are skipped during scheduling (not added to runnable set)
+- When a child exits, the exit handler wakes waiting parents
+- Signal delivery also wakes blocked processes
+- No busy-wait loops - true blocking with deterministic wakeup
 
 ## Future Enhancements
 
@@ -259,10 +274,10 @@ Exit syscall:
 
 ### Medium Term
 
-1. Add process sleep/wake
-2. Implement fork syscall
-3. Implement exec syscall
-4. Add wait/waitpid for process management
+1. ~~Add process sleep/wake~~ **Complete**: Blocking wait states implemented
+2. ~~Implement fork syscall~~ **Complete**
+3. ~~Implement exec syscall~~ **Complete**
+4. ~~Add wait/waitpid for process management~~ **Complete**: Blocking waitpid
 
 ### Long Term
 

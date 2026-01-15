@@ -205,16 +205,18 @@ None yet - hardware access is direct. Future refactoring will add:
 - No copy-on-write (COW) yet - full eager copy
 
 **Waitpid Semantics:**
-- `waitpid(pid, status, options)` waits for child to exit
+- `waitpid(pid, status, options)` waits for child to exit (blocking)
 - Supported:
   - pid = -1: wait for any child
   - pid > 0: wait for specific child
-  - options must be 0
+  - options must be 0 (no WNOHANG)
+- **Blocking behavior**: Parent process is blocked (not scheduled) until child exits
 - Returns child PID when zombie found
 - Writes exit status to user memory if status_ptr != 0
 - Reaps child (frees page tables and kernel stack)
-- Returns EINTR if no zombie yet (busy-wait by retrying)
+- Returns EINTR if woken by signal before child ready
 - Returns ESRCH if no children exist
+- Exit handler wakes waiting parents automatically
 
 **Parent-Child Relationship:**
 - Each process tracks parent_pid (None for init)
