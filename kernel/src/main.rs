@@ -13,6 +13,7 @@
 #![no_std]
 #![no_main]
 #![feature(custom_test_frameworks)]
+#![feature(abi_x86_interrupt)]
 #![test_runner(crate::test_runner)]
 #![reexport_test_harness_main = "test_main"]
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -22,32 +23,48 @@
 
 use core::panic::PanicInfo;
 
-mod interrupts;
-mod memory;
+// Import VGA and serial macros
+#[macro_use]
+extern crate panda_hal;
+
+pub mod boot_phases;
+pub mod interrupts;
+pub mod invariants;
+pub mod memory;
+pub mod syscall;
 
 /// Entry point for the kernel
 ///
 /// This function is called by the bootloader and never returns.
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    println!("PandaOS v{}", env!("CARGO_PKG_VERSION"));
-    println!("Initializing kernel...");
+    // Use boot phase state machine to enforce initialization order
+    use boot_phases::KernelState;
 
-    // Initialize HAL
-    unsafe {
-        panda_hal::serial::init();
-    }
+    let state = KernelState::new();
+
+    println!("PandaOS v{}", env!("CARGO_PKG_VERSION"));
+    println!("Initializing kernel with boot phase enforcement...");
+
+    // SAFETY: This is the first initialization call during boot
+    let state = unsafe { state.init_hal() };
 
     serial_println!("Serial output initialized");
     println!("Hardware abstraction layer initialized");
+
+    // SAFETY: HAL is now initialized, safe to proceed
+    let state = unsafe { state.init_memory() };
+    println!("Memory management initialized");
+
+    // SAFETY: Memory is now initialized, safe to proceed
+    let state = unsafe { state.init_interrupts() };
 
     // Initialize interrupts
     interrupts::init();
     println!("Interrupt handling initialized");
 
-    // Initialize memory management
-    println!("Memory management initialized");
-
+    // Finalize boot
+    let _state = state.finalize();
     println!("Kernel initialization complete!");
 
     #[cfg(test)]

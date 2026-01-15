@@ -34,9 +34,33 @@ impl FrameAllocator {
     ///
     /// Returns the frame number or None if out of memory
     pub fn allocate_frame(&mut self) -> Option<usize> {
+        // Invariant: next_frame should never exceed end
+        #[cfg(debug_assertions)]
+        {
+            assert!(
+                self.next_frame <= self.available_frames.end,
+                "Frame allocator corrupted: next_frame {} > end {}",
+                self.next_frame,
+                self.available_frames.end
+            );
+        }
+
         if self.next_frame < self.available_frames.end {
             let frame = self.next_frame;
             self.next_frame += 1;
+
+            // Invariant: allocated frame must be in valid range
+            #[cfg(debug_assertions)]
+            {
+                assert!(
+                    frame >= self.available_frames.start && frame < self.available_frames.end,
+                    "Allocated frame {} out of range [{}..{})",
+                    frame,
+                    self.available_frames.start,
+                    self.available_frames.end
+                );
+            }
+
             Some(frame)
         } else {
             None

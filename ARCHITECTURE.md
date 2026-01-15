@@ -4,6 +4,8 @@
 
 PandaOS is a Unix-like x86_64 kernel written in Rust with a focus on clean architecture, modularity, and safety.
 
+**SMP Status**: Single-core only until Phase 2. See [docs/SMP_STRATEGY.md](docs/SMP_STRATEGY.md) for details.
+
 ## Design Philosophy
 
 ### Core Principles
