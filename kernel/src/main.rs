@@ -14,12 +14,15 @@
 #![no_main]
 #![feature(custom_test_frameworks)]
 #![feature(abi_x86_interrupt)]
+#![feature(alloc_error_handler)]
 #![test_runner(crate::test_runner)]
 #![reexport_test_harness_main = "test_main"]
 #![deny(unsafe_op_in_unsafe_fn)]
 #![deny(clippy::all)]
 #![warn(clippy::pedantic)]
 #![allow(clippy::missing_panics_doc)]
+
+extern crate alloc;
 
 use core::panic::PanicInfo;
 
@@ -30,6 +33,7 @@ extern crate panda_hal;
 pub mod boot_phases;
 pub mod elf;
 pub mod gdt;
+pub mod heap;
 pub mod interrupts;
 pub mod invariants;
 pub mod memory;
@@ -57,6 +61,22 @@ pub extern "C" fn _start() -> ! {
 
     // SAFETY: HAL is now initialized, safe to proceed
     let state = unsafe { state.init_memory() };
+
+    // Initialize heap allocator
+    unsafe { heap::init() };
+    println!("Heap allocator initialized");
+
+    // Test heap allocation
+    {
+        extern crate alloc;
+        use alloc::vec::Vec;
+        let mut test_vec = Vec::new();
+        test_vec.push(1);
+        test_vec.push(2);
+        test_vec.push(3);
+        println!("Heap test passed: {:?}", test_vec);
+    }
+
     println!("Memory management initialized");
 
     // SAFETY: Memory is now initialized, safe to proceed
@@ -92,6 +112,12 @@ fn panic(info: &PanicInfo) -> ! {
     loop {
         x86_64::instructions::hlt();
     }
+}
+
+/// Allocation error handler
+#[alloc_error_handler]
+fn alloc_error_handler(layout: alloc::alloc::Layout) -> ! {
+    panic!("Allocation error: {:?}", layout)
 }
 
 #[cfg(test)]
