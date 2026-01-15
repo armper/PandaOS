@@ -653,22 +653,32 @@ fn setpgid_handler(pid: i32, pgid: i32) -> syscall::SyscallResult {
     // SAFETY: Called from syscall handler with interrupts disabled
     let scheduler = unsafe { get_scheduler() };
 
-    // Simplified implementation: only allow setting pgid for current process (pid == 0)
-    // and only to its own PID (creating a new process group)
-    if pid != 0 {
-        serial_println!("[SETPGID] Only pid=0 (current process) supported");
-        return Err(syscall::ErrorCode::EINVAL);
-    }
+    // Get the target process (pid==0 means current process)
+    let target_pid = if pid == 0 {
+        scheduler.current_process().ok_or(syscall::ErrorCode::ESRCH)?.pid
+    } else {
+        panda_hal::pid::Pid::new(pid as u64)
+    };
 
+    // Determine the new pgid (pgid==0 means use target's PID)
+    let new_pgid = if pgid == 0 {
+        target_pid
+    } else {
+        panda_hal::pid::Pid::new(pgid as u64)
+    };
+
+    // For simplicity, only allow setting pgid for current process
+    // A full implementation would search all processes for target_pid
     let current = scheduler.current_process_mut().ok_or(syscall::ErrorCode::ESRCH)?;
-    let current_pid = current.pid;
 
-    // If pgid == 0, set to current process's PID (make it a group leader)
-    let new_pgid = if pgid == 0 { current_pid } else { panda_hal::pid::Pid::new(pgid as u64) };
+    if current.pid != target_pid {
+        serial_println!("[SETPGID] Can only set pgid for current process (pid={})", current.pid.as_u64());
+        return Err(syscall::ErrorCode::ESRCH);
+    }
 
     serial_println!(
         "[SETPGID] Setting process {} to group {}",
-        current_pid.as_u64(),
+        current.pid.as_u64(),
         new_pgid.as_u64()
     );
     current.pgid = new_pgid;

@@ -239,8 +239,10 @@ execute_pipeline:
     js fork_failed
     jz left_child
     
-    ; Parent - save left PID and make it a process group leader
+    ; Parent - save left PID
+    ; The left child will become the process group leader
     mov [rel left_pid], rax
+    mov [rel pipeline_pgid], rax  ; Save the pgid for the right child to join
     mov [rel foreground_pgid], rax    ; Set as foreground process group
     
     ; Fork right child
@@ -252,10 +254,6 @@ execute_pipeline:
     
     ; Parent - save right PID
     mov [rel right_pid], rax
-    
-    ; Put right child in the same process group as left child
-    ; Note: In a full implementation, we'd use setpgid syscall here
-    ; For now, each process is its own group leader (set in fork_from)
     
     ; Close both pipe ends in parent
     mov rax, SYS_CLOSE
@@ -323,11 +321,11 @@ left_child:
     syscall
 
 right_child:
-    ; Child: join the same process group as left child
-    ; (for simplicity, make it its own group leader too)
+    ; Child: join the left child's process group
+    ; Get the pipeline pgid that parent saved (left child's PID)
     mov rax, SYS_SETPGID
     xor rdi, rdi              ; pid = 0 (current process)
-    xor rsi, rsi              ; pgid = 0 (use own PID)
+    mov rsi, [rel pipeline_pgid]  ; pgid = left child's PID (group leader)
     syscall
     
     ; Redirect stdin from pipe read end
@@ -702,3 +700,4 @@ left_cmd_ptr: resq 1
 right_cmd_ptr: resq 1
 cmd_buf: resb 64
 foreground_pgid: resq 1
+pipeline_pgid: resq 1
