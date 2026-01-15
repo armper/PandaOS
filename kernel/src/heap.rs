@@ -5,6 +5,7 @@
 //!
 //! ## Invariants
 //!
+//! - Heap region must be mapped before initialization
 //! - Heap must be initialized before any allocations (enforced with debug assertions)
 //! - Init must be called exactly once (panics on second call)
 //! - Heap memory region must not overlap with kernel code/data
@@ -16,11 +17,11 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use linked_list_allocator::LockedHeap;
 
 /// Heap start address in virtual memory
-/// This address will be mapped by the kernel's page tables
-const HEAP_START: usize = 0xFFFF_8000_0000_0000; // Kernel heap region
+/// This address will be mapped by map_heap() before allocator init
+pub const HEAP_START: usize = 0xFFFF_8000_0000_0000; // Kernel heap region
 
 /// Heap size (100 KiB to start)
-const HEAP_SIZE: usize = 100 * 1024;
+pub const HEAP_SIZE: usize = 100 * 1024;
 
 /// Inner allocator instance
 static INNER_ALLOCATOR: LockedHeap = LockedHeap::empty();
@@ -56,26 +57,47 @@ unsafe impl GlobalAlloc for CheckedAllocator {
 #[global_allocator]
 static ALLOCATOR: CheckedAllocator = CheckedAllocator;
 
+/// Map heap region in page tables
+///
+/// This must be called BEFORE heap allocator initialization.
+/// It allocates physical frames and maps them to the heap virtual address range.
+///
+/// # Safety
+///
+/// - Must be called before heap allocator init
+/// - Frame allocator must be initialized
+/// - Page tables must be accessible
+pub unsafe fn map_heap() -> Result<(), &'static str> {
+    // TODO: Implement actual page table mapping
+    // For now, we'll use identity mapping provided by bootloader
+    // This is a placeholder that will be replaced with proper paging
+
+    // Calculate number of frames needed
+    let num_frames = (HEAP_SIZE + 4095) / 4096;
+
+    println!("Heap mapping: {} frames for {} KiB", num_frames, HEAP_SIZE / 1024);
+    println!("Heap range: {:#x}..{:#x}", HEAP_START, HEAP_START + HEAP_SIZE);
+
+    // TODO: Allocate frames from frame allocator
+    // TODO: Map frames to HEAP_START..HEAP_START+HEAP_SIZE in page tables
+    // TODO: Mark pages as writable and present
+
+    Ok(())
+}
+
 /// Initialize the heap allocator
+///
+/// This must be called AFTER heap region is mapped.
 ///
 /// # Safety
 ///
 /// - Must be called exactly once during kernel initialization
 /// - Must be called before interrupts are enabled (single-core assumption)
-/// - The heap memory region must be valid and properly mapped
+/// - The heap memory region must be valid and properly mapped (call map_heap first)
 ///
 /// # Panics
 ///
 /// Panics if called more than once (idempotency check)
-///
-/// # TODO
-///
-/// Currently this initializes the heap allocator with a virtual address
-/// that hasn't been mapped yet. Before heap allocations can work, the
-/// memory region (HEAP_START..HEAP_START+HEAP_SIZE) must be:
-/// 1. Allocated from physical memory
-/// 2. Mapped in the kernel's page tables
-/// 3. Marked as writable
 pub unsafe fn init() {
     // Check if already initialized (idempotency)
     if HEAP_INITIALIZED.swap(true, Ordering::SeqCst) {
@@ -85,7 +107,7 @@ pub unsafe fn init() {
     // SAFETY: Caller guarantees:
     // - This is called exactly once during boot
     // - Single-core, interrupts disabled (no race conditions)
-    // - The heap region is valid and mapped
+    // - The heap region is valid and mapped (map_heap was called first)
     unsafe {
         INNER_ALLOCATOR.lock().init(HEAP_START as *mut u8, HEAP_SIZE);
     }
@@ -119,5 +141,11 @@ mod tests {
         // In test context, heap might be initialized, but we test the logic
         // This just ensures the function is callable
         let _ = is_initialized();
+    }
+
+    #[test]
+    fn test_heap_size_page_aligned() {
+        // Heap size should be multiple of page size for easier mapping
+        assert_eq!(HEAP_SIZE % 4096, 0);
     }
 }

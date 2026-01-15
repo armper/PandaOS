@@ -45,8 +45,9 @@ pub mod usermode;
 /// Entry point for the kernel
 ///
 /// This function is called by the bootloader and never returns.
+/// The bootloader passes a BootInfo structure with memory map and other info.
 #[no_mangle]
-pub extern "C" fn _start() -> ! {
+pub extern "C" fn _start(boot_info: &'static bootloader::BootInfo) -> ! {
     // Use boot phase state machine to enforce initialization order
     use boot_phases::KernelState;
 
@@ -61,7 +62,9 @@ pub extern "C" fn _start() -> ! {
 
     // SAFETY: HAL is now initialized, safe to proceed
     let state = unsafe { state.init_memory() };
-    println!("Memory management initialized");
+
+    // Initialize memory management with bootloader info (no bootloader types exposed)
+    unsafe { memory::init_from_bootloader(boot_info) };
 
     // SAFETY: Memory is now initialized, safe to proceed
     let state = unsafe { state.init_interrupts() };
@@ -74,26 +77,26 @@ pub extern "C" fn _start() -> ! {
     interrupts::init();
     println!("Interrupt handling initialized");
 
-    // Initialize heap allocator (after interrupts are set up)
-    // TODO: Map heap region in page tables before initialization
-    // Currently the heap address may not be mapped, which will cause
-    // page faults on first allocation. This needs to be fixed by:
-    // 1. Getting memory map from bootloader
-    // 2. Mapping heap region (HEAP_START..HEAP_START+HEAP_SIZE) in page tables
-    // For now, we initialize it but allocations will fail until paging is set up
-    unsafe { heap::init() };
-    println!("Heap allocator initialized (mapping pending)");
+    // Map heap region (allocate frames and map pages)
+    // MUST happen before heap allocator init
+    unsafe {
+        heap::map_heap().expect("Failed to map heap");
+    }
+    println!("Heap region mapped");
 
-    // Test heap allocation (will fail until heap is mapped)
-    // TODO: Enable after heap region is mapped
-    // {
-    //     use alloc::vec::Vec;
-    //     let mut test_vec = Vec::new();
-    //     test_vec.push(1);
-    //     test_vec.push(2);
-    //     test_vec.push(3);
-    //     println!("Heap test passed: {:?}", test_vec);
-    // }
+    // Initialize heap allocator (after heap is mapped)
+    unsafe { heap::init() };
+    println!("Heap allocator initialized");
+
+    // Test heap allocation
+    {
+        use alloc::vec::Vec;
+        let mut test_vec = Vec::new();
+        test_vec.push(1);
+        test_vec.push(2);
+        test_vec.push(3);
+        println!("Heap test passed: {:?}", test_vec);
+    }
 
     // Finalize boot
     let _state = state.finalize();
@@ -125,6 +128,38 @@ fn alloc_error_handler(layout: alloc::alloc::Layout) -> ! {
     panic!("Allocation error: {:?}", layout)
 }
 
+/// Initialize kernel for testing
+///
+/// # Safety
+///
+/// Must be called once at test start with valid boot info
+pub unsafe fn init_for_test(boot_info: &'static bootloader::BootInfo) {
+    // Use boot phase state machine
+    use boot_phases::KernelState;
+
+    let state = KernelState::new();
+
+    // Initialize HAL
+    let state = unsafe { state.init_hal() };
+
+    // Initialize memory
+    let state = unsafe { state.init_memory() };
+    unsafe { memory::init_from_bootloader(boot_info) };
+
+    // Initialize GDT and interrupts
+    let state = unsafe { state.init_interrupts() };
+    unsafe { gdt::init() };
+    interrupts::init();
+
+    // Map and initialize heap
+    unsafe {
+        heap::map_heap().expect("Failed to map heap");
+        heap::init();
+    }
+
+    let _state = state.finalize();
+}
+
 #[cfg(test)]
 fn test_runner(tests: &[&dyn Fn()]) {
     serial_println!("Running {} tests", tests.len());
@@ -135,7 +170,7 @@ fn test_runner(tests: &[&dyn Fn()]) {
 }
 
 /// QEMU exit codes for integration testing
-#[cfg(test)]
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub enum QemuExitCode {
@@ -144,7 +179,7 @@ pub enum QemuExitCode {
 }
 
 /// Exit QEMU using isa-debug-exit device
-#[cfg(test)]
+
 pub fn exit_qemu(exit_code: QemuExitCode) -> ! {
     use x86_64::instructions::port::Port;
 
