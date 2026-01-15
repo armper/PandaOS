@@ -22,7 +22,8 @@
     feature = "shell-smoke",
     feature = "vfs-cat-smoke",
     feature = "fork-exec-smoke",
-    feature = "pipe-smoke"
+    feature = "pipe-smoke",
+    feature = "ctrlc-smoke"
 ))]
 use core::sync::atomic::{AtomicUsize, Ordering};
 use panda_hal::serial_println;
@@ -320,29 +321,38 @@ const SCRIPTED_INPUT: &[u8] = b"cat /etc/version\ntrue\nexit\n";
 #[cfg(feature = "pipe-smoke")]
 const SCRIPTED_INPUT: &[u8] = b"echo hello | wc\nexit\n";
 
+#[cfg(feature = "ctrlc-smoke")]
+const SCRIPTED_INPUT: &[u8] = b"echo test\x03\nhelp\nexit\n";
+
 #[cfg(all(
     feature = "shell-smoke",
-    any(feature = "vfs-cat-smoke", feature = "fork-exec-smoke", feature = "pipe-smoke")
+    any(feature = "vfs-cat-smoke", feature = "fork-exec-smoke", feature = "pipe-smoke", feature = "ctrlc-smoke")
 ))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, and pipe-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, and ctrlc-smoke are mutually exclusive"
 );
 
-#[cfg(all(feature = "vfs-cat-smoke", any(feature = "fork-exec-smoke", feature = "pipe-smoke")))]
+#[cfg(all(feature = "vfs-cat-smoke", any(feature = "fork-exec-smoke", feature = "pipe-smoke", feature = "ctrlc-smoke")))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, and pipe-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, and ctrlc-smoke are mutually exclusive"
 );
 
-#[cfg(all(feature = "fork-exec-smoke", feature = "pipe-smoke"))]
+#[cfg(all(feature = "fork-exec-smoke", any(feature = "pipe-smoke", feature = "ctrlc-smoke")))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, and pipe-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, and ctrlc-smoke are mutually exclusive"
+);
+
+#[cfg(all(feature = "pipe-smoke", feature = "ctrlc-smoke"))]
+compile_error!(
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, and ctrlc-smoke are mutually exclusive"
 );
 
 #[cfg(any(
     feature = "shell-smoke",
     feature = "vfs-cat-smoke",
     feature = "fork-exec-smoke",
-    feature = "pipe-smoke"
+    feature = "pipe-smoke",
+    feature = "ctrlc-smoke"
 ))]
 static SCRIPTED_POS: AtomicUsize = AtomicUsize::new(0);
 
@@ -351,7 +361,8 @@ fn read_byte() -> Option<u8> {
         feature = "shell-smoke",
         feature = "vfs-cat-smoke",
         feature = "fork-exec-smoke",
-        feature = "pipe-smoke"
+        feature = "pipe-smoke",
+        feature = "ctrlc-smoke"
     ))]
     {
         let pos = SCRIPTED_POS.fetch_add(1, Ordering::Relaxed);
@@ -362,7 +373,8 @@ fn read_byte() -> Option<u8> {
         feature = "shell-smoke",
         feature = "vfs-cat-smoke",
         feature = "fork-exec-smoke",
-        feature = "pipe-smoke"
+        feature = "pipe-smoke",
+        feature = "ctrlc-smoke"
     )))]
     {
         return panda_hal::serial::serial_read_byte();

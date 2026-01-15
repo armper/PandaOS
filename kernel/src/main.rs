@@ -827,11 +827,14 @@ fn exit_handler(status: i32) -> ! {
         serial_println!("TEST PASS fork_exec_smoke");
         #[cfg(feature = "pipe-smoke")]
         serial_println!("TEST PASS pipe_smoke");
+        #[cfg(feature = "ctrlc-smoke")]
+        serial_println!("TEST PASS ctrlc_smoke");
         #[cfg(not(any(
             feature = "shell-smoke",
             feature = "vfs-cat-smoke",
             feature = "fork-exec-smoke",
-            feature = "pipe-smoke"
+            feature = "pipe-smoke",
+            feature = "ctrlc-smoke"
         )))]
         serial_println!("TEST PASS exec_smoke");
         let kernel_pt = usermode::kernel_page_table_phys();

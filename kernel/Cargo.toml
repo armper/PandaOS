@@ -24,6 +24,7 @@ shell-smoke = []
 vfs-cat-smoke = []
 fork-exec-smoke = []
 pipe-smoke = []
+ctrlc-smoke = []
 build-userland = []
 
 [package.metadata.bootimage]
