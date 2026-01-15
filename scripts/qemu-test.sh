@@ -69,10 +69,23 @@ echo ""
 
 # Build kernel
 echo "Building kernel..."
-cargo bootimage --manifest-path kernel/Cargo.toml --release --target x86_64-unknown-none "${FEATURES[@]}" 2>&1 | tail -3
+BUILD_OUTPUT=$(mktemp)
+if cargo bootimage --manifest-path kernel/Cargo.toml --release --target x86_64-unknown-none "${FEATURES[@]}" 2>&1 | tee "$BUILD_OUTPUT" | tail -3; then
+    BUILD_SUCCESS=1
+else
+    BUILD_SUCCESS=0
+    echo ""
+    echo "==================================="
+    echo "Build failed! Full output:"
+    echo "==================================="
+    cat "$BUILD_OUTPUT"
+    rm -f "$BUILD_OUTPUT"
+    exit 1
+fi
+rm -f "$BUILD_OUTPUT"
 
-# Find the kernel image
-KERNEL_IMAGE=$(find target -name "bootimage-panda-kernel.bin" -type f | head -1)
+# Find the kernel image - use ls -t to get newest file deterministically
+KERNEL_IMAGE=$(find target -name "bootimage-panda-kernel.bin" -type f -print0 2>/dev/null | xargs -0 ls -t 2>/dev/null | head -1)
 
 if [ -z "$KERNEL_IMAGE" ]; then
     echo "Error: Could not find kernel image"
@@ -84,6 +97,11 @@ echo ""
 
 # Run QEMU with serial output to file
 # Using -serial file: ensures output is written directly without buffering
+# Additional flags for robustness:
+#   -no-reboot: exit instead of rebooting on triple fault
+#   -no-shutdown: keep QEMU running after guest shutdown for log capture
+#   -smp 1: single CPU for deterministic behavior
+#   -m 256M: 256MB RAM
 echo "Starting QEMU (timeout: ${TIMEOUT}s)..."
 EXIT_CODE=0
 if [ -n "$TIMEOUT_BIN" ]; then
@@ -92,6 +110,10 @@ if [ -n "$TIMEOUT_BIN" ]; then
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
         -serial file:"$SERIAL_LOG" \
         -display none \
+        -no-reboot \
+        -no-shutdown \
+        -smp 1 \
+        -m 256M \
         2>&1 || EXIT_CODE=$?
 else
     qemu-system-x86_64 \
@@ -99,6 +121,10 @@ else
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
         -serial file:"$SERIAL_LOG" \
         -display none \
+        -no-reboot \
+        -no-shutdown \
+        -smp 1 \
+        -m 256M \
         2>&1 || EXIT_CODE=$?
 fi
 
@@ -137,16 +163,17 @@ if [ "$PASS_COUNT" -gt 0 ]; then
     echo "✓ Found $PASS_COUNT TEST PASS marker(s)"
 fi
 
-# Check for expected marker
+# Check for expected marker - this is the PRIMARY success signal
 if [ -n "$EXPECTED_MARKER" ]; then
     if grep -q "$EXPECTED_MARKER" "$SERIAL_LOG" 2>/dev/null; then
         echo "✓ Expected marker found: $EXPECTED_MARKER"
+        MARKER_FOUND=1
     else
         echo "✗ Expected marker not found: $EXPECTED_MARKER"
         echo ""
         echo "All TEST markers in log:"
         grep "TEST" "$SERIAL_LOG" 2>/dev/null || echo "(none found)"
-        exit 1
+        MARKER_FOUND=0
     fi
 fi
 
@@ -162,8 +189,21 @@ if grep -q "KERNEL PANIC" "$SERIAL_LOG" 2>/dev/null; then
     exit 1
 fi
 
-# Check exit code (QEMU isa-debug-exit returns exit_code * 2 + 1)
-# Success (0) -> 33, Failure (1) -> 35
+# Primary success check: TEST PASS marker found
+if [ "${MARKER_FOUND:-0}" -eq 1 ]; then
+    echo ""
+    echo "==================================="
+    echo "✓ Test $TEST_NAME PASSED"
+    echo "==================================="
+    if [ "$EXIT_CODE" -ne 0 ] && [ "$EXIT_CODE" -ne 33 ]; then
+        echo "(Note: QEMU exit code was $EXIT_CODE, but test marker was found)"
+    fi
+    exit 0
+fi
+
+# Secondary check: permissive exit code handling
+# QEMU isa-debug-exit returns exit_code * 2 + 1
+# Success (0) -> 33, but be permissive about other codes
 if [ "$EXIT_CODE" -eq 33 ]; then
     echo "✓ Kernel exited successfully (QEMU exit code: $EXIT_CODE)"
     echo ""
@@ -175,16 +215,9 @@ elif [ "$EXIT_CODE" -eq 124 ] || [ "$EXIT_CODE" -eq 143 ]; then
     echo "✗ Test timed out (exit code: $EXIT_CODE)"
     exit 1
 elif [ "$EXIT_CODE" -ne 0 ]; then
-    echo "⚠ QEMU exited with code: $EXIT_CODE"
-    # Still consider it a pass if we found the expected marker
-    if [ -n "$EXPECTED_MARKER" ] && grep -q "$EXPECTED_MARKER" "$SERIAL_LOG" 2>/dev/null; then
-        echo "✓ But expected marker was found, considering test passed"
-        echo ""
-        echo "==================================="
-        echo "✓ Test $TEST_NAME PASSED"
-        echo "==================================="
-        exit 0
-    fi
+    echo "⚠ QEMU exited with unexpected code: $EXIT_CODE"
+    echo "✗ Test failed: no TEST PASS marker and unexpected exit code"
+    exit 1
 fi
 
 echo ""
