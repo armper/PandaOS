@@ -11,6 +11,7 @@
 
 use crate::context::CpuContext;
 use crate::elf::ElfInfo;
+use crate::fs::FdTable;
 use panda_hal::pid::{Pid, PidAllocator};
 
 /// Process state
@@ -40,6 +41,8 @@ pub struct Process {
     pub page_table_phys: u64,
     /// Saved CPU context for context switching
     pub context: CpuContext,
+    /// Per-process file descriptor table
+    pub fd_table: FdTable,
 }
 
 impl Process {
@@ -111,6 +114,7 @@ impl Process {
             kernel_stack_ptr,
             page_table_phys,
             context,
+            fd_table: FdTable::new(),
         })
     }
 
@@ -230,6 +234,7 @@ mod tests {
             kernel_stack_ptr: 0xFFFF_FFFF_8000_0000,
             page_table_phys: 0x1000,
             context: crate::context::CpuContext::zero(),
+            fd_table: FdTable::new(),
         };
 
         assert_eq!(process.state, ProcessState::Ready);

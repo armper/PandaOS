@@ -223,6 +223,7 @@ mod tests {
             kernel_stack_ptr: 0xFFFFFFFF80000000,
             page_table_phys: 0x1000,
             context: crate::context::CpuContext::zero(),
+            fd_table: crate::fs::FdTable::new(),
         }
     }
 

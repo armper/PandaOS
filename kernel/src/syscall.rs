@@ -18,8 +18,8 @@
 //! - Syscalls preserve all GPRs except RAX (return value) and RCX/R11 (syscall clobbers)
 
 // Import macros for logging
-use panda_hal::{serial_print, serial_println};
-#[cfg(feature = "shell-smoke")]
+use panda_hal::serial_println;
+#[cfg(any(feature = "shell-smoke", feature = "vfs-cat-smoke"))]
 use core::sync::atomic::{AtomicUsize, Ordering};
 use spin::Once;
 
@@ -199,9 +199,11 @@ pub fn handle_syscall(
         SyscallNumber::Exit => sys_exit(arg1 as i32),
         SyscallNumber::Read => sys_read(arg1 as i32, arg2, arg3),
         SyscallNumber::Write => sys_write(arg1 as i32, arg2, arg3),
+        SyscallNumber::Open => sys_open(arg1, arg2, arg3),
+        SyscallNumber::Close => sys_close(arg1 as i32),
         SyscallNumber::Getpid => sys_getpid(),
         SyscallNumber::Yield => sys_yield(),
-        SyscallNumber::Execve => sys_exec(arg1),
+        SyscallNumber::Execve => sys_exec(arg1, arg2),
         // All other syscalls return ENOSYS for now
         _ => Err(ErrorCode::ENOSYS),
     };
@@ -268,31 +270,34 @@ fn sys_write(fd: i32, buf: u64, count: u64) -> SyscallResult {
     let copied = crate::usermode::copy_user_bytes(buf, count, &mut local_buf)?;
     let slice = &local_buf[..copied];
 
-    // Write to serial output
+    // Write raw bytes to serial output
     for &byte in slice {
-        // Only print printable ASCII and newlines
-        if (0x20..=0x7e).contains(&byte) || byte == b'\n' || byte == b'\r' || byte == b'\t' {
-            serial_print!("{}", byte as char);
-        }
+        panda_hal::serial::write_byte_raw(byte);
     }
 
     Ok(count as u64)
 }
 
 #[cfg(feature = "shell-smoke")]
-const SHELL_SMOKE_SCRIPT: &[u8] = b"help\nexit\n";
+const SCRIPTED_INPUT: &[u8] = b"help\nexit\n";
 
-#[cfg(feature = "shell-smoke")]
-static SHELL_SMOKE_POS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "vfs-cat-smoke")]
+const SCRIPTED_INPUT: &[u8] = b"cat /etc/motd\nexit\n";
+
+#[cfg(all(feature = "shell-smoke", feature = "vfs-cat-smoke"))]
+compile_error!("shell-smoke and vfs-cat-smoke are mutually exclusive");
+
+#[cfg(any(feature = "shell-smoke", feature = "vfs-cat-smoke"))]
+static SCRIPTED_POS: AtomicUsize = AtomicUsize::new(0);
 
 fn read_byte() -> Option<u8> {
-    #[cfg(feature = "shell-smoke")]
+    #[cfg(any(feature = "shell-smoke", feature = "vfs-cat-smoke"))]
     {
-        let pos = SHELL_SMOKE_POS.fetch_add(1, Ordering::Relaxed);
-        return SHELL_SMOKE_SCRIPT.get(pos).copied();
+        let pos = SCRIPTED_POS.fetch_add(1, Ordering::Relaxed);
+        return SCRIPTED_INPUT.get(pos).copied();
     }
 
-    #[cfg(not(feature = "shell-smoke"))]
+    #[cfg(not(any(feature = "shell-smoke", feature = "vfs-cat-smoke")))]
     {
         return panda_hal::serial::serial_read_byte();
     }
@@ -300,7 +305,45 @@ fn read_byte() -> Option<u8> {
 
 /// sys_read - Read from file descriptor
 fn sys_read(fd: i32, buf: u64, count: u64) -> SyscallResult {
-    if fd != 0 {
+    if fd == 0 {
+        if count == 0 {
+            return Ok(0);
+        }
+
+        if buf == 0 {
+            return Err(ErrorCode::EFAULT);
+        }
+
+        let count = usize::try_from(count).map_err(|_| ErrorCode::EINVAL)?;
+        if count > 4096 {
+            return Err(ErrorCode::EINVAL);
+        }
+
+        let mut read = 0usize;
+        loop {
+            match read_byte() {
+                Some(byte) => {
+                    let tmp = [byte];
+                    let dst = buf.checked_add(read as u64).ok_or(ErrorCode::EFAULT)?;
+                    crate::usermode::copy_to_user_bytes(dst, &tmp)?;
+                    read += 1;
+                    if read == count {
+                        break;
+                    }
+                }
+                None => {
+                    if read > 0 {
+                        break;
+                    }
+                    core::hint::spin_loop();
+                }
+            }
+        }
+
+        return Ok(read as u64);
+    }
+
+    if fd == 1 || fd == 2 {
         return Err(ErrorCode::EBADF);
     }
 
@@ -308,37 +351,34 @@ fn sys_read(fd: i32, buf: u64, count: u64) -> SyscallResult {
         return Ok(0);
     }
 
-    if buf == 0 {
-        return Err(ErrorCode::EFAULT);
+    if let Some(read_fn) = READ_HANDLER.get() {
+        read_fn(fd, buf, count)
+    } else {
+        Err(ErrorCode::ENOSYS)
     }
+}
 
-    let count = usize::try_from(count).map_err(|_| ErrorCode::EINVAL)?;
-    if count > 4096 {
-        return Err(ErrorCode::EINVAL);
+/// sys_open - Open a file path (read-only)
+fn sys_open(path_ptr: u64, _flags: u64, _mode: u64) -> SyscallResult {
+    const MAX_PATH_LEN: usize = 64;
+    let mut path_buf = [0u8; MAX_PATH_LEN];
+
+    let path = crate::usermode::copy_user_cstr(path_ptr, &mut path_buf)?;
+
+    if let Some(open_fn) = OPEN_HANDLER.get() {
+        open_fn(path)
+    } else {
+        Err(ErrorCode::ENOSYS)
     }
+}
 
-    let mut read = 0usize;
-    loop {
-        match read_byte() {
-            Some(byte) => {
-                let tmp = [byte];
-                let dst = buf.checked_add(read as u64).ok_or(ErrorCode::EFAULT)?;
-                crate::usermode::copy_to_user_bytes(dst, &tmp)?;
-                read += 1;
-                if read == count {
-                    break;
-                }
-            }
-            None => {
-                if read > 0 {
-                    break;
-                }
-                core::hint::spin_loop();
-            }
-        }
+/// sys_close - Close a file descriptor
+fn sys_close(fd: i32) -> SyscallResult {
+    if let Some(close_fn) = CLOSE_HANDLER.get() {
+        close_fn(fd)
+    } else {
+        Err(ErrorCode::ENOSYS)
     }
-
-    Ok(read as u64)
 }
 
 /// sys_getpid - Get process ID
@@ -359,15 +399,22 @@ fn sys_yield() -> SyscallResult {
     Ok(0)
 }
 
-/// sys_exec - Replace the current process image
-fn sys_exec(path_ptr: u64) -> SyscallResult {
+/// sys_exec - Replace the current process image with an optional argument string
+fn sys_exec(path_ptr: u64, arg_ptr: u64) -> SyscallResult {
     const MAX_PATH_LEN: usize = 64;
+    const MAX_ARG_LEN: usize = 128;
     let mut path_buf = [0u8; MAX_PATH_LEN];
+    let mut arg_buf = [0u8; MAX_ARG_LEN];
 
     let path = crate::usermode::copy_user_cstr(path_ptr, &mut path_buf)?;
+    let arg = if arg_ptr == 0 {
+        None
+    } else {
+        Some(crate::usermode::copy_user_cstr(arg_ptr, &mut arg_buf)?)
+    };
 
     if let Some(exec_fn) = EXEC_HANDLER.get() {
-        match exec_fn(path) {
+        match exec_fn(path, arg) {
             Ok(()) => Err(ErrorCode::EIO),
             Err(err) => Err(err),
         }
@@ -378,7 +425,10 @@ fn sys_exec(path_ptr: u64) -> SyscallResult {
 
 /// Yield handler function pointer for scheduler integration
 static YIELD_HANDLER: Once<fn()> = Once::new();
-static EXEC_HANDLER: Once<fn(&str) -> Result<(), ErrorCode>> = Once::new();
+static EXEC_HANDLER: Once<fn(&str, Option<&str>) -> Result<(), ErrorCode>> = Once::new();
+static OPEN_HANDLER: Once<fn(&str) -> SyscallResult> = Once::new();
+static READ_HANDLER: Once<fn(i32, u64, u64) -> SyscallResult> = Once::new();
+static CLOSE_HANDLER: Once<fn(i32) -> SyscallResult> = Once::new();
 
 /// Set the yield handler for syscall yield
 ///
@@ -390,8 +440,24 @@ pub fn set_yield_handler(handler: fn()) {
 /// Set the exec handler for syscall execve
 ///
 /// Must be called before any user processes run.
-pub fn set_exec_handler(handler: fn(&str) -> Result<(), ErrorCode>) {
+/// The second argument is an optional single argument string.
+pub fn set_exec_handler(handler: fn(&str, Option<&str>) -> Result<(), ErrorCode>) {
     EXEC_HANDLER.call_once(|| handler);
+}
+
+/// Set the open handler for syscall open
+pub fn set_open_handler(handler: fn(&str) -> SyscallResult) {
+    OPEN_HANDLER.call_once(|| handler);
+}
+
+/// Set the read handler for syscall read on file descriptors
+pub fn set_read_handler(handler: fn(i32, u64, u64) -> SyscallResult) {
+    READ_HANDLER.call_once(|| handler);
+}
+
+/// Set the close handler for syscall close
+pub fn set_close_handler(handler: fn(i32) -> SyscallResult) {
+    CLOSE_HANDLER.call_once(|| handler);
 }
 
 #[cfg(test)]

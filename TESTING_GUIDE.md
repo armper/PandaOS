@@ -137,9 +137,27 @@ SHELL_SMOKE=1 ./scripts/qemu-test.sh
 **Expected Output (serial):**
 ```
 panda> help
-commands: help, echo, exit
+commands: help, echo, cat, exit
 panda> exit
 TEST PASS shell_smoke
+```
+
+### VFS Cat Smoke (QEMU)
+
+This boots the kernel, runs `/init`, execs `/bin/sh`, and feeds scripted input to validate
+the read-only VFS via `/bin/cat`.
+
+```bash
+VFS_CAT_SMOKE=1 ./scripts/qemu-test.sh
+```
+
+**Expected Output (serial, excerpt):**
+```
+panda> cat /etc/motd
+Welcome to PandaOS.
+Type 'help' for commands.
+panda> exit
+TEST PASS vfs_cat_smoke
 ```
 
 ### Current Test Status

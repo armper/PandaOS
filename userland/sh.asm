@@ -5,6 +5,7 @@ BITS 64
 
 %define SYS_READ 0
 %define SYS_WRITE 1
+%define SYS_EXECVE 59
 %define SYS_EXIT 60
 
 %define STDIN 0
@@ -124,30 +125,54 @@ check_exit:
 
 check_echo:
     cmp r12, 4
-    jl cmd_unknown
+    jl check_cat
     mov al, [r13]
     cmp al, 'e'
-    jne cmd_unknown
+    jne check_cat
     mov al, [r13 + 1]
     cmp al, 'c'
-    jne cmd_unknown
+    jne check_cat
     mov al, [r13 + 2]
     cmp al, 'h'
-    jne cmd_unknown
+    jne check_cat
     mov al, [r13 + 3]
     cmp al, 'o'
-    jne cmd_unknown
+    jne check_cat
 
     cmp r12, 4
     je cmd_echo_empty
     mov al, [r13 + 4]
     cmp al, ' '
-    jne cmd_unknown
+    jne check_cat
 
     lea rsi, [r13 + 5]
     mov rdx, r12
     sub rdx, 5
     jmp cmd_echo_arg
+
+check_cat:
+    cmp r12, 3
+    jl cmd_unknown
+    mov al, [r13]
+    cmp al, 'c'
+    jne cmd_unknown
+    mov al, [r13 + 1]
+    cmp al, 'a'
+    jne cmd_unknown
+    mov al, [r13 + 2]
+    cmp al, 't'
+    jne cmd_unknown
+
+    cmp r12, 3
+    je cmd_cat_usage
+    mov al, [r13 + 3]
+    cmp al, ' '
+    jne cmd_unknown
+    cmp r12, 4
+    je cmd_cat_usage
+
+    lea rsi, [r13 + 4]
+    jmp cmd_cat
 
 cmd_help:
     mov rax, SYS_WRITE
@@ -190,10 +215,31 @@ cmd_unknown:
     syscall
     jmp main_loop
 
+cmd_cat_usage:
+    mov rax, SYS_WRITE
+    mov rdi, STDOUT
+    lea rsi, [rel cat_usage]
+    mov rdx, cat_usage_len
+    syscall
+    jmp main_loop
+
+cmd_cat:
+    mov rax, SYS_EXECVE
+    lea rdi, [rel cat_path]
+    mov rdx, 0
+    syscall
+
+    mov rax, SYS_WRITE
+    mov rdi, STDOUT
+    lea rsi, [rel exec_fail]
+    mov rdx, exec_fail_len
+    syscall
+    jmp main_loop
+
 section .rodata
 prompt: db "panda> "
 prompt_len equ $ - prompt
-help_text: db "commands: help, echo, exit", 0x0D, 0x0A
+help_text: db "commands: help, echo, cat, exit", 0x0D, 0x0A
 help_len equ $ - help_text
 unknown_text: db "command not found", 0x0D, 0x0A
 unknown_len equ $ - unknown_text
@@ -201,6 +247,11 @@ bs_seq: db 0x08, ' ', 0x08
 bs_seq_len equ $ - bs_seq
 newline: db 0x0D, 0x0A
 newline_len equ $ - newline
+cat_usage: db "usage: cat <path>", 0x0D, 0x0A
+cat_usage_len equ $ - cat_usage
+exec_fail: db "exec failed", 0x0D, 0x0A
+exec_fail_len equ $ - exec_fail
+cat_path: db "/bin/cat", 0
 
 section .bss
 line_buf: resb BUF_SIZE

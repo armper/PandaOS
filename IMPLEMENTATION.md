@@ -142,6 +142,7 @@ PandaOS is a Unix-like x86_64 kernel written in Rust with a focus on:
   - **page_table_reservation_smoke** - page table frame tracking and reservation
   - **yield_cooperative_smoke** - cooperative multitasking via yield()
   - **shell_smoke** - init → exec `/bin/sh` → scripted help/exit
+  - **vfs_cat_smoke** - init → exec `/bin/sh` → `cat /etc/motd` → exit
 
 #### 4. Core Kernel Features
 - [x] **Process management**:
@@ -155,7 +156,7 @@ PandaOS is a Unix-like x86_64 kernel written in Rust with a focus on:
 - [x] **System call interface**:
   - syscall/sysret infrastructure via MSRs
   - Linux x86_64 ABI compatibility
-  - Implemented: read(), write(), exit(), getpid(), yield(), execve()
+  - Implemented: read(), write(), open(), close(), exit(), getpid(), yield(), execve()
   - Syscall entry/exit with explicit context save/restore
 - [x] **GDT with user segments**:
   - Kernel code/data segments (ring 0)
@@ -170,9 +171,11 @@ PandaOS is a Unix-like x86_64 kernel written in Rust with a focus on:
   - hello1.asm - scheduler test with yield
   - hello2.asm - scheduler test with yield
   - init.asm - exec stub for `/bin/sh`
-  - sh.asm - minimal REPL (help/echo/exit)
+  - sh.asm - minimal REPL (help/echo/cat/exit)
+  - cat.asm - read-only file dump utility
   - Build system to create static ELF executables
   - Embedding mechanism via build.rs
+  - Embedded `/etc/motd` and `/etc/version` text files
 - [x] **Scheduler and Cooperative Multitasking**:
   - Round-robin scheduler implementation
   - CPU context save/restore

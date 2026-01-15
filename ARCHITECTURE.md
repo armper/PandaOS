@@ -37,6 +37,7 @@ The main kernel crate contains:
 - **main.rs**: Kernel entry point and initialization
 - **interrupts.rs**: Interrupt Descriptor Table (IDT) and exception handling
 - **memory.rs**: Memory management subsystem
+- **fs.rs**: In-memory VFS and per-process file descriptors (see [VFS.md](VFS.md))
 - Additional modules for process management, syscalls, etc. (future)
 
 **Invariants:**
@@ -113,7 +114,7 @@ None yet - hardware access is direct. Future refactoring will add:
 ### Syscall Implementation Plan
 
 1. **Phase 1**: Basic syscalls (exit, read/write to serial) - ✅ **COMPLETED**
-2. **Phase 2**: File operations (open, read, write, close)
+2. **Phase 2**: File operations (open/read/close, read-only) - ✅ **COMPLETED**
 3. **Phase 3**: Process management (fork, exec, wait)
 4. **Phase 4**: Advanced features (mmap, signals, etc.)
 
@@ -132,11 +133,25 @@ None yet - hardware access is direct. Future refactoring will add:
 - **rcx, r11**: Preserved by hardware (store user RIP and RFLAGS)
 
 **Implemented Syscalls:**
-- `read(fd, buf, count)` - syscall #0 (stdin from serial, polled)
+- `read(fd, buf, count)` - syscall #0 (stdin from serial; file fds read-only)
 - `write(fd, buf, count)` - syscall #1 (stdout/stderr to serial)
+- `open(path, flags, mode)` - syscall #2 (read-only, absolute paths)
+- `close(fd)` - syscall #3 (closes file descriptors >= 3)
 - `exit(status)` - syscall #60 (terminates process)
 - `getpid()` - syscall #39 (returns process ID)
-- `execve(path)` - syscall #59 (replaces current process image)
+- `execve(path, arg)` - syscall #59 (replaces current process image, single arg string)
+
+## VFS & File Descriptors
+
+**VFS Model:**
+- Static in-memory file table with absolute-path lookup
+- Read-only byte slices for file contents
+- No directories, no writes
+
+**FD Table:**
+- Per-process fixed-size table (16 entries)
+- `fd 0/1/2` are reserved for serial stdio
+- `fd >= 3` are allocated on open and track per-fd offsets
 
 ## Process Model
 

@@ -309,6 +309,9 @@ unsafe fn init_scheduler_and_start() -> ! {
     syscall::set_yield_handler(yield_handler);
     syscall::set_exit_handler(exit_handler);
     syscall::set_exec_handler(exec_handler);
+    syscall::set_open_handler(open_handler);
+    syscall::set_read_handler(read_handler);
+    syscall::set_close_handler(close_handler);
 
     // Unmask timer interrupt (IRQ 0)
     println!("Enabling timer interrupt...");
@@ -387,7 +390,10 @@ fn yield_handler() {
 }
 
 /// Exec handler - called when process replaces its image
-fn exec_handler(path: &str) -> Result<(), syscall::ErrorCode> {
+const EXEC_ARG_ADDR: u64 = 0x7FFF_FFFF_C000;
+const EXEC_ARG_MAX: usize = 128;
+
+fn exec_handler(path: &str, arg: Option<&str>) -> Result<(), syscall::ErrorCode> {
     if !path.starts_with('/') {
         return Err(syscall::ErrorCode::ENOENT);
     }
@@ -405,6 +411,27 @@ fn exec_handler(path: &str) -> Result<(), syscall::ErrorCode> {
         current.replace_image(&elf_info, elf_data).map_err(|_| syscall::ErrorCode::ENOMEM)?;
     }
 
+    // Switch to the new page table so user memory copies target the new image.
+    usermode::switch_page_table(current.page_table_phys);
+
+    // Seed the exec argument at a fixed user address.
+    let mut arg_buf = [0u8; EXEC_ARG_MAX];
+    let arg_len = match arg {
+        Some(value) => {
+            if value.len() + 1 > EXEC_ARG_MAX {
+                return Err(syscall::ErrorCode::EINVAL);
+            }
+            arg_buf[..value.len()].copy_from_slice(value.as_bytes());
+            arg_buf[value.len()] = 0;
+            value.len() + 1
+        }
+        None => {
+            arg_buf[0] = 0;
+            1
+        }
+    };
+    crate::usermode::copy_to_user_bytes(EXEC_ARG_ADDR, &arg_buf[..arg_len])?;
+
     // SAFETY: Scheduler is initialized and interrupts are disabled here.
     unsafe {
         usermode::set_current_syscall_context(core::ptr::addr_of_mut!(current.context));
@@ -414,6 +441,28 @@ fn exec_handler(path: &str) -> Result<(), syscall::ErrorCode> {
     unsafe {
         usermode::switch_to_user(core::ptr::addr_of!(current.context), current.page_table_phys);
     }
+}
+
+fn open_handler(path: &str) -> syscall::SyscallResult {
+    let scheduler = unsafe { get_scheduler() };
+    let current = scheduler.current_process_mut().ok_or(syscall::ErrorCode::ESRCH)?;
+    fs::open_path(&mut current.fd_table, path)
+}
+
+fn read_handler(fd: i32, buf: u64, count: u64) -> syscall::SyscallResult {
+    let scheduler = unsafe { get_scheduler() };
+    let current = scheduler.current_process_mut().ok_or(syscall::ErrorCode::ESRCH)?;
+    let count = usize::try_from(count).map_err(|_| syscall::ErrorCode::EINVAL)?;
+    let data = current.fd_table.read(fd, count)?;
+    crate::usermode::copy_to_user_bytes(buf, data)?;
+    Ok(data.len() as u64)
+}
+
+fn close_handler(fd: i32) -> syscall::SyscallResult {
+    let scheduler = unsafe { get_scheduler() };
+    let current = scheduler.current_process_mut().ok_or(syscall::ErrorCode::ESRCH)?;
+    current.fd_table.close(fd)?;
+    Ok(0)
 }
 
 /// Exit handler - called when process exits
@@ -469,7 +518,9 @@ fn exit_handler(status: i32) -> ! {
         // No more processes - report success and exit QEMU deterministically.
         #[cfg(feature = "shell-smoke")]
         serial_println!("TEST PASS shell_smoke");
-        #[cfg(not(feature = "shell-smoke"))]
+        #[cfg(feature = "vfs-cat-smoke")]
+        serial_println!("TEST PASS vfs_cat_smoke");
+        #[cfg(not(any(feature = "shell-smoke", feature = "vfs-cat-smoke")))]
         serial_println!("TEST PASS exec_smoke");
         let kernel_pt = usermode::kernel_page_table_phys();
         let current_cr3 =

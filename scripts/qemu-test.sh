@@ -22,8 +22,18 @@ echo "==================================="
 # Build kernel first
 echo "Building kernel..."
 FEATURES=()
+EXPECTED_MARKER=""
+if [ "${SHELL_SMOKE:-0}" -eq 1 ] && [ "${VFS_CAT_SMOKE:-0}" -eq 1 ]; then
+    echo "Error: SHELL_SMOKE and VFS_CAT_SMOKE are mutually exclusive"
+    exit 1
+fi
 if [ "${SHELL_SMOKE:-0}" -eq 1 ]; then
     FEATURES+=(--features shell-smoke)
+    EXPECTED_MARKER="TEST PASS shell_smoke"
+fi
+if [ "${VFS_CAT_SMOKE:-0}" -eq 1 ]; then
+    FEATURES+=(--features vfs-cat-smoke)
+    EXPECTED_MARKER="TEST PASS vfs_cat_smoke"
 fi
 cargo bootimage --manifest-path kernel/Cargo.toml --release --target x86_64-unknown-none "${FEATURES[@]}" 2>&1 | tail -3
 
@@ -68,6 +78,11 @@ echo "==================================="
 if grep -q "TEST PASS" "$SERIAL_LOG"; then
     PASS_COUNT=$(grep -c "TEST PASS" "$SERIAL_LOG")
     echo "✓ Tests passed: $PASS_COUNT"
+fi
+
+if [ -n "$EXPECTED_MARKER" ] && ! grep -q "$EXPECTED_MARKER" "$SERIAL_LOG"; then
+    echo "✗ Expected marker not found: $EXPECTED_MARKER"
+    exit 1
 fi
 
 if grep -q "TEST FAIL" "$SERIAL_LOG"; then

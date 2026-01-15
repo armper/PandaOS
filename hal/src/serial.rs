@@ -69,6 +69,17 @@ pub fn serial_read_byte() -> Option<u8> {
     byte
 }
 
+/// Write a raw byte to the serial port without UTF-8 translation.
+pub fn write_byte_raw(byte: u8) {
+    use x86_64::instructions::interrupts;
+
+    interrupts::without_interrupts(|| {
+        if let Some(serial) = SERIAL1.lock().as_mut() {
+            serial.send_raw(byte);
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

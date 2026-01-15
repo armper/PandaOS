@@ -44,7 +44,12 @@ echo "Building sh..."
 nasm -f elf64 sh.asm -o build/sh.o
 $LINKER -o build/sh build/sh.o -static -nostdlib --entry=_start
 
-cp build/hello build/hello1 build/hello2 build/init build/sh bin/
+# Build cat program
+echo "Building cat..."
+nasm -f elf64 cat.asm -o build/cat.o
+$LINKER -o build/cat build/cat.o -static -nostdlib --entry=_start
+
+cp build/hello build/hello1 build/hello2 build/init build/sh build/cat bin/
 
 echo "Userland programs built successfully!"
 ls -lh build/

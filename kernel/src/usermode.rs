@@ -15,7 +15,7 @@ use crate::{gdt, syscall};
 use core::sync::atomic::{AtomicU64, Ordering};
 use x86_64::registers::model_specific::{Efer, EferFlags, LStar, SFMask, Star};
 use x86_64::registers::rflags::RFlags;
-use x86_64::VirtAddr;
+use x86_64::{PhysAddr, VirtAddr};
 
 /// Current process syscall context pointer (arch-local, single CPU)
 static mut CURRENT_CONTEXT_PTR: *mut CpuContext = core::ptr::null_mut();
@@ -104,6 +104,24 @@ pub fn set_kernel_page_table_phys(phys: u64) {
 /// Read the stored kernel page table physical address.
 pub fn kernel_page_table_phys() -> u64 {
     KERNEL_PAGE_TABLE_PHYS.load(Ordering::Relaxed)
+}
+
+/// Switch the active page table (CR3) while staying in kernel mode.
+pub fn switch_page_table(page_table_phys: u64) {
+    use x86_64::registers::control::Cr3;
+    use x86_64::structures::paging::PhysFrame;
+
+    let phys = PhysAddr::new(page_table_phys);
+    let (current_frame, flags) = Cr3::read();
+
+    if current_frame.start_address() == phys {
+        return;
+    }
+
+    // SAFETY: Caller ensures page table is valid and interrupts are disabled.
+    unsafe {
+        Cr3::write(PhysFrame::containing_address(phys), flags);
+    }
 }
 
 /// Queue an exited process for reaping after a CR3 switch.
