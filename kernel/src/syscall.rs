@@ -23,7 +23,8 @@
     feature = "vfs-cat-smoke",
     feature = "fork-exec-smoke",
     feature = "pipe-smoke",
-    feature = "ctrlc-smoke"
+    feature = "ctrlc-smoke",
+    feature = "ls-smoke"
 ))]
 use core::sync::atomic::{AtomicUsize, Ordering};
 use panda_hal::serial_println;

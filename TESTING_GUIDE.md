@@ -396,3 +396,54 @@ CTRLC_SMOKE=1 ./scripts/qemu-test.sh
 - Kernel has SIGINT support but shell doesn't yet send signals to children
 - Full job control (SIGINT to foreground child) not yet implemented
 
+## LS / Directory Listing Testing
+
+### ls_smoke Test
+
+**Purpose**: Verify directory support and ls command work correctly.
+
+**Test Flow**:
+1. Shell starts with prompt
+2. User types "ls" command
+3. Shell resolves to `/bin/ls` and executes
+4. ls opens "/" directory
+5. ls calls getdents64 to read directory entries
+6. ls prints entry names (bin, etc) with newlines
+7. Shell exits cleanly with "exit" command
+
+**Expected Output**:
+```
+panda> ls
+bin
+etc
+panda> exit
+TEST PASS ls_smoke
+```
+
+**Running the Test**:
+```bash
+LS_SMOKE=1 ./scripts/qemu-test.sh
+```
+
+**Test Input Sequence**:
+```
+"ls\n"    → execute ls command
+"exit\n"  → clean exit
+```
+
+**What's Tested**:
+- Directory support in VFS
+- getdents64 syscall implementation
+- Opening directories with open()
+- Directory entry parsing and listing
+- /bin/ls binary execution
+- Shell command resolution
+- Proper directory fd handling
+
+**Implementation Notes**:
+- VFS contains three directories: `/`, `/bin`, `/etc`
+- getdents64 returns Linux-compatible directory entries
+- Each entry includes: d_ino, d_off, d_reclen, d_type, d_name
+- Directory listing is sequential with per-fd offset tracking
+- ls program uses getdents64 syscall (217) directly
+
