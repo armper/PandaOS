@@ -30,9 +30,19 @@
 - **Zombie(code)**: Process has exited but not yet reaped by parent
 - **Exited(code)**: Process has exited and has no parent (immediate reap)
 
+## Wait States
+
+Processes can be in one of three wait states for blocking operations:
+- **NotWaiting**: Process is not blocked
+- **WaitingForAnyChild**: Process is blocked waiting for any child to exit
+- **WaitingForChild(pid)**: Process is blocked waiting for a specific child
+
+Blocked processes are skipped by the scheduler until they are woken.
+
 ## exit(code)
 - If process has a parent:
   - Mark process state as Zombie(code)
+  - Wake any parent process waiting for this child
   - Process remains in scheduler until parent calls waitpid()
   - Page tables and resources are not freed yet
 - If process has no parent (orphan):
@@ -43,19 +53,25 @@
 - If no runnable processes remain, print test marker and halt
 
 ## waitpid(pid, status_ptr, options)
-- Waits for a child process to exit
+- Waits for a child process to exit (blocking behavior)
 - Supported options:
   - pid = -1: Wait for any child
   - pid > 0: Wait for specific child
-  - options must be 0 (blocking not yet implemented)
+  - options must be 0 (no WNOHANG support yet)
 - If zombie child found:
   - Return child PID
   - Write exit status to user memory (if status_ptr != 0)
   - Free child's page tables and kernel stack (reap)
 - If no zombie children but has children:
-  - Return EINTR (caller should retry)
+  - **Block the parent process** (WaitingForChild state)
+  - Yield CPU to other processes
+  - Wake when child exits or signal received
+  - Retry finding zombie after wake
+  - Return EINTR if still not ready (signal woke us)
 - If no children at all:
   - Return ESRCH (no such process)
+
+**Blocking Behavior**: Unlike the previous busy-wait implementation, waitpid now properly blocks the calling process. The scheduler will skip blocked processes, eliminating CPU spinning. When a child exits, the exit handler wakes any parent waiting for that child.
 
 ## exec(path, arg)
 - Requires an absolute path and a valid ELF in the in-memory FS

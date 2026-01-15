@@ -32,6 +32,17 @@ impl Signal {
     }
 }
 
+/// Wait state for blocking operations
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaitState {
+    /// Process is not waiting
+    NotWaiting,
+    /// Process is waiting for any child to exit
+    WaitingForAnyChild,
+    /// Process is waiting for a specific child to exit
+    WaitingForChild(Pid),
+}
+
 /// Process state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessState {
@@ -53,6 +64,8 @@ pub struct Process {
     pub parent_pid: Option<Pid>,
     /// Process state
     pub state: ProcessState,
+    /// Wait state (for blocking operations)
+    pub wait_state: WaitState,
     /// Entry point address
     pub entry_point: u64,
     /// User stack pointer
@@ -134,6 +147,7 @@ impl Process {
             pid,
             parent_pid: None,
             state: ProcessState::Ready,
+            wait_state: WaitState::NotWaiting,
             entry_point: elf_info.entry_point,
             user_stack_ptr: user_stack_top,
             kernel_stack_ptr,
@@ -233,6 +247,7 @@ impl Process {
             pid: child_pid,
             parent_pid: Some(self.pid),
             state: ProcessState::Ready,
+            wait_state: WaitState::NotWaiting,
             entry_point: self.entry_point,
             user_stack_ptr: self.user_stack_ptr,
             kernel_stack_ptr: kernel_stack_top,
@@ -311,6 +326,37 @@ impl Process {
         }
         false
     }
+
+    /// Check if process is blocked (waiting)
+    pub const fn is_blocked(&self) -> bool {
+        !matches!(self.wait_state, WaitState::NotWaiting)
+    }
+
+    /// Block the process waiting for any child
+    pub fn block_on_any_child(&mut self) {
+        self.wait_state = WaitState::WaitingForAnyChild;
+    }
+
+    /// Block the process waiting for a specific child
+    pub fn block_on_child(&mut self, child_pid: Pid) {
+        self.wait_state = WaitState::WaitingForChild(child_pid);
+    }
+
+    /// Wake the process (unblock)
+    pub fn wake(&mut self) {
+        self.wait_state = WaitState::NotWaiting;
+    }
+
+    /// Check if this process should be woken when a child exits
+    ///
+    /// Returns true if the process is waiting for the given child or any child
+    pub fn should_wake_on_child_exit(&self, child_pid: Pid) -> bool {
+        match self.wait_state {
+            WaitState::WaitingForAnyChild => true,
+            WaitState::WaitingForChild(pid) => pid == child_pid,
+            WaitState::NotWaiting => false,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -344,6 +390,7 @@ mod tests {
             pid: pid_allocator.allocate(),
             parent_pid: None,
             state: ProcessState::Ready,
+            wait_state: WaitState::NotWaiting,
             entry_point: 0x40_0000,
             user_stack_ptr: 0x7FFF_FFFF_F000,
             kernel_stack_ptr: 0xFFFF_FFFF_8000_0000,
@@ -373,6 +420,7 @@ mod tests {
             pid: pid_allocator.allocate(),
             parent_pid: None,
             state: ProcessState::Ready,
+            wait_state: WaitState::NotWaiting,
             entry_point: 0x40_0000,
             user_stack_ptr: 0x7FFF_FFFF_F000,
             kernel_stack_ptr: 0xFFFF_FFFF_8000_0000,
@@ -395,6 +443,7 @@ mod tests {
             pid: pid_allocator.allocate(),
             parent_pid: None,
             state: ProcessState::Ready,
+            wait_state: WaitState::NotWaiting,
             entry_point: 0x40_0000,
             user_stack_ptr: 0x7FFF_FFFF_F000,
             kernel_stack_ptr: 0xFFFF_FFFF_8000_0000,

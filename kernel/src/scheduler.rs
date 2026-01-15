@@ -72,10 +72,10 @@ impl Scheduler {
     ///
     /// Selects the next process from the ready queue in round-robin order.
     /// If a process is currently running, it is moved back to the ready queue
-    /// (unless it has exited).
+    /// (unless it has exited). Blocked processes are skipped.
     ///
     /// This also checks for pending signals and terminates processes that
-    /// receive SIGINT.
+    /// receive SIGINT. Signal delivery can also wake blocked processes.
     ///
     /// # Returns
     ///
@@ -91,6 +91,10 @@ impl Scheduler {
                     // Exit code = 128 + signal number (standard Unix convention)
                     proc.set_exited(128 + crate::process::Signal::SIGINT as i32);
                 } else {
+                    // Wake up if there are pending signals (even if not terminating)
+                    if proc.pending_signals != 0 {
+                        proc.wake();
+                    }
                     proc.state = ProcessState::Ready;
                     self.ready_queue.push_back(proc);
                 }
@@ -98,14 +102,24 @@ impl Scheduler {
             // If exited, drop it (it won't be added back to queue)
         }
 
-        // Get next process from ready queue
-        if let Some(mut next_proc) = self.ready_queue.pop_front() {
-            next_proc.state = ProcessState::Running;
-            self.current = Some(next_proc);
-            self.current.as_mut()
-        } else {
-            None
+        // Find next runnable (not blocked) process from ready queue
+        let ready_count = self.ready_queue.len();
+        for _ in 0..ready_count {
+            if let Some(mut next_proc) = self.ready_queue.pop_front() {
+                if next_proc.is_blocked() {
+                    // Process is blocked, put it back at the end and try next
+                    self.ready_queue.push_back(next_proc);
+                } else {
+                    // Found a runnable process
+                    next_proc.state = ProcessState::Running;
+                    self.current = Some(next_proc);
+                    return self.current.as_mut();
+                }
+            }
         }
+
+        // No runnable processes found
+        None
     }
 
     /// Get a reference to the currently running process
@@ -258,6 +272,25 @@ impl Scheduler {
         self.ready_queue.iter().any(|p| p.parent_pid == Some(parent_pid))
     }
 
+    /// Wake processes waiting for a specific child to exit
+    ///
+    /// Called when a child process exits to wake its parent if it's waiting
+    pub fn wake_waiters_for_child(&mut self, child_pid: panda_hal::pid::Pid) {
+        // Wake the current process if waiting
+        if let Some(proc) = &mut self.current {
+            if proc.should_wake_on_child_exit(child_pid) {
+                proc.wake();
+            }
+        }
+
+        // Wake processes in ready queue if waiting
+        for proc in &mut self.ready_queue {
+            if proc.should_wake_on_child_exit(child_pid) {
+                proc.wake();
+            }
+        }
+    }
+
     /// Get all processes (for debugging/testing)
     pub fn all_processes(&self) -> impl Iterator<Item = &Process> {
         self.current.iter().chain(self.ready_queue.iter())
@@ -281,12 +314,14 @@ mod tests {
             pid: panda_hal::pid::Pid::new(pid),
             parent_pid: None,
             state: ProcessState::Ready,
+            wait_state: crate::process::WaitState::NotWaiting,
             entry_point: 0x400000,
             user_stack_ptr: 0x7FFFFFFFF000,
             kernel_stack_ptr: 0xFFFFFFFF80000000,
             page_table_phys: 0x1000,
             context: crate::context::CpuContext::zero(),
             fd_table: crate::fs::FdTable::new(),
+            pending_signals: 0,
         }
     }
 

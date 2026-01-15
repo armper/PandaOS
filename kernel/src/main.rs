@@ -735,12 +735,71 @@ fn waitpid_handler(pid: i64, status_ptr: u64, options: i32) -> syscall::SyscallR
         None => {
             // Check if parent has any children at all
             if scheduler.has_children(parent_pid) {
-                // Has children but none are zombies yet
-                // For now, busy-wait by yielding
-                serial_println!("[WAITPID] No zombie children yet, yielding");
-                // Return EAGAIN to indicate no child available now
-                // In a full implementation, we'd block the process
-                Err(syscall::ErrorCode::EAGAIN)
+                // Has children but none are zombies yet - block the process
+                serial_println!("[WAITPID] No zombie children yet, blocking parent");
+                
+                let parent = scheduler.current_process_mut().ok_or(syscall::ErrorCode::ESRCH)?;
+                
+                // Block the parent based on what it's waiting for
+                if pid == -1 {
+                    parent.block_on_any_child();
+                } else if pid > 0 {
+                    let child_pid = panda_hal::pid::Pid::new(pid as u64);
+                    parent.block_on_child(child_pid);
+                } else {
+                    return Err(syscall::ErrorCode::EINVAL);
+                }
+                
+                // Trigger a context switch to another process
+                // The yield handler will call schedule_next which will skip blocked processes
+                yield_handler();
+                
+                // After returning from yield (when woken), retry to find zombie
+                // Get fresh scheduler reference after context switch
+                let scheduler = unsafe { get_scheduler() };
+                let parent = scheduler.current_process().ok_or(syscall::ErrorCode::ESRCH)?;
+                let parent_pid = parent.pid;
+                
+                let zombie_after_wake = if pid == -1 {
+                    scheduler.find_any_zombie_child(parent_pid)
+                } else if pid > 0 {
+                    let child_pid = panda_hal::pid::Pid::new(pid as u64);
+                    scheduler.find_zombie_child(parent_pid).filter(|p| p.pid == child_pid)
+                } else {
+                    return Err(syscall::ErrorCode::EINVAL);
+                };
+                
+                match zombie_after_wake {
+                    Some(child) => {
+                        let exit_code = child.exit_code().unwrap_or(0);
+                        let child_pid = child.pid.as_u64();
+                        
+                        serial_println!("[WAITPID] After wake, found zombie child PID {}", child_pid);
+                        
+                        // Write exit status to user if pointer is non-null
+                        if status_ptr != 0 {
+                            let status = (exit_code << 8) as u32;
+                            let status_bytes = status.to_ne_bytes();
+                            crate::usermode::copy_to_user_bytes(status_ptr, &status_bytes)?;
+                        }
+                        
+                        // Reap the child process
+                        // SAFETY: Child page table is valid
+                        unsafe {
+                            let pt = child.page_table_phys;
+                            serial_println!("[WAITPID] Reaping child PID {} (pt={:#x})", child_pid, pt);
+                            crate::paging::free_process_address_space(pt, true)
+                                .map_err(|_| syscall::ErrorCode::EIO)?;
+                        }
+                        
+                        Ok(child_pid)
+                    }
+                    None => {
+                        // Child still not ready - return EINTR (interrupted by signal or wakeup)
+                        serial_println!("[WAITPID] After wake, child still not ready");
+                        Err(syscall::ErrorCode::EINTR)
+                    }
+                }
             } else {
                 // No children at all
                 serial_println!("[WAITPID] No children found");
@@ -760,11 +819,13 @@ fn exit_handler(status: i32) -> ! {
     let mut exited_pid = None;
     let mut exited_pt = None;
     let mut has_parent = false;
+    let mut child_pid_for_wake = None;
 
     if let Some(current) = scheduler.current_process_mut() {
         exited_pid = Some(current.pid.as_u64());
         exited_pt = Some(current.page_table_phys);
         has_parent = current.parent_pid.is_some();
+        child_pid_for_wake = Some(current.pid);
 
         // If process has a parent, become a zombie. Otherwise, exit immediately.
         if has_parent {
@@ -782,6 +843,12 @@ fn exit_handler(status: i32) -> ! {
                 status
             );
         }
+    }
+
+    // Wake any parent waiting for this child
+    if let Some(child_pid) = child_pid_for_wake {
+        serial_println!("[EXIT] Waking processes waiting for child PID {}", child_pid.as_u64());
+        scheduler.wake_waiters_for_child(child_pid);
     }
 
     // If no parent, mark for reaping
