@@ -147,10 +147,23 @@ extern "C" fn syscall_handler_rust(
 ///
 /// - Entry point must be valid user code
 /// - Stack pointer must point to valid user stack
+/// - Page table must be valid and properly initialized
 /// - Called only once per process
 /// - GDT must be initialized before calling
-#[allow(dead_code)]
-pub unsafe fn enter_usermode(entry_point: u64, stack_ptr: u64) -> ! {
+pub unsafe fn enter_usermode(entry_point: u64, stack_ptr: u64, page_table_phys: u64) -> ! {
+    use x86_64::registers::control::Cr3;
+    use x86_64::PhysAddr;
+
+    // Switch to process page table
+    // SAFETY: Caller guarantees page table is valid
+    unsafe {
+        let phys_addr = PhysAddr::new(page_table_phys);
+        Cr3::write(
+            x86_64::structures::paging::PhysFrame::containing_address(phys_addr),
+            x86_64::registers::control::Cr3Flags::empty(),
+        );
+    }
+
     // Get GDT selectors
     // SAFETY: Caller guarantees GDT is initialized
     let selectors = unsafe { gdt::get_selectors() };

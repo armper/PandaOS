@@ -63,7 +63,7 @@ pub unsafe fn switch_to(current: &mut Process, next: &Process) {
 /// - Must be called with interrupts disabled
 /// - Process must have valid memory for context storage
 /// - Current CPU state must be consistent
-unsafe fn save_context_to_process(process: &mut Process) {
+pub unsafe fn save_context_to_process(process: &mut Process) {
     // SAFETY: Caller guarantees process is valid and interrupts are disabled
     unsafe {
         save_context_asm(&mut process.context);
@@ -80,7 +80,7 @@ unsafe fn save_context_to_process(process: &mut Process) {
 /// - Process must have a valid, initialized context
 /// - Context RSP must point to valid stack memory
 /// - Context RIP must point to valid executable code
-unsafe fn restore_context_from_process(process: &Process) -> ! {
+pub unsafe fn restore_context_from_process(process: &Process) -> ! {
     // SAFETY: Caller guarantees process has valid context and interrupts are disabled
     unsafe {
         restore_context_asm(&process.context);
