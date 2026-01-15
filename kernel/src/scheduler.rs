@@ -200,6 +200,58 @@ impl Scheduler {
             false
         }
     }
+
+    /// Find and return a zombie child of the given parent PID
+    ///
+    /// # Returns
+    ///
+    /// - `Some(Process)` - A zombie child process
+    /// - `None` - No zombie children found
+    pub fn find_zombie_child(&mut self, parent_pid: panda_hal::pid::Pid) -> Option<Process> {
+        // Check current process first
+        if let Some(proc) = &self.current {
+            if proc.is_zombie() && proc.parent_pid == Some(parent_pid) {
+                return self.current.take();
+            }
+        }
+
+        // Check ready queue
+        if let Some(pos) = self.ready_queue.iter().position(|p| {
+            p.is_zombie() && p.parent_pid == Some(parent_pid)
+        }) {
+            return Some(self.ready_queue.remove(pos).expect("Position exists"));
+        }
+
+        None
+    }
+
+    /// Find any zombie child of the given parent PID (for waitpid(-1))
+    ///
+    /// # Returns
+    ///
+    /// - `Some(Process)` - Any zombie child process
+    /// - `None` - No zombie children found
+    pub fn find_any_zombie_child(&mut self, parent_pid: panda_hal::pid::Pid) -> Option<Process> {
+        self.find_zombie_child(parent_pid)
+    }
+
+    /// Check if a process has any children (zombie or alive)
+    pub fn has_children(&self, parent_pid: panda_hal::pid::Pid) -> bool {
+        // Check current process
+        if let Some(proc) = &self.current {
+            if proc.parent_pid == Some(parent_pid) {
+                return true;
+            }
+        }
+
+        // Check ready queue
+        self.ready_queue.iter().any(|p| p.parent_pid == Some(parent_pid))
+    }
+
+    /// Get all processes (for debugging/testing)
+    pub fn all_processes(&self) -> impl Iterator<Item = &Process> {
+        self.current.iter().chain(self.ready_queue.iter())
+    }
 }
 
 impl Default for Scheduler {
@@ -217,6 +269,7 @@ mod tests {
     fn create_mock_process(pid: u64) -> Process {
         Process {
             pid: panda_hal::pid::Pid::new(pid),
+            parent_pid: None,
             state: ProcessState::Ready,
             entry_point: 0x400000,
             user_stack_ptr: 0x7FFFFFFFF000,
@@ -339,5 +392,59 @@ mod tests {
         assert!(current.is_some());
         assert_eq!(current.unwrap().pid.as_u64(), 1);
         assert_eq!(current.unwrap().state, ProcessState::Running);
+    }
+
+    #[test]
+    fn test_parent_child_tracking() {
+        let mut scheduler = Scheduler::new();
+        let parent_pid = panda_hal::pid::Pid::new(1);
+        let child1_pid = panda_hal::pid::Pid::new(2);
+        let child2_pid = panda_hal::pid::Pid::new(3);
+
+        let mut parent = create_mock_process(1);
+        parent.parent_pid = None;
+
+        let mut child1 = create_mock_process(2);
+        child1.parent_pid = Some(parent_pid);
+
+        let mut child2 = create_mock_process(3);
+        child2.parent_pid = Some(parent_pid);
+
+        scheduler.add_process(parent);
+        scheduler.add_process(child1);
+        scheduler.add_process(child2);
+
+        // Parent has children
+        assert!(scheduler.has_children(parent_pid));
+
+        // Children have no children
+        assert!(!scheduler.has_children(child1_pid));
+        assert!(!scheduler.has_children(child2_pid));
+    }
+
+    #[test]
+    fn test_zombie_child_retrieval() {
+        let mut scheduler = Scheduler::new();
+        let parent_pid = panda_hal::pid::Pid::new(1);
+        let child_pid = panda_hal::pid::Pid::new(2);
+
+        let mut parent = create_mock_process(1);
+        parent.parent_pid = None;
+
+        let mut child = create_mock_process(2);
+        child.parent_pid = Some(parent_pid);
+        child.state = ProcessState::Zombie(0);
+
+        scheduler.add_process(parent);
+        scheduler.add_process(child);
+
+        // Find zombie child
+        let zombie = scheduler.find_zombie_child(parent_pid);
+        assert!(zombie.is_some());
+        assert_eq!(zombie.unwrap().pid.as_u64(), 2);
+
+        // After removal, no more zombies
+        let zombie = scheduler.find_zombie_child(parent_pid);
+        assert!(zombie.is_none());
     }
 }

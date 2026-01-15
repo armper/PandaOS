@@ -312,6 +312,9 @@ unsafe fn init_scheduler_and_start() -> ! {
     syscall::set_open_handler(open_handler);
     syscall::set_read_handler(read_handler);
     syscall::set_close_handler(close_handler);
+    syscall::set_getpid_handler(getpid_handler);
+    syscall::set_fork_handler(fork_handler);
+    syscall::set_waitpid_handler(waitpid_handler);
 
     // Unmask timer interrupt (IRQ 0)
     println!("Enabling timer interrupt...");
@@ -446,7 +449,8 @@ fn exec_handler(path: &str, arg: Option<&str>) -> Result<(), syscall::ErrorCode>
 fn open_handler(path: &str) -> syscall::SyscallResult {
     let scheduler = unsafe { get_scheduler() };
     let current = scheduler.current_process_mut().ok_or(syscall::ErrorCode::ESRCH)?;
-    fs::open_path(&mut current.fd_table, path)
+    let fd = fs::open_path(&mut current.fd_table, path)?;
+    Ok(fd as u64)
 }
 
 fn read_handler(fd: i32, buf: u64, count: u64) -> syscall::SyscallResult {
@@ -465,6 +469,131 @@ fn close_handler(fd: i32) -> syscall::SyscallResult {
     Ok(0)
 }
 
+/// getpid handler - return current process PID
+fn getpid_handler() -> syscall::SyscallResult {
+    let scheduler = unsafe { get_scheduler() };
+    let current = scheduler.current_process().ok_or(syscall::ErrorCode::ESRCH)?;
+    Ok(current.pid.as_u64())
+}
+
+/// fork handler - create a child process
+fn fork_handler() -> syscall::SyscallResult {
+    serial_println!("[FORK] Starting fork");
+
+    // SAFETY: Called from syscall handler with interrupts disabled
+    let scheduler = unsafe { get_scheduler() };
+    
+    let current = scheduler.current_process_mut().ok_or(syscall::ErrorCode::ESRCH)?;
+    
+    // Allocate PID for child
+    // Note: In a full implementation, we'd have a global PID allocator
+    // For now, we'll use a simple incrementing scheme
+    static mut NEXT_PID: u64 = 2;
+    let child_pid = panda_hal::pid::Pid::new(unsafe {
+        let pid = NEXT_PID;
+        NEXT_PID += 1;
+        pid
+    });
+
+    serial_println!("[FORK] Creating child PID {}", child_pid.as_u64());
+
+    // Fork the process
+    // SAFETY: Frame allocator and GDT are initialized
+    let mut child = unsafe {
+        current.fork_from(child_pid)
+            .map_err(|_| syscall::ErrorCode::ENOMEM)?
+    };
+
+    // Set child's return value to 0
+    child.context.rax = 0;
+
+    // Set parent's return value to child PID
+    current.context.rax = child_pid.as_u64();
+
+    serial_println!("[FORK] Child PID {} created, adding to scheduler", child_pid.as_u64());
+
+    // Add child to scheduler
+    scheduler.add_process(child);
+
+    // Return child PID to parent (already set in rax)
+    Ok(child_pid.as_u64())
+}
+
+/// waitpid handler - wait for child process to exit
+fn waitpid_handler(pid: i64, status_ptr: u64, options: i32) -> syscall::SyscallResult {
+    serial_println!("[WAITPID] pid={}, status_ptr={:#x}, options={}", pid, status_ptr, options);
+
+    // Only support options=0
+    if options != 0 {
+        return Err(syscall::ErrorCode::EINVAL);
+    }
+
+    // SAFETY: Called from syscall handler with interrupts disabled
+    let scheduler = unsafe { get_scheduler() };
+    
+    let parent = scheduler.current_process().ok_or(syscall::ErrorCode::ESRCH)?;
+    let parent_pid = parent.pid;
+
+    // Find zombie child
+    let zombie = if pid == -1 {
+        // Wait for any child
+        scheduler.find_any_zombie_child(parent_pid)
+    } else if pid > 0 {
+        // Wait for specific child
+        let child_pid = panda_hal::pid::Pid::new(pid as u64);
+        scheduler.find_zombie_child(parent_pid)
+            .filter(|p| p.pid == child_pid)
+    } else {
+        // pid == 0 or pid < -1 not supported yet
+        return Err(syscall::ErrorCode::EINVAL);
+    };
+
+    match zombie {
+        Some(child) => {
+            let exit_code = child.exit_code().unwrap_or(0);
+            let child_pid = child.pid.as_u64();
+            
+            serial_println!("[WAITPID] Found zombie child PID {} with exit code {}", child_pid, exit_code);
+
+            // Write exit status to user if pointer is non-null
+            if status_ptr != 0 {
+                // Exit status format: exit code << 8
+                let status = (exit_code << 8) as u32;
+                let status_bytes = status.to_ne_bytes();
+                crate::usermode::copy_to_user_bytes(status_ptr, &status_bytes)?;
+            }
+
+            // Reap the child process
+            // SAFETY: Child page table is valid
+            unsafe {
+                let pt = child.page_table_phys;
+                let pid = child.pid.as_u64();
+                serial_println!("[WAITPID] Reaping child PID {} (pt={:#x})", pid, pt);
+                crate::paging::free_process_address_space(pt, true)
+                    .map_err(|_| syscall::ErrorCode::EIO)?;
+            }
+
+            // Return child PID
+            Ok(child_pid)
+        }
+        None => {
+            // Check if parent has any children at all
+            if scheduler.has_children(parent_pid) {
+                // Has children but none are zombies yet
+                // For now, busy-wait by yielding
+                serial_println!("[WAITPID] No zombie children yet, yielding");
+                // Return EAGAIN to indicate no child available now
+                // In a full implementation, we'd block the process
+                Err(syscall::ErrorCode::EINTR)
+            } else {
+                // No children at all
+                serial_println!("[WAITPID] No children found");
+                Err(syscall::ErrorCode::ESRCH)
+            }
+        }
+    }
+}
+
 /// Exit handler - called when process exits
 fn exit_handler(status: i32) -> ! {
     serial_println!("Process exiting with status: {}", status);
@@ -474,21 +603,41 @@ fn exit_handler(status: i32) -> ! {
 
     let mut exited_pid = None;
     let mut exited_pt = None;
+    let mut has_parent = false;
+
     if let Some(current) = scheduler.current_process_mut() {
         exited_pid = Some(current.pid.as_u64());
         exited_pt = Some(current.page_table_phys);
+        has_parent = current.parent_pid.is_some();
+        
+        // If process has a parent, become a zombie. Otherwise, exit immediately.
+        if has_parent {
+            current.set_zombie(status);
+            serial_println!(
+                "[EXIT] PID {} became zombie (parent exists), status={}",
+                current.pid.as_u64(),
+                status
+            );
+        } else {
+            current.set_exited(status);
+            serial_println!(
+                "[EXIT] PID {} exited (no parent), status={}",
+                current.pid.as_u64(),
+                status
+            );
+        }
     }
 
-    // Mark current process as exited
-    scheduler.exit_current(status);
-
-    if let (Some(pid), Some(pt)) = (exited_pid, exited_pt) {
-        serial_println!(
-            "[EXIT] Marked PID {} exited (pt={:#x})",
-            pid,
-            pt
-        );
-        usermode::set_pending_reap(pt, pid);
+    // If no parent, mark for reaping
+    if !has_parent {
+        if let (Some(pid), Some(pt)) = (exited_pid, exited_pt) {
+            serial_println!(
+                "[EXIT] Marked PID {} for reaping (pt={:#x})",
+                pid,
+                pt
+            );
+            usermode::set_pending_reap(pt, pid);
+        }
     }
 
     // Schedule next process
@@ -509,10 +658,19 @@ fn exit_handler(status: i32) -> ! {
         // Switch CR3 and return to user mode for the next process.
         // SAFETY: Next process has a valid user context and page table.
         unsafe {
-            usermode::switch_to_user_with_reap(
-                core::ptr::addr_of!(next.context),
-                next.page_table_phys,
-            );
+            if has_parent {
+                // Zombie - don't reap yet, just switch
+                usermode::switch_to_user(
+                    core::ptr::addr_of!(next.context),
+                    next.page_table_phys,
+                );
+            } else {
+                // No parent - reap immediately
+                usermode::switch_to_user_with_reap(
+                    core::ptr::addr_of!(next.context),
+                    next.page_table_phys,
+                );
+            }
         }
     } else {
         // No more processes - report success and exit QEMU deterministically.
@@ -520,7 +678,9 @@ fn exit_handler(status: i32) -> ! {
         serial_println!("TEST PASS shell_smoke");
         #[cfg(feature = "vfs-cat-smoke")]
         serial_println!("TEST PASS vfs_cat_smoke");
-        #[cfg(not(any(feature = "shell-smoke", feature = "vfs-cat-smoke")))]
+        #[cfg(feature = "fork-exec-smoke")]
+        serial_println!("TEST PASS fork_exec_smoke");
+        #[cfg(not(any(feature = "shell-smoke", feature = "vfs-cat-smoke", feature = "fork-exec-smoke")))]
         serial_println!("TEST PASS exec_smoke");
         let kernel_pt = usermode::kernel_page_table_phys();
         let current_cr3 =

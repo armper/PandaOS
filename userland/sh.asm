@@ -5,8 +5,10 @@ BITS 64
 
 %define SYS_READ 0
 %define SYS_WRITE 1
+%define SYS_FORK 57
 %define SYS_EXECVE 59
 %define SYS_EXIT 60
+%define SYS_WAIT4 61
 
 %define STDIN 0
 %define STDOUT 1
@@ -152,27 +154,51 @@ check_echo:
 
 check_cat:
     cmp r12, 3
-    jl cmd_unknown
+    jl check_true
     mov al, [r13]
     cmp al, 'c'
-    jne cmd_unknown
+    jne check_true
     mov al, [r13 + 1]
     cmp al, 'a'
-    jne cmd_unknown
+    jne check_true
     mov al, [r13 + 2]
     cmp al, 't'
-    jne cmd_unknown
+    jne check_true
 
     cmp r12, 3
     je cmd_cat_usage
     mov al, [r13 + 3]
     cmp al, ' '
-    jne cmd_unknown
+    jne check_true
     cmp r12, 4
     je cmd_cat_usage
 
     lea rsi, [r13 + 4]
-    jmp cmd_cat
+    lea rdi, [rel cat_path]
+    jmp cmd_fork_exec
+
+check_true:
+    cmp r12, 4
+    jl cmd_unknown
+    mov al, [r13]
+    cmp al, 't'
+    jne cmd_unknown
+    mov al, [r13 + 1]
+    cmp al, 'r'
+    jne cmd_unknown
+    mov al, [r13 + 2]
+    cmp al, 'u'
+    jne cmd_unknown
+    mov al, [r13 + 3]
+    cmp al, 'e'
+    jne cmd_unknown
+    cmp r12, 4
+    jne cmd_unknown
+
+    ; Run /bin/true
+    xor rsi, rsi
+    lea rdi, [rel true_path]
+    jmp cmd_fork_exec
 
 cmd_help:
     mov rax, SYS_WRITE
@@ -223,23 +249,67 @@ cmd_cat_usage:
     syscall
     jmp main_loop
 
-cmd_cat:
-    mov rax, SYS_EXECVE
-    lea rdi, [rel cat_path]
-    mov rdx, 0
-    syscall
+cmd_fork_exec:
+    ; rdi = program path
+    ; rsi = argument (or 0 for none)
+    ; Save these across fork
+    mov r14, rdi
+    mov r15, rsi
 
+    ; fork()
+    mov rax, SYS_FORK
+    syscall
+    test rax, rax
+    js fork_failed
+    jz child_process
+
+    ; Parent process - wait for child
+    mov r12, rax  ; Save child PID
+    
+parent_wait:
+    mov rax, SYS_WAIT4
+    mov rdi, r12  ; Wait for specific child
+    xor rsi, rsi  ; Don't care about status
+    xor rdx, rdx  ; options = 0
+    syscall
+    test rax, rax
+    js parent_wait  ; If EINTR, retry
+    
+    ; Child exited, continue shell
+    jmp main_loop
+
+child_process:
+    ; Child process - exec the program
+    mov rax, SYS_EXECVE
+    mov rdi, r14
+    mov rsi, r15
+    xor rdx, rdx
+    syscall
+    
+    ; If exec returns, it failed
     mov rax, SYS_WRITE
     mov rdi, STDOUT
     lea rsi, [rel exec_fail]
     mov rdx, exec_fail_len
+    syscall
+    
+    ; Exit child with error
+    mov rax, SYS_EXIT
+    mov rdi, 1
+    syscall
+
+fork_failed:
+    mov rax, SYS_WRITE
+    mov rdi, STDOUT
+    lea rsi, [rel fork_fail]
+    mov rdx, fork_fail_len
     syscall
     jmp main_loop
 
 section .rodata
 prompt: db "panda> "
 prompt_len equ $ - prompt
-help_text: db "commands: help, echo, cat, exit", 0x0D, 0x0A
+help_text: db "commands: help, echo, cat, true, exit", 0x0D, 0x0A
 help_len equ $ - help_text
 unknown_text: db "command not found", 0x0D, 0x0A
 unknown_len equ $ - unknown_text
@@ -251,7 +321,10 @@ cat_usage: db "usage: cat <path>", 0x0D, 0x0A
 cat_usage_len equ $ - cat_usage
 exec_fail: db "exec failed", 0x0D, 0x0A
 exec_fail_len equ $ - exec_fail
+fork_fail: db "fork failed", 0x0D, 0x0A
+fork_fail_len equ $ - fork_fail
 cat_path: db "/bin/cat", 0
+true_path: db "/bin/true", 0
 
 section .bss
 line_buf: resb BUF_SIZE
