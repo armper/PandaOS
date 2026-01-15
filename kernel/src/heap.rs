@@ -13,15 +13,14 @@
 //! - Init assumes single-core with interrupts disabled (no locking needed)
 
 use core::alloc::{GlobalAlloc, Layout};
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use linked_list_allocator::LockedHeap;
 
-/// Heap start address in virtual memory
-/// This address will be mapped by map_heap() before allocator init
-pub const HEAP_START: usize = 0xFFFF_8000_0000_0000; // Kernel heap region
-
-/// Heap size (100 KiB to start)
+/// Heap size (100 KiB)
 pub const HEAP_SIZE: usize = 100 * 1024;
+
+/// Actual heap start address (set by map_heap, used by init)
+static ACTUAL_HEAP_START: AtomicUsize = AtomicUsize::new(0);
 
 /// Inner allocator instance
 static INNER_ALLOCATOR: LockedHeap = LockedHeap::empty();
@@ -60,34 +59,49 @@ static ALLOCATOR: CheckedAllocator = CheckedAllocator;
 /// Map heap region in page tables
 ///
 /// This must be called BEFORE heap allocator initialization.
-/// It allocates physical frames and maps them to the heap virtual address range.
+/// It allocates physical frames from the frame allocator.
 ///
 /// # Safety
 ///
 /// - Must be called before heap allocator init
 /// - Frame allocator must be initialized
-/// - Page tables must be accessible
+///
+/// # Implementation Note
+///
+/// Currently uses identity-mapped low memory from bootloader for simplicity.
+/// TODO: Implement proper page table mapping for high kernel addresses.
 pub unsafe fn map_heap() -> Result<(), &'static str> {
-    // TODO: Implement actual page table mapping
-    // For now, we'll use identity mapping provided by bootloader
-    // This is a placeholder that will be replaced with proper paging
+    extern crate alloc;
 
     // Calculate number of frames needed
     let num_frames = (HEAP_SIZE + 4095) / 4096;
 
-    println!("Heap mapping: {} frames for {} KiB", num_frames, HEAP_SIZE / 1024);
-    println!("Heap range: {:#x}..{:#x}", HEAP_START, HEAP_START + HEAP_SIZE);
+    // Allocate consecutive frames for the heap
+    let mut heap_frames = alloc::vec::Vec::new();
+    for _ in 0..num_frames {
+        // SAFETY: Frame allocator is initialized at this point
+        if let Some(frame) = unsafe { crate::memory::allocate_frame() } {
+            heap_frames.push(frame);
+        } else {
+            return Err("Out of memory: cannot allocate frames for heap");
+        }
+    }
 
-    // TODO: Allocate frames from frame allocator
-    // TODO: Map frames to HEAP_START..HEAP_START+HEAP_SIZE in page tables
-    // TODO: Mark pages as writable and present
+    // Use first frame as heap start (bootloader identity-maps low memory)
+    let heap_start = heap_frames[0] * 4096;
+
+    println!("Heap: {} frames allocated ({} KiB)", num_frames, HEAP_SIZE / 1024);
+    println!("Heap physical: {:#x}..{:#x}", heap_start, heap_start + HEAP_SIZE);
+
+    // Store actual heap start for init
+    ACTUAL_HEAP_START.store(heap_start, Ordering::SeqCst);
 
     Ok(())
 }
 
 /// Initialize the heap allocator
 ///
-/// This must be called AFTER heap region is mapped.
+/// This must be called AFTER heap region is mapped via map_heap().
 ///
 /// # Safety
 ///
@@ -104,13 +118,22 @@ pub unsafe fn init() {
         panic!("Heap allocator already initialized");
     }
 
+    // Get the actual heap start set by map_heap
+    let heap_start = ACTUAL_HEAP_START.load(Ordering::SeqCst);
+
+    if heap_start == 0 {
+        panic!("Heap not mapped: call map_heap() before init()");
+    }
+
     // SAFETY: Caller guarantees:
     // - This is called exactly once during boot
     // - Single-core, interrupts disabled (no race conditions)
     // - The heap region is valid and mapped (map_heap was called first)
     unsafe {
-        INNER_ALLOCATOR.lock().init(HEAP_START as *mut u8, HEAP_SIZE);
+        INNER_ALLOCATOR.lock().init(heap_start as *mut u8, HEAP_SIZE);
     }
+
+    println!("Heap allocator initialized at {:#x}", heap_start);
 }
 
 /// Check if heap is initialized
@@ -126,14 +149,7 @@ mod tests {
     #[test]
     fn test_heap_constants() {
         assert!(HEAP_SIZE > 0);
-        assert!(HEAP_START > 0);
         assert!(HEAP_SIZE >= 1024); // At least 1 KiB
-    }
-
-    #[test]
-    fn test_heap_start_in_kernel_space() {
-        // Ensure heap is in kernel address space (upper half)
-        assert!(HEAP_START >= 0xFFFF_8000_0000_0000);
     }
 
     #[test]
