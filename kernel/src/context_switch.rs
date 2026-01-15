@@ -125,7 +125,13 @@ unsafe fn save_context_asm(ctx: *mut CpuContext) {
     // The layout of CpuContext matches the order of saves/restores
     unsafe {
         core::arch::asm!(
-            // Save general-purpose registers (in reverse order of CpuContext struct)
+            // Save rdi first (to temporary location) since we need it for addressing
+            "push rdi",
+
+            // Load context pointer into rdi
+            "mov rdi, {ctx}",
+
+            // Save general-purpose registers (in order of CpuContext struct)
             "mov [rdi + 0x00], r15",
             "mov [rdi + 0x08], r14",
             "mov [rdi + 0x10], r13",
@@ -135,23 +141,24 @@ unsafe fn save_context_asm(ctx: *mut CpuContext) {
             "mov [rdi + 0x30], r9",
             "mov [rdi + 0x38], r8",
             "mov [rdi + 0x40], rbp",
-            // Skip rdi (we're using it), save after
+            // rdi will be restored from stack and saved
             "mov [rdi + 0x50], rsi",
             "mov [rdi + 0x58], rdx",
             "mov [rdi + 0x60], rcx",
             "mov [rdi + 0x68], rbx",
             "mov [rdi + 0x70], rax",
 
-            // Save rdi
-            "mov rax, rdi",
-            "mov [rdi + 0x48], rax",
+            // Restore and save original rdi
+            "pop rax",              // Get original rdi from stack
+            "mov [rdi + 0x48], rax",  // Save it to context
 
-            // Save RIP (return address)
+            // Save RIP (return address) - the instruction after this call
             "lea rax, [rip + 2f]",  // Address of the next instruction (label 2 forward)
             "mov [rdi + 0x78], rax",
 
-            // Save RSP
+            // Save RSP (adjust for the push rdi we did earlier)
             "mov rax, rsp",
+            "add rax, 8",           // Compensate for the push rdi
             "mov [rdi + 0x80], rax",
 
             // Save RFLAGS
@@ -170,7 +177,7 @@ unsafe fn save_context_asm(ctx: *mut CpuContext) {
 
             "2:",  // Label for RIP to return to
 
-            in("rdi") ctx,
+            ctx = in(reg) ctx,
             out("rax") _,
             options(nostack)
         );
