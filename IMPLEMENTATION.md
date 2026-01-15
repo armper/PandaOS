@@ -147,10 +147,11 @@ PandaOS is a Unix-like x86_64 kernel written in Rust with a focus on:
   - ELF64 loader with segment mapping
   - User address space isolation
   - User stack allocation (16KB default)
+  - CPU context for context switching
 - [x] **System call interface**:
   - syscall/sysret infrastructure via MSRs
   - Linux x86_64 ABI compatibility
-  - Implemented: write(), exit(), getpid()
+  - Implemented: write(), exit(), getpid(), yield()
   - Syscall entry/exit with register preservation
 - [x] **GDT with user segments**:
   - Kernel code/data segments (ring 0)
@@ -162,10 +163,21 @@ PandaOS is a Unix-like x86_64 kernel written in Rust with a focus on:
   - Memory permission enforcement (User, R/W/X, NX)
 - [x] **Userland programs**:
   - hello.asm - test program using syscalls
+  - hello1.asm - scheduler test with yield
+  - hello2.asm - scheduler test with yield
   - Build system to create static ELF executables
   - Embedding mechanism via build.rs
-- [ ] Basic I/O (keyboard, timer)
-- [ ] Interrupt handling (PIC/APIC)
+- [x] **Scheduler and Preemptive Multitasking**:
+  - Round-robin scheduler implementation
+  - CPU context save/restore
+  - Context switching infrastructure
+  - Timer interrupt support (PIT + PIC)
+  - Scheduler integration (handlers set up)
+  - Multiple user programs support
+  - See [SCHEDULER.md](SCHEDULER.md) for details
+- [ ] Timer-based preemption (complex, deferred)
+- [ ] Yield-based context switching (deferred)
+- [ ] Basic I/O (keyboard)
 
 ## Key Design Decisions
 

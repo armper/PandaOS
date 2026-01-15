@@ -6,6 +6,8 @@ PandaOS is a Unix-like x86_64 kernel written in Rust with a focus on clean archi
 
 **SMP Status**: Single-core only until Phase 2. See [docs/SMP_STRATEGY.md](docs/SMP_STRATEGY.md) for details.
 
+**Scheduler Status**: ✅ **COMPLETED** - Minimal preemptive scheduler infrastructure implemented. See [SCHEDULER.md](SCHEDULER.md) for details.
+
 ## Design Philosophy
 
 ### Core Principles
@@ -262,8 +264,122 @@ All page table frames are tracked to ensure they're never allocated again:
 
 - IDT (Interrupt Descriptor Table) configured on boot
 - Exception handlers for CPU exceptions
-- IRQ handlers for hardware interrupts (future)
-- System call interface via `syscall` instruction (future)
+- IRQ handlers for hardware interrupts (timer implemented)
+- System call interface via `syscall` instruction
+
+## Process Scheduler
+
+PandaOS implements a minimal preemptive multitasking scheduler. For complete documentation, see [SCHEDULER.md](SCHEDULER.md).
+
+### Design
+
+- **Algorithm**: Round-robin (fair time-slicing)
+- **States**: Ready, Running, Exited
+- **Single CPU**: No SMP support (Phase 1)
+- **No priorities**: All processes equal weight
+
+### Components
+
+1. **Scheduler** (`kernel/src/scheduler.rs`)
+   - Process queue management
+   - State transitions
+   - Safe Rust implementation
+
+2. **CPU Context** (`kernel/src/context.rs`)
+   - Register save/restore structure
+   - 184 bytes (23 u64 fields)
+   - Includes GPRs, RIP, RSP, RFLAGS, segments
+
+3. **Context Switching** (`kernel/src/context_switch.rs`)
+   - Assembly save/restore routines
+   - CR3 page table switching
+   - Interrupt-safe transitions
+
+4. **Timer Infrastructure**
+   - PIT driver for periodic interrupts
+   - PIC driver for interrupt management
+   - Timer interrupt handler (IRQ 0 → INT 32)
+
+### Scheduling Policy
+
+**Round-robin**:
+- Processes taken from head of ready queue
+- Running process moved to tail on preemption
+- Fair distribution of CPU time
+
+**Preemption Points**:
+- Timer interrupt (planned)
+- Yield syscall (planned)
+- Exit syscall (implemented)
+
+### Context Switch Flow
+
+1. **Save current process**:
+   - All registers → CpuContext
+   - RIP, RSP, RFLAGS, segments
+
+2. **Select next process**:
+   - Schedule_next() from scheduler
+   - Round-robin selection
+
+3. **Switch page table**:
+   - Write CR3 register
+   - TLB automatically flushed
+
+4. **Restore next process**:
+   - Load from CpuContext
+   - Jump to saved RIP
+
+### Interrupt/Preemption Model
+
+**Interrupt Disable Policy**:
+- Disabled during scheduler operations
+- Disabled during context switches
+- Disabled during page table switches
+- Enabled in user mode
+- Enabled in non-critical kernel code
+
+**Critical Sections**:
+- Scheduler queue manipulation
+- Process state transitions
+- Context switch assembly
+- Page table switching
+
+**Timer Interrupt Flow**:
+```
+Timer tick → IRQ 0 → PIC remap → INT 32 → IDT → timer_handler
+  → (save context, schedule, restore context) → EOI → iretq
+```
+
+**Syscall Flow**:
+```
+User: syscall → LSTAR → syscall_entry → handler → scheduler (if needed)
+  → (save context, schedule, restore context) → sysretq → User
+```
+
+### Safety Guarantees
+
+- **No data races**: Interrupts disabled during scheduler access
+- **No aliasing**: Single CPU, no concurrent access
+- **Valid contexts**: All processes have initialized contexts
+- **Valid page tables**: CR3 always points to valid L4 table
+- **Stack safety**: RSP always points to valid memory
+
+### Current Limitations
+
+1. **Timer preemption not implemented**: Requires complex interrupt frame handling
+2. **Yield not implemented**: Requires syscall context save/restore
+3. **Single process only**: hello2 behind feature flag
+4. **No sleep/wake**: Processes either ready or exited
+5. **No process groups**: Basic process model only
+
+### Future Work
+
+- Implement timer-based preemption
+- Implement yield syscall context switching
+- Enable multiple processes
+- Add process sleep/wake
+- Implement fork/exec syscalls
 
 ## Testing Strategy
 
