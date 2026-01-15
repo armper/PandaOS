@@ -140,8 +140,10 @@ None yet - hardware access is direct. Future refactoring will add:
 - `exit(status)` - syscall #60 (terminates process)
 - `getpid()` - syscall #39 (returns process ID)
 - `execve(path, arg)` - syscall #59 (replaces current process image, single arg string)
+- `fork()` - syscall #57 (creates child process, returns child PID to parent, 0 to child)
+- `waitpid(pid, status, options)` - syscall #61 (waits for child to exit, reaps zombie)
 
-## VFS & File Descriptors
+## Process Model (Post-Fork/Wait)
 
 **VFS Model:**
 - Static in-memory file table with absolute-path lookup
@@ -153,7 +155,38 @@ None yet - hardware access is direct. Future refactoring will add:
 - `fd 0/1/2` are reserved for serial stdio
 - `fd >= 3` are allocated on open and track per-fd offsets
 
-## Process Model
+## Process Model (Post-Fork/Wait)
+
+**Fork Semantics:**
+- `fork()` creates a child process by cloning the parent
+- Child receives:
+  - Copy of parent's address space (full page-by-page copy)
+  - Copy of parent's CPU context with rax=0 (child sees return value 0)
+  - Copy of parent's FD table (independent offsets)
+  - New page table with shared kernel mappings
+  - New kernel stack
+  - parent_pid set to parent's PID
+- Parent receives child PID as return value
+- Single-CPU only (no SMP support)
+- No copy-on-write (COW) yet - full eager copy
+
+**Waitpid Semantics:**
+- `waitpid(pid, status, options)` waits for child to exit
+- Supported:
+  - pid = -1: wait for any child
+  - pid > 0: wait for specific child
+  - options must be 0
+- Returns child PID when zombie found
+- Writes exit status to user memory if status_ptr != 0
+- Reaps child (frees page tables and kernel stack)
+- Returns EINTR if no zombie yet (busy-wait by retrying)
+- Returns ESRCH if no children exist
+
+**Parent-Child Relationship:**
+- Each process tracks parent_pid (None for init)
+- On exit, process becomes zombie if parent exists
+- Zombies remain in scheduler until reaped by parent
+- If parent exits, orphaned children continue but reap immediately on exit
 
 **Structure:**
 - Each process has isolated address space (separate page table)
@@ -169,13 +202,15 @@ None yet - hardware access is direct. Future refactoring will add:
 5. Assign PID from allocator
 
 **Process Lifecycle:**
-- `exit(code)` marks the process as `Exited(code)` and queues it for reaping
+- `exit(code)`:
+  - If has parent: becomes Zombie(code), awaits waitpid()
+  - If no parent: Exited(code), queues for immediate reaping
 - CR3 switches to the next runnable process (or kernel table if none)
-- User-space mappings, page tables, and kernel stack frames are reclaimed after the switch
-- Exited processes are never scheduled again
+- User-space mappings, page tables, and kernel stack frames are reclaimed after switch
+- Zombie processes are never scheduled again
 
 **exec() Semantics:**
-- Replaces the current process image without changing PID
+- Replaces the current process image without changing PID or parent_pid
 - Destroys user address space and builds a fresh one from ELF
 - Resets user stack and CPU context
 - Preserves the kernel stack mapping for the process

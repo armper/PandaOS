@@ -393,4 +393,58 @@ mod tests {
         assert_eq!(current.unwrap().pid.as_u64(), 1);
         assert_eq!(current.unwrap().state, ProcessState::Running);
     }
+
+    #[test]
+    fn test_parent_child_tracking() {
+        let mut scheduler = Scheduler::new();
+        let parent_pid = panda_hal::pid::Pid::new(1);
+        let child1_pid = panda_hal::pid::Pid::new(2);
+        let child2_pid = panda_hal::pid::Pid::new(3);
+
+        let mut parent = create_mock_process(1);
+        parent.parent_pid = None;
+
+        let mut child1 = create_mock_process(2);
+        child1.parent_pid = Some(parent_pid);
+
+        let mut child2 = create_mock_process(3);
+        child2.parent_pid = Some(parent_pid);
+
+        scheduler.add_process(parent);
+        scheduler.add_process(child1);
+        scheduler.add_process(child2);
+
+        // Parent has children
+        assert!(scheduler.has_children(parent_pid));
+
+        // Children have no children
+        assert!(!scheduler.has_children(child1_pid));
+        assert!(!scheduler.has_children(child2_pid));
+    }
+
+    #[test]
+    fn test_zombie_child_retrieval() {
+        let mut scheduler = Scheduler::new();
+        let parent_pid = panda_hal::pid::Pid::new(1);
+        let child_pid = panda_hal::pid::Pid::new(2);
+
+        let mut parent = create_mock_process(1);
+        parent.parent_pid = None;
+
+        let mut child = create_mock_process(2);
+        child.parent_pid = Some(parent_pid);
+        child.state = ProcessState::Zombie(0);
+
+        scheduler.add_process(parent);
+        scheduler.add_process(child);
+
+        // Find zombie child
+        let zombie = scheduler.find_zombie_child(parent_pid);
+        assert!(zombie.is_some());
+        assert_eq!(zombie.unwrap().pid.as_u64(), 2);
+
+        // After removal, no more zombies
+        let zombie = scheduler.find_zombie_child(parent_pid);
+        assert!(zombie.is_none());
+    }
 }

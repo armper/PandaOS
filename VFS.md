@@ -24,6 +24,14 @@ reads with per-fd offsets.
 - `fd 2`: stderr (serial output)
 - `fd >= 3`: read-only files backed by the in-memory table
 
+## Fork Behavior
+
+On fork(), the child's FD table is a copy of the parent's. Open file descriptors
+are duplicated with their current offsets. Since the FD table stores offsets
+per-process, parent and child have independent offsets (they don't share file
+position). This differs from traditional Unix where descriptors point to a shared
+open file table entry.
+
 ## Exec Argument Convention
 
 `execve(path, arg_ptr, _)` accepts a single optional argument string. The kernel copies that

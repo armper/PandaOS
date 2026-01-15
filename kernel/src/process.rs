@@ -309,4 +309,52 @@ mod tests {
         assert!(process.is_exited());
         assert_eq!(process.exit_code(), Some(42));
     }
+
+    #[test]
+    fn test_parent_child_relationship() {
+        let pid_allocator = PidAllocator::new(1);
+        
+        let parent = Process {
+            pid: pid_allocator.allocate(),
+            parent_pid: None,
+            state: ProcessState::Ready,
+            entry_point: 0x40_0000,
+            user_stack_ptr: 0x7FFF_FFFF_F000,
+            kernel_stack_ptr: 0xFFFF_FFFF_8000_0000,
+            page_table_phys: 0x1000,
+            context: crate::context::CpuContext::zero(),
+            fd_table: FdTable::new(),
+        };
+
+        // Parent has no parent
+        assert_eq!(parent.parent_pid, None);
+        assert_eq!(parent.pid.as_u64(), 1);
+    }
+
+    #[test]
+    fn test_zombie_state() {
+        let pid_allocator = PidAllocator::new(1);
+        
+        let mut process = Process {
+            pid: pid_allocator.allocate(),
+            parent_pid: None,
+            state: ProcessState::Ready,
+            entry_point: 0x40_0000,
+            user_stack_ptr: 0x7FFF_FFFF_F000,
+            kernel_stack_ptr: 0xFFFF_FFFF_8000_0000,
+            page_table_phys: 0x1000,
+            context: crate::context::CpuContext::zero(),
+            fd_table: FdTable::new(),
+        };
+
+        // Initially not a zombie
+        assert!(!process.is_zombie());
+        assert!(!process.is_exited());
+
+        // Make it a zombie
+        process.set_zombie(42);
+        assert!(process.is_zombie());
+        assert!(process.is_exited());
+        assert_eq!(process.exit_code(), Some(42));
+    }
 }
