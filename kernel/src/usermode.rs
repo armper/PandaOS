@@ -131,10 +131,7 @@ pub fn set_pending_reap(page_table_phys: u64, pid: u64) {
 }
 
 /// Copy a NUL-terminated user string into a kernel buffer.
-pub fn copy_user_cstr<'a>(
-    ptr: u64,
-    buf: &'a mut [u8],
-) -> Result<&'a str, syscall::ErrorCode> {
+pub fn copy_user_cstr<'a>(ptr: u64, buf: &'a mut [u8]) -> Result<&'a str, syscall::ErrorCode> {
     if ptr == 0 {
         return Err(syscall::ErrorCode::EFAULT);
     }
@@ -152,11 +149,7 @@ pub fn copy_user_cstr<'a>(
 }
 
 /// Copy raw bytes from user memory into a kernel buffer.
-pub fn copy_user_bytes(
-    ptr: u64,
-    len: usize,
-    dst: &mut [u8],
-) -> Result<usize, syscall::ErrorCode> {
+pub fn copy_user_bytes(ptr: u64, len: usize, dst: &mut [u8]) -> Result<usize, syscall::ErrorCode> {
     if ptr == 0 {
         return Err(syscall::ErrorCode::EFAULT);
     }
@@ -206,11 +199,7 @@ extern "C" fn reap_pending() {
     }
 
     let pid = PENDING_REAP_PID.load(Ordering::Relaxed);
-    serial_println!(
-        "[REAP] Freeing exited process PID {} (pt={:#x})",
-        pid,
-        page_table_phys
-    );
+    serial_println!("[REAP] Freeing exited process PID {} (pt={:#x})", pid, page_table_phys);
 
     // SAFETY: The exited process is no longer active; we are on a different CR3.
     unsafe {

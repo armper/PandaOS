@@ -102,11 +102,7 @@ impl FrameAllocator {
     /// * `start_frame` - First available frame number
     /// * `end_frame` - Last available frame number (exclusive)
     /// * `bitmap_storage` - Backing storage for allocation bitmap
-    pub fn new(
-        start_frame: usize,
-        end_frame: usize,
-        bitmap_storage: &'static mut [u8],
-    ) -> Self {
+    pub fn new(start_frame: usize, end_frame: usize, bitmap_storage: &'static mut [u8]) -> Self {
         let total_frames = end_frame.saturating_sub(start_frame);
         let allocation_bitmap = Bitmap::new(bitmap_storage, total_frames);
 
@@ -230,9 +226,7 @@ impl FrameAllocator {
 
     /// Check if a frame is allocated
     fn is_allocated(&self, frame: usize) -> bool {
-        self.frame_index(frame)
-            .map(|index| self.allocation_bitmap.is_set(index))
-            .unwrap_or(false)
+        self.frame_index(frame).is_some_and(|index| self.allocation_bitmap.is_set(index))
     }
 
     /// Mark a frame as allocated

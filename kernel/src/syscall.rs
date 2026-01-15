@@ -18,9 +18,9 @@
 //! - Syscalls preserve all GPRs except RAX (return value) and RCX/R11 (syscall clobbers)
 
 // Import macros for logging
-use panda_hal::serial_println;
 #[cfg(any(feature = "shell-smoke", feature = "vfs-cat-smoke", feature = "fork-exec-smoke"))]
 use core::sync::atomic::{AtomicUsize, Ordering};
+use panda_hal::serial_println;
 use spin::Once;
 
 /// Syscall numbers (Linux-compatible)
@@ -291,10 +291,7 @@ const SCRIPTED_INPUT: &[u8] = b"cat /etc/motd\nexit\n";
 #[cfg(feature = "fork-exec-smoke")]
 const SCRIPTED_INPUT: &[u8] = b"cat /etc/version\ntrue\nexit\n";
 
-#[cfg(all(
-    feature = "shell-smoke",
-    any(feature = "vfs-cat-smoke", feature = "fork-exec-smoke")
-))]
+#[cfg(all(feature = "shell-smoke", any(feature = "vfs-cat-smoke", feature = "fork-exec-smoke")))]
 compile_error!("shell-smoke, vfs-cat-smoke, and fork-exec-smoke are mutually exclusive");
 
 #[cfg(all(feature = "vfs-cat-smoke", feature = "fork-exec-smoke"))]
