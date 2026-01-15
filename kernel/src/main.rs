@@ -661,18 +661,17 @@ fn setpgid_handler(pid: i32, pgid: i32) -> syscall::SyscallResult {
     };
 
     // Determine the new pgid (pgid==0 means use target's PID)
-    let new_pgid = if pgid == 0 {
-        target_pid
-    } else {
-        panda_hal::pid::Pid::new(pgid as u64)
-    };
+    let new_pgid = if pgid == 0 { target_pid } else { panda_hal::pid::Pid::new(pgid as u64) };
 
     // For simplicity, only allow setting pgid for current process
     // A full implementation would search all processes for target_pid
     let current = scheduler.current_process_mut().ok_or(syscall::ErrorCode::ESRCH)?;
 
     if current.pid != target_pid {
-        serial_println!("[SETPGID] Can only set pgid for current process (pid={})", current.pid.as_u64());
+        serial_println!(
+            "[SETPGID] Can only set pgid for current process (pid={})",
+            current.pid.as_u64()
+        );
         return Err(syscall::ErrorCode::ESRCH);
     }
 
@@ -769,9 +768,8 @@ fn waitpid_handler(pid: i64, status_ptr: u64, options: i32) -> syscall::SyscallR
             // Write exit status to user if pointer is non-null
             if status_ptr != 0 {
                 // Exit status format: exit code << 8
-                let status = (exit_code << 8) as u32;
-                let status_bytes = status.to_ne_bytes();
-                crate::usermode::copy_to_user_bytes(status_ptr, &status_bytes)?;
+                let status = (exit_code.wrapping_shl(8).cast_unsigned()).to_ne_bytes();
+                crate::usermode::copy_to_user_bytes(status_ptr, &status)?;
             }
 
             // Reap the child process
@@ -836,9 +834,9 @@ fn waitpid_handler(pid: i64, status_ptr: u64, options: i32) -> syscall::SyscallR
 
                         // Write exit status to user if pointer is non-null
                         if status_ptr != 0 {
-                            let status = (exit_code << 8) as u32;
-                            let status_bytes = status.to_ne_bytes();
-                            crate::usermode::copy_to_user_bytes(status_ptr, &status_bytes)?;
+                            // Exit status format: exit code << 8
+                            let status = (exit_code.wrapping_shl(8).cast_unsigned()).to_ne_bytes();
+                            crate::usermode::copy_to_user_bytes(status_ptr, &status)?;
                         }
 
                         // Reap the child process
