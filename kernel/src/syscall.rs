@@ -64,6 +64,8 @@ pub enum SyscallNumber {
     Getpid = 39,
     /// Send signal
     Kill = 62,
+    /// Yield CPU (sched_yield)
+    Yield = 24,
 }
 
 impl SyscallNumber {
@@ -80,6 +82,7 @@ impl SyscallNumber {
             10 => Some(Self::Mprotect),
             11 => Some(Self::Munmap),
             22 => Some(Self::Pipe),
+            24 => Some(Self::Yield),
             32 => Some(Self::Dup),
             33 => Some(Self::Dup2),
             39 => Some(Self::Getpid),
@@ -117,6 +120,7 @@ impl SyscallNumber {
             Self::Chdir => "chdir",
             Self::Getpid => "getpid",
             Self::Kill => "kill",
+            Self::Yield => "yield",
         }
     }
 }
@@ -192,6 +196,7 @@ pub fn handle_syscall(
         SyscallNumber::Exit => sys_exit(arg1 as i32),
         SyscallNumber::Write => sys_write(arg1 as i32, arg2, arg3),
         SyscallNumber::Getpid => sys_getpid(),
+        SyscallNumber::Yield => sys_yield(),
         // All other syscalls return ENOSYS for now
         _ => Err(ErrorCode::ENOSYS),
     };
@@ -271,6 +276,34 @@ fn sys_getpid() -> SyscallResult {
     // TODO: Implement getpid
     // For now, return fake PID of 1
     Ok(1)
+}
+
+/// sys_yield - Voluntarily yield the CPU to another process
+fn sys_yield() -> SyscallResult {
+    serial_println!("Process yielding CPU");
+
+    // Get scheduler instance if available
+    if let Some(yield_fn) = unsafe { YIELD_HANDLER } {
+        yield_fn();
+    }
+
+    // Always return success
+    Ok(0)
+}
+
+/// Yield handler function pointer for scheduler integration
+static mut YIELD_HANDLER: Option<fn()> = None;
+
+/// Set the yield handler for syscall yield
+///
+/// # Safety
+///
+/// Must be called before any user processes run.
+pub unsafe fn set_yield_handler(handler: fn()) {
+    // SAFETY: Caller guarantees this is called before any user processes run
+    unsafe {
+        YIELD_HANDLER = Some(handler);
+    }
 }
 
 #[cfg(test)]

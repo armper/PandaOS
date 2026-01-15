@@ -33,6 +33,7 @@ extern crate panda_hal;
 
 pub mod boot_phases;
 pub mod context;
+pub mod context_switch;
 pub mod elf;
 pub mod gdt;
 pub mod heap;
