@@ -103,13 +103,15 @@ pub unsafe fn map_heap() -> Result<(), &'static str> {
     println!("Heap physical: {:#x}..{:#x}", heap_start, heap_start + HEAP_SIZE);
 
     // Reserve heap frames so they won't be allocated again
-    // This ensures the allocator never hands out frames we're using for the heap
+    // Reserve each frame individually since they may not be consecutive
     unsafe {
-        crate::memory::reserve_frames(
-            heap_frames[0],
-            heap_frames[frames_allocated - 1] + 1,
-            ReservationReason::Heap,
-        );
+        for i in 0..frames_allocated {
+            crate::memory::reserve_frames(
+                heap_frames[i],
+                heap_frames[i] + 1,
+                ReservationReason::Heap,
+            );
+        }
     }
 
     // Store actual heap start for init

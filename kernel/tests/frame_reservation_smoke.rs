@@ -72,7 +72,10 @@ fn test_reserved_frames_not_allocated() {
         }
     }
 
-    assert!(allocated_frames.len() > 0, "Should be able to allocate at least some frames");
+    assert!(
+        !allocated_frames.is_empty(),
+        "Should be able to allocate at least some frames"
+    );
 
     // Verify none of the allocated frames are in critical low memory
     // Frame 0 should always be reserved (BIOS/IVT)
@@ -108,7 +111,7 @@ fn test_heap_frames_allocated_only_once() {
     }
 
     // Verify we could allocate some frames
-    assert!(allocated_frames.len() > 0, "Should allocate some frames");
+    assert!(!allocated_frames.is_empty(), "Should allocate some frames");
 
     serial_println!("[ok] - no double allocations in {} frames", allocated_frames.len());
 }
@@ -136,7 +139,7 @@ fn test_allocation_after_heap_init() {
     assert_eq!(heap_vec[50], 50);
 
     // Verify we got some frames
-    assert!(frame_vec.len() > 0);
+    assert!(!frame_vec.is_empty());
 
     serial_println!("[ok] - heap and frame allocator coexist");
 }
