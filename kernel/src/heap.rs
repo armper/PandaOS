@@ -16,8 +16,8 @@ use core::alloc::{GlobalAlloc, Layout};
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use linked_list_allocator::LockedHeap;
 
-/// Heap size (100 KiB)
-pub const HEAP_SIZE: usize = 100 * 1024;
+/// Heap size (104 KiB - page aligned)
+pub const HEAP_SIZE: usize = 26 * 4096; // 104 KiB, exactly 26 pages
 
 /// Actual heap start address (set by map_heap, used by init)
 static ACTUAL_HEAP_START: AtomicUsize = AtomicUsize::new(0);
@@ -71,17 +71,24 @@ static ALLOCATOR: CheckedAllocator = CheckedAllocator;
 /// Currently uses identity-mapped low memory from bootloader for simplicity.
 /// TODO: Implement proper page table mapping for high kernel addresses.
 pub unsafe fn map_heap() -> Result<(), &'static str> {
-    extern crate alloc;
-
     // Calculate number of frames needed
     let num_frames = (HEAP_SIZE + 4095) / 4096;
 
-    // Allocate consecutive frames for the heap
-    let mut heap_frames = alloc::vec::Vec::new();
-    for _ in 0..num_frames {
+    // Allocate consecutive frames for the heap (without using Vec - circular dependency)
+    // We allocate a fixed array on stack to avoid heap usage during heap setup
+    const MAX_HEAP_FRAMES: usize = 32; // Support up to 128 KiB heap
+    let mut heap_frames = [0usize; MAX_HEAP_FRAMES];
+    let mut frames_allocated = 0;
+
+    for i in 0..num_frames {
         // SAFETY: Frame allocator is initialized at this point
         if let Some(frame) = unsafe { crate::memory::allocate_frame() } {
-            heap_frames.push(frame);
+            if i < MAX_HEAP_FRAMES {
+                heap_frames[i] = frame;
+                frames_allocated += 1;
+            } else {
+                return Err("Heap too large: exceeds MAX_HEAP_FRAMES");
+            }
         } else {
             return Err("Out of memory: cannot allocate frames for heap");
         }
@@ -90,7 +97,7 @@ pub unsafe fn map_heap() -> Result<(), &'static str> {
     // Use first frame as heap start (bootloader identity-maps low memory)
     let heap_start = heap_frames[0] * 4096;
 
-    println!("Heap: {} frames allocated ({} KiB)", num_frames, HEAP_SIZE / 1024);
+    println!("Heap: {} frames allocated ({} KiB)", frames_allocated, HEAP_SIZE / 1024);
     println!("Heap physical: {:#x}..{:#x}", heap_start, heap_start + HEAP_SIZE);
 
     // Store actual heap start for init

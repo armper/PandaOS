@@ -123,7 +123,8 @@ fn find_first_usable_frame(memory_map: &MemoryMapInfo) -> usize {
         .filter(|r| r.region_type == MemoryRegionType::Usable)
         .map(|r| (r.start_addr / 4096) as usize)
         .min()
-        .unwrap_or(0)
+        .unwrap_or(1) // Start at frame 1, never use frame 0 (contains BIOS/IVT data)
+        .max(1) // Ensure we never return frame 0
 }
 
 /// Find last usable frame from memory map
