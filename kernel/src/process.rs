@@ -279,8 +279,15 @@ impl Process {
     /// Send a signal to this process
     ///
     /// Signals are stored as a bitmask in pending_signals.
+    ///
+    /// # Panics
+    ///
+    /// Panics if signal number exceeds 31 (implementation limitation of u32 bitmask).
+    /// Current implementation only supports SIGINT (signal #2), so this is not an issue.
     pub fn send_signal(&mut self, signal: Signal) {
-        self.pending_signals |= 1 << (signal as u32);
+        let signal_num = signal as u32;
+        assert!(signal_num < 32, "Signal number must be < 32 for u32 bitmask storage");
+        self.pending_signals |= 1 << signal_num;
     }
 
     /// Check if a signal is pending

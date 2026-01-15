@@ -620,9 +620,12 @@ fn kill_handler(pid: i32, sig: i32) -> syscall::SyscallResult {
         }
     }
 
-    // Search in ready queue (we need to iterate through processes)
-    // For now, we'll return ESRCH if not current process
-    // A full implementation would search all processes
+    // LIMITATION: We only support sending signals to the current process.
+    // A full implementation would search the scheduler's ready queue for the target PID.
+    // This requires adding a method to scheduler to iterate processes by PID.
+    // For minimal SIGINT support, this limitation is acceptable since the shell
+    // would typically send SIGINT only to its own foreground child, which requires
+    // more complex job control infrastructure.
     serial_println!("[KILL] Process {} not found or not current", pid);
     Err(syscall::ErrorCode::ESRCH)
 }
