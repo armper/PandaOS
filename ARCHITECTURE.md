@@ -254,6 +254,21 @@ make future Ctrl+Z support straightforward when needed.
 - File types: regular files and directories
 - Directories: `/`, `/bin`, `/etc`
 - No writes (read-only filesystem)
+- Path resolution: supports relative paths, `.` and `..`
+
+**Process State:**
+- Each process has a current working directory (`cwd`)
+- Initialized to `/` for new processes
+- Preserved across `fork()` (child inherits parent's cwd)
+- Preserved across `exec()` 
+- Changed via `chdir()` syscall
+
+**Path Resolution:**
+- Absolute paths start with `/`
+- Relative paths resolved against process cwd
+- `.` refers to current directory
+- `..` refers to parent directory
+- Cannot escape root directory `/`
 
 **FD Table:**
 - Per-process fixed-size table (16 entries)

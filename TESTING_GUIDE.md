@@ -447,3 +447,78 @@ LS_SMOKE=1 ./scripts/qemu-test.sh
 - Directory listing is sequential with per-fd offset tracking
 - ls program uses getdents64 syscall (217) directly
 
+## Working Directory / cd Command Testing
+
+### cd_smoke Test
+
+**Purpose**: Verify current working directory support and cd builtin command.
+
+**Test Flow**:
+1. Shell starts at `/` directory
+2. User types "ls" → shows `bin` and `etc`
+3. User types "cd bin" → changes to `/bin`
+4. User types "ls" → shows `sh`, `cat`, `true`, `echo`, `wc`, `ls`
+5. User types "cd .." → returns to `/`
+6. User types "ls" → shows `bin` and `etc` again
+7. User types "exit" → clean exit
+
+**Expected Output**:
+```
+panda> ls
+bin
+etc
+panda> cd bin
+panda> ls
+sh
+cat
+true
+echo
+wc
+ls
+panda> cd ..
+panda> ls
+bin
+etc
+panda> exit
+TEST PASS cd_smoke
+```
+
+**Running the Test**:
+```bash
+CD_SMOKE=1 ./scripts/qemu-test.sh
+```
+
+**Test Input Sequence**:
+```
+"ls\n"      → list root directory
+"cd bin\n"  → change to /bin directory
+"ls\n"      → list /bin directory
+"cd ..\n"   → change back to parent (/)
+"ls\n"      → list root directory again
+"exit\n"    → clean exit
+```
+
+**What's Tested**:
+- Per-process current working directory
+- chdir() syscall implementation
+- cd builtin command (no fork/exec)
+- Path resolution (relative paths)
+- Parent directory navigation (..)
+- Directory validation
+- open() with relative paths
+- Process cwd preservation across operations
+
+**Implementation Notes**:
+- cd is a shell builtin (doesn't fork/exec)
+- `cd` with no args → changes to `/`
+- `cd <path>` → calls chdir(80) syscall
+- Relative paths resolved against cwd
+- chdir validates directory exists before changing
+- open() syscall uses cwd for relative path resolution
+- Path normalization handles `.` and `..` components
+- Cannot escape root directory `/`
+
+- Each entry includes: d_ino, d_off, d_reclen, d_type, d_name
+- Directory listing is sequential with per-fd offset tracking
+- ls program uses getdents64 syscall (217) directly
+

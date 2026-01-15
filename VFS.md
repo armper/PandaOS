@@ -3,16 +3,18 @@
 ## Overview
 
 PandaOS provides a tiny read-only virtual filesystem backed by an in-memory table of static
-file nodes. It supports absolute-path lookup, per-process file descriptors, sequential
-reads with per-fd offsets, and directory listing via `getdents64`.
+file nodes. It supports absolute and relative path lookup, per-process file descriptors, 
+per-process current working directory, sequential reads with per-fd offsets, and directory 
+listing via `getdents64`.
 
 ## Invariants
 
-- Paths are absolute and matched by exact string equality.
+- Paths are matched by exact string equality after normalization.
 - The filesystem is read-only; no write, create, or delete operations exist.
 - File data is embedded as static byte slices.
 - Directories are represented as FileNodes with type Directory.
 - Each process owns a fixed-size FD table (16 entries).
+- Each process has a current working directory (cwd), initialized to `/`.
 - FDs 0/1/2 are reserved for stdin/stdout/stderr and are not stored in the table.
 - open() returns the lowest available FD >= 3.
 - close(0/1/2) returns EINVAL.
@@ -22,11 +24,52 @@ reads with per-fd offsets, and directory listing via `getdents64`.
 ## Directory Structure
 
 The VFS contains three directories:
-- `/` - Root directory
-- `/bin` - Binary executables directory
-- `/etc` - Configuration files directory
+- `/` - Root directory (contains: bin, etc)
+- `/bin` - Binary executables directory (contains: sh, cat, true, echo, wc, ls)
+- `/etc` - Configuration files directory (contains: motd, version)
 
 Directory listing is performed via the `getdents64` syscall (Linux-compatible).
+
+## Working Directory Support
+
+Each process maintains a current working directory (cwd):
+- New processes start with cwd = `/`
+- `fork()` - child inherits parent's cwd
+- `exec()` - preserves cwd
+- `chdir(path)` - changes cwd (validates directory exists)
+- `getcwd(buf, size)` - returns current cwd
+
+## Path Resolution
+
+Paths are resolved relative to the process's cwd:
+
+**Absolute Paths:**
+- Start with `/`
+- Used directly after normalization
+
+**Relative Paths:**
+- Do not start with `/`
+- Prepended with cwd before resolution
+
+**Special Components:**
+- `.` - current directory (no-op)
+- `..` - parent directory (go up one level)
+- Cannot escape root `/`
+
+**Examples:**
+```
+cwd = "/"
+  "bin"     -> "/bin"
+  "."       -> "/"
+  ".."      -> "/" (can't escape root)
+  "/etc"    -> "/etc" (absolute)
+
+cwd = "/bin"
+  "."       -> "/bin"
+  ".."      -> "/"
+  "cat"     -> "/bin/cat"
+  "/etc"    -> "/etc" (absolute)
+```
 
 ## FD Semantics
 
