@@ -18,6 +18,11 @@ linked_list_allocator = { version = "0.10.5", features = ["use_spin"] }
 name = "panda-kernel"
 path = "src/main.rs"
 
+[features]
+default = []
+shell-smoke = []
+build-userland = []
+
 [package.metadata.bootimage]
 run-args = ["-serial", "stdio", "-display", "none"]
 test-args = ["-device", "isa-debug-exit,iobase=0xf4,iosize=0x04", "-serial", "stdio", "-display", "none"]

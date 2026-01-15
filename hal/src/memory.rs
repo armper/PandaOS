@@ -101,6 +101,7 @@ impl FrameAllocator {
     ///
     /// * `start_frame` - First available frame number
     /// * `end_frame` - Last available frame number (exclusive)
+    /// * `bitmap_storage` - Backing storage for allocation bitmap
     pub fn new(
         start_frame: usize,
         end_frame: usize,

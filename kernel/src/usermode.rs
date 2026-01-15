@@ -12,6 +12,7 @@
 
 use crate::context::CpuContext;
 use crate::{gdt, syscall};
+use core::sync::atomic::{AtomicU64, Ordering};
 use x86_64::registers::model_specific::{Efer, EferFlags, LStar, SFMask, Star};
 use x86_64::registers::rflags::RFlags;
 use x86_64::VirtAddr;
@@ -24,6 +25,21 @@ static mut USER_RSP_SCRATCH: u64 = 0;
 
 /// Scratch storage for user RDI during syscall entry
 static mut USER_RDI_SCRATCH: u64 = 0;
+
+/// Kernel page table physical address (captured during init).
+static KERNEL_PAGE_TABLE_PHYS: AtomicU64 = AtomicU64::new(0);
+
+/// Pending exited process page table for reaping.
+static PENDING_REAP_PT: AtomicU64 = AtomicU64::new(0);
+static PENDING_REAP_PID: AtomicU64 = AtomicU64::new(0);
+
+const REAPER_STACK_SIZE: usize = 4096;
+
+#[allow(dead_code)]
+#[repr(align(16))]
+struct ReaperStack([u8; REAPER_STACK_SIZE]);
+
+static mut REAPER_STACK: ReaperStack = ReaperStack([0; REAPER_STACK_SIZE]);
 
 /// Initialize syscall/sysret support
 ///
@@ -77,6 +93,111 @@ pub unsafe fn set_current_syscall_context(ctx: *mut CpuContext) {
     // SAFETY: Caller guarantees interrupts are disabled and ctx is valid
     unsafe {
         CURRENT_CONTEXT_PTR = ctx;
+    }
+}
+
+/// Store the kernel page table physical address for later reaping.
+pub fn set_kernel_page_table_phys(phys: u64) {
+    KERNEL_PAGE_TABLE_PHYS.store(phys, Ordering::Relaxed);
+}
+
+/// Read the stored kernel page table physical address.
+pub fn kernel_page_table_phys() -> u64 {
+    KERNEL_PAGE_TABLE_PHYS.load(Ordering::Relaxed)
+}
+
+/// Queue an exited process for reaping after a CR3 switch.
+pub fn set_pending_reap(page_table_phys: u64, pid: u64) {
+    PENDING_REAP_PID.store(pid, Ordering::Relaxed);
+    PENDING_REAP_PT.store(page_table_phys, Ordering::Release);
+}
+
+/// Copy a NUL-terminated user string into a kernel buffer.
+pub fn copy_user_cstr<'a>(
+    ptr: u64,
+    buf: &'a mut [u8],
+) -> Result<&'a str, syscall::ErrorCode> {
+    if ptr == 0 {
+        return Err(syscall::ErrorCode::EFAULT);
+    }
+
+    for i in 0..buf.len() {
+        // SAFETY: Caller provides user pointer; we cap the read length.
+        let byte = unsafe { *(ptr as *const u8).add(i) };
+        if byte == 0 {
+            return core::str::from_utf8(&buf[..i]).map_err(|_| syscall::ErrorCode::EINVAL);
+        }
+        buf[i] = byte;
+    }
+
+    Err(syscall::ErrorCode::EINVAL)
+}
+
+/// Copy raw bytes from user memory into a kernel buffer.
+pub fn copy_user_bytes(
+    ptr: u64,
+    len: usize,
+    dst: &mut [u8],
+) -> Result<usize, syscall::ErrorCode> {
+    if ptr == 0 {
+        return Err(syscall::ErrorCode::EFAULT);
+    }
+
+    if len > dst.len() {
+        return Err(syscall::ErrorCode::EINVAL);
+    }
+
+    for i in 0..len {
+        // SAFETY: Caller provides user pointer; we cap the read length.
+        dst[i] = unsafe { *(ptr as *const u8).add(i) };
+    }
+
+    Ok(len)
+}
+
+/// Copy raw bytes from a kernel buffer into user memory.
+pub fn copy_to_user_bytes(ptr: u64, src: &[u8]) -> Result<usize, syscall::ErrorCode> {
+    if ptr == 0 {
+        return Err(syscall::ErrorCode::EFAULT);
+    }
+
+    if src.is_empty() {
+        return Ok(0);
+    }
+
+    let len = src.len();
+    if ptr.checked_add(len as u64).is_none() {
+        return Err(syscall::ErrorCode::EFAULT);
+    }
+
+    for (i, byte) in src.iter().enumerate() {
+        // SAFETY: Caller provides user pointer; we cap the write length.
+        unsafe {
+            *((ptr + i as u64) as *mut u8) = *byte;
+        }
+    }
+
+    Ok(len)
+}
+
+/// Reap a pending exited process after a CR3 switch.
+extern "C" fn reap_pending() {
+    let page_table_phys = PENDING_REAP_PT.swap(0, Ordering::AcqRel);
+    if page_table_phys == 0 {
+        return;
+    }
+
+    let pid = PENDING_REAP_PID.load(Ordering::Relaxed);
+    serial_println!(
+        "[REAP] Freeing exited process PID {} (pt={:#x})",
+        pid,
+        page_table_phys
+    );
+
+    // SAFETY: The exited process is no longer active; we are on a different CR3.
+    unsafe {
+        crate::paging::free_process_address_space(page_table_phys, true)
+            .expect("Failed to reap exited process");
     }
 }
 
@@ -228,6 +349,84 @@ pub unsafe fn switch_to_user(ctx: *const CpuContext, page_table_phys: u64) -> ! 
             "sysretq",
             in("rsi") ctx,
             in("rax") page_table_phys,
+            options(noreturn)
+        );
+    }
+}
+
+/// Switch to a new user process, then reap any exited process after CR3 switch.
+///
+/// # Safety
+///
+/// - Must be called with interrupts disabled
+/// - `ctx` must point to a valid, initialized user context
+/// - `page_table_phys` must be a valid L4 page table physical address
+pub unsafe fn switch_to_user_with_reap(ctx: *const CpuContext, page_table_phys: u64) -> ! {
+    // SAFETY: Caller guarantees ctx and page table are valid and interrupts are disabled
+    unsafe {
+        core::arch::asm!(
+            "lea rsp, [rip + {stack}]",
+            "add rsp, {stack_size}",
+            "and rsp, -16",
+            "mov cr3, rax",
+            "call {reap_fn}",
+            "mov rsi, r12",
+
+            "mov r15, [rsi + 0x00]",
+            "mov r14, [rsi + 0x08]",
+            "mov r13, [rsi + 0x10]",
+            "mov r12, [rsi + 0x18]",
+            "mov r10, [rsi + 0x28]",
+            "mov r9, [rsi + 0x30]",
+            "mov r8, [rsi + 0x38]",
+            "mov rbp, [rsi + 0x40]",
+            "mov rdi, [rsi + 0x48]",
+            "mov rdx, [rsi + 0x58]",
+            "mov rbx, [rsi + 0x68]",
+            "mov rax, [rsi + 0x70]",
+            "mov rcx, [rsi + 0x78]",
+            "mov r11, [rsi + 0x88]",
+            "mov rsp, [rsi + 0x80]",
+            "mov rsi, [rsi + 0x50]",
+            "sysretq",
+            stack = sym REAPER_STACK,
+            stack_size = const REAPER_STACK_SIZE,
+            reap_fn = sym reap_pending,
+            in("rax") page_table_phys,
+            in("r12") ctx,
+            options(noreturn)
+        );
+    }
+}
+
+extern "C" fn exit_after_reap() -> ! {
+    crate::exit_qemu(crate::QemuExitCode::Success);
+}
+
+/// Switch to the kernel page table, reap pending exits, then halt.
+pub fn switch_to_kernel_and_reap_then_halt() -> ! {
+    let kernel_pt = KERNEL_PAGE_TABLE_PHYS.load(Ordering::Relaxed);
+    let kernel_pt = if kernel_pt == 0 {
+        use x86_64::registers::control::Cr3;
+        Cr3::read().0.start_address().as_u64()
+    } else {
+        kernel_pt
+    };
+
+    // SAFETY: This path never returns and uses a dedicated kernel stack.
+    unsafe {
+        core::arch::asm!(
+            "lea rsp, [rip + {stack}]",
+            "add rsp, {stack_size}",
+            "and rsp, -16",
+            "mov cr3, rax",
+            "call {reap_fn}",
+            "jmp {exit_fn}",
+            stack = sym REAPER_STACK,
+            stack_size = const REAPER_STACK_SIZE,
+            reap_fn = sym reap_pending,
+            exit_fn = sym exit_after_reap,
+            in("rax") kernel_pt,
             options(noreturn)
         );
     }

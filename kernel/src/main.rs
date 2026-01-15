@@ -187,6 +187,10 @@ pub unsafe fn init_for_test(boot_info: &'static bootloader::BootInfo) {
         paging::init_higher_half_mapping().expect("Failed to initialize higher-half mapping");
     }
 
+    let kernel_cr3 =
+        x86_64::registers::control::Cr3::read().0.start_address().as_u64();
+    usermode::set_kernel_page_table_phys(kernel_cr3);
+
     // Map and initialize heap
     unsafe {
         heap::map_heap().expect("Failed to map heap");
@@ -301,20 +305,10 @@ unsafe fn init_scheduler_and_start() -> ! {
         interrupts::set_timer_handler(timer_tick_handler);
     }
 
-    // Set yield syscall handler
-    unsafe {
-        syscall::set_yield_handler(yield_handler);
-    }
-
-    // Set exit syscall handler
-    unsafe {
-        syscall::set_exit_handler(exit_handler);
-    }
-
-    // Set exec syscall handler
-    unsafe {
-        syscall::set_exec_handler(exec_handler);
-    }
+    // Set syscall handlers
+    syscall::set_yield_handler(yield_handler);
+    syscall::set_exit_handler(exit_handler);
+    syscall::set_exec_handler(exec_handler);
 
     // Unmask timer interrupt (IRQ 0)
     println!("Enabling timer interrupt...");
@@ -429,20 +423,34 @@ fn exit_handler(status: i32) -> ! {
     // SAFETY: Called from syscall handler with interrupts disabled
     let scheduler = unsafe { get_scheduler() };
 
+    let mut exited_pid = None;
+    let mut exited_pt = None;
+    if let Some(current) = scheduler.current_process_mut() {
+        exited_pid = Some(current.pid.as_u64());
+        exited_pt = Some(current.page_table_phys);
+    }
+
     // Mark current process as exited
     scheduler.exit_current(status);
 
-    if let Some(current) = scheduler.current_process_mut() {
-        let page_table = current.page_table_phys;
-        // SAFETY: Page table is valid; reclaim all process frames.
-        unsafe {
-            crate::paging::free_process_address_space(page_table, true)
-                .expect("Failed to free process address space");
-        }
+    if let (Some(pid), Some(pt)) = (exited_pid, exited_pt) {
+        serial_println!(
+            "[EXIT] Marked PID {} exited (pt={:#x})",
+            pid,
+            pt
+        );
+        usermode::set_pending_reap(pt, pid);
     }
 
     // Schedule next process
     if let Some(next) = scheduler.schedule_next() {
+        let current_cr3 =
+            x86_64::registers::control::Cr3::read().0.start_address().as_u64();
+        serial_println!(
+            "[EXIT] Switching CR3: from {:#x} to {:#x}",
+            current_cr3,
+            next.page_table_phys
+        );
         // Update syscall context pointer and kernel stack for the new process.
         // SAFETY: Scheduler is initialized and interrupts are disabled here.
         unsafe {
@@ -452,12 +460,26 @@ fn exit_handler(status: i32) -> ! {
         // Switch CR3 and return to user mode for the next process.
         // SAFETY: Next process has a valid user context and page table.
         unsafe {
-            usermode::switch_to_user(core::ptr::addr_of!(next.context), next.page_table_phys);
+            usermode::switch_to_user_with_reap(
+                core::ptr::addr_of!(next.context),
+                next.page_table_phys,
+            );
         }
     } else {
         // No more processes - report success and exit QEMU deterministically.
+        #[cfg(feature = "shell-smoke")]
+        serial_println!("TEST PASS shell_smoke");
+        #[cfg(not(feature = "shell-smoke"))]
         serial_println!("TEST PASS exec_smoke");
-        exit_qemu(QemuExitCode::Success);
+        let kernel_pt = usermode::kernel_page_table_phys();
+        let current_cr3 =
+            x86_64::registers::control::Cr3::read().0.start_address().as_u64();
+        serial_println!(
+            "[EXIT] Switching CR3 to kernel table: from {:#x} to {:#x}",
+            current_cr3,
+            kernel_pt
+        );
+        usermode::switch_to_kernel_and_reap_then_halt();
     }
 }
 

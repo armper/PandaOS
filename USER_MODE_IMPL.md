@@ -153,12 +153,11 @@ All memory operations use `unsafe` with documented safety requirements:
 
 4. **Fixed Stack Size**: User stack is always 4 pages (16KB). Should be configurable.
 
-5. **No Process Cleanup**: When process exits, allocated frames are not freed.
+5. **Reaper Stack Usage**: Exit cleanup runs after CR3 switch on a dedicated reaper stack.
 
 ### 📋 Future Enhancements
 - Implement proper higher-half kernel mapping
 - Add page fault handler for demand paging
-- Implement process cleanup and frame deallocation  
 - Add memory-mapped file support
 - Implement copy-on-write for fork()
 - Add guard pages around user stack
@@ -194,4 +193,3 @@ Note: Full integration testing requires addressing the physical memory access li
 - `userland/hello.asm`: Test user program
 - `userland/build.sh`: User program build script
 - `kernel/build.rs`: Embeds user binary in kernel
-

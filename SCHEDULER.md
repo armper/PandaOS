@@ -135,7 +135,9 @@ Yield syscall:
 
 Exit syscall:
 - Marks process as exited
-- Schedules next process
+- Queues the exited process for reaping
+- Switches CR3 to the next runnable process (or kernel table if none)
+- Reaper frees user mappings + kernel stack after CR3 switch
 - Never returns to caller
 
 ## Interrupt and Exception Handling
@@ -193,7 +195,7 @@ Exit syscall:
 2. Syscall entry switches to the current process kernel stack before calling Rust.
 3. Context switches update the current syscall context pointer.
 4. Kernel stack VA is fixed (`KERNEL_STACK_TOP`); CR3 selects backing frames.
-5. CR3 is switched only in the sysret path that does not touch the old stack.
+5. Exit switches to a dedicated reaper stack before CR3 switch and cleanup.
 
 ## Process Lifecycle
 
@@ -218,8 +220,10 @@ Exit syscall:
 
 1. Process calls exit() syscall
 2. Mark process as Exited
-3. Schedule next process
-4. Dead process removed by scheduler
+3. Queue the exited process for reaping
+4. Switch CR3 to the next address space (or kernel table if none)
+5. Reaper frees user mappings and kernel stack frames
+6. Dead process removed by scheduler
 
 ## Limitations
 

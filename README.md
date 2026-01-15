@@ -115,7 +115,15 @@ Kernel functionality tested in QEMU with custom test harness:
 ### Prerequisites
 
 - Rust nightly toolchain (automatically installed via `rust-toolchain.toml`)
+- `rust-src` and `llvm-tools-preview` components (required for bare-metal builds)
 - QEMU for testing (optional)
+- `bootimage` (optional, required for `cargo bootimage` / QEMU runner)
+
+On macOS:
+```bash
+rustup component add rust-src llvm-tools-preview
+cargo install bootimage --version "^0.10"
+```
 
 ### Build Commands
 
@@ -207,4 +215,3 @@ PandaOS Contributors
 
 **Quality**: 37 tests passing • 0 clippy warnings • 100% documented  
 **Safety**: Minimal unsafe • All documented • Automated checks
-

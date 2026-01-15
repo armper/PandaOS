@@ -141,7 +141,7 @@ PandaOS is a Unix-like x86_64 kernel written in Rust with a focus on:
   - **higher_half_smoke** - higher-half kernel operation (static vars, heap, function pointers)
   - **page_table_reservation_smoke** - page table frame tracking and reservation
   - **yield_cooperative_smoke** - cooperative multitasking via yield()
-  - **exec_smoke** - init → exec `/bin/sh` → exit
+  - **shell_smoke** - init → exec `/bin/sh` → scripted help/exit
 
 #### 4. Core Kernel Features
 - [x] **Process management**:
@@ -150,12 +150,12 @@ PandaOS is a Unix-like x86_64 kernel written in Rust with a focus on:
   - User address space isolation
   - User stack allocation (16KB default)
   - CPU context for context switching
-  - Exit cleanup frees user mappings, page tables, and kernel stack frames
+  - Exit cleanup reaps user mappings, page tables, and kernel stacks after CR3 switch
   - exec() replaces the current process image without changing PID
 - [x] **System call interface**:
   - syscall/sysret infrastructure via MSRs
   - Linux x86_64 ABI compatibility
-  - Implemented: write(), exit(), getpid(), yield(), execve()
+  - Implemented: read(), write(), exit(), getpid(), yield(), execve()
   - Syscall entry/exit with explicit context save/restore
 - [x] **GDT with user segments**:
   - Kernel code/data segments (ring 0)
@@ -170,7 +170,7 @@ PandaOS is a Unix-like x86_64 kernel written in Rust with a focus on:
   - hello1.asm - scheduler test with yield
   - hello2.asm - scheduler test with yield
   - init.asm - exec stub for `/bin/sh`
-  - sh.asm - dummy shell prompt
+  - sh.asm - minimal REPL (help/echo/exit)
   - Build system to create static ELF executables
   - Embedding mechanism via build.rs
 - [x] **Scheduler and Cooperative Multitasking**:

@@ -20,7 +20,9 @@ Thumbs.db
 *.bin
 *.iso
 *.img
+/userland/build/
 
 # QEMU
 *.log
 serial.txt
+qemu-*.log
