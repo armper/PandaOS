@@ -22,7 +22,7 @@ PandaOS is a Unix-like x86_64 kernel written in Rust with a focus on:
 #### 2. Hardware Abstraction Layer (HAL)
 **Pure Logic Modules** (no unsafe, testable on host):
 - `bitmap.rs` - Bitmap allocation tracking (7 tests)
-- `memory.rs` - Frame allocator logic (6 unit tests + 5 property tests)
+- `memory.rs` - Frame allocator logic with reservation system (25 unit tests + 7 property tests)
 - `pid.rs` - Process ID management (7 tests including concurrency)
 - `ringbuffer.rs` - Circular buffer (8 tests)
 
@@ -30,7 +30,7 @@ PandaOS is a Unix-like x86_64 kernel written in Rust with a focus on:
 - `serial.rs` - Serial port driver (COM1-COM4)
 - `vga.rs` - VGA text mode driver (2 tests)
 
-**Test Coverage**: 37 unit tests (all passing on host)
+**Test Coverage**: 51 unit tests (all passing on host)
 
 #### 3. Safety Infrastructure
 **Compile-Time Safety**:
@@ -47,7 +47,7 @@ PandaOS is a Unix-like x86_64 kernel written in Rust with a focus on:
 **Quality Gates** (`scripts/quality-gate.sh`):
 1. ✅ Code formatting check
 2. ✅ Clippy lints (zero warnings)
-3. ✅ Host unit tests (53 passing: 37 HAL + 9 kernel + 7 paging)
+3. ✅ Host unit tests (51 passing: 51 HAL + kernel tests)
 4. ✅ Unsafe code placement check
 
 #### 4. Testing Infrastructure
@@ -105,10 +105,16 @@ PandaOS is a Unix-like x86_64 kernel written in Rust with a focus on:
 - [ ] GDT configuration
 
 #### 2. Memory Management
-- [ ] Heap allocator implementation
-- [ ] Pre-heap-init allocation panic
-- [ ] Paging infrastructure
-- [ ] Page table management
+- [x] Heap allocator implementation
+- [x] Pre-heap-init allocation panic
+- [x] Paging infrastructure
+- [x] Page table management
+- [x] **Frame reservation system**:
+  - Explicit reservation API in HAL
+  - Reserve kernel, bootloader, page tables, and heap frames
+  - Allocator skips reserved frames automatically
+  - Comprehensive unit tests (14 tests) and property tests
+  - QEMU integration test for frame reservation
 
 #### 3. QEMU Integration Tests
 - [ ] Enable bootimage builds
@@ -234,8 +240,8 @@ cargo clippy --workspace --target x86_64-unknown-linux-gnu --lib -- -D warnings
 
 ## Quality Metrics
 
-- **Unit Tests**: 37 (all passing)
-- **Property Tests**: 5 (frame allocator)
+- **Unit Tests**: 51 (all passing)
+- **Property Tests**: 7 (frame allocator with reservations)
 - **Code Coverage**: Pure logic modules 100% tested
 - **Clippy Warnings**: 0
 - **Unsafe Blocks**: Limited to drivers, all documented
@@ -284,5 +290,5 @@ GPL-3.0 - See LICENSE file
 
 **Last Updated**: 2026-01-15
 **Status**: Active Development
-**Test Coverage**: 37 unit tests, 5 property tests
+**Test Coverage**: 51 unit tests, 7 property tests
 **Safety Level**: High (minimal unsafe, all documented)

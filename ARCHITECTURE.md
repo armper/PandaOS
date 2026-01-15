@@ -124,7 +124,25 @@ None yet - hardware access is direct. Future refactoring will add:
 
 **Physical Memory:**
 - Frame size: 4 KiB
-- Frame allocator: Bump allocator initially, bitmap later
+- Frame allocator: Bump allocator with explicit reservations
+- Reserved regions tracked to prevent re-allocation of critical frames
+
+**Frame Reservation Strategy:**
+The frame allocator implements explicit frame reservation to ensure that frames used by the kernel, bootloader, page tables, and heap are never allocated twice. This prevents memory corruption and ensures system stability.
+
+**Reserved Frame Categories:**
+1. **Frame 0 (NullFrame)**: BIOS/IVT data, never used
+2. **Kernel Image**: First 16 MB of physical memory for kernel code/data
+3. **Bootloader**: Bootloader structures including memory map and boot info
+4. **Page Tables**: Active page table frames (L4, L3, L2, L1)
+5. **Heap**: Frames allocated for kernel heap
+6. **InitramfsModule**: Initial ramdisk or loaded modules (future)
+
+**Reservation Invariants:**
+- Reserved regions never overlap in the allocator's view (automatically merged)
+- `allocate_frame()` always skips reserved frames
+- Allocated frames ∩ reserved frames = ∅
+- Once reserved, a frame remains reserved until system restart
 
 **Virtual Memory:**
 - 4-level paging (x86_64)
@@ -138,8 +156,18 @@ None yet - hardware access is direct. Future refactoring will add:
 3. Bootloader jumps to kernel `_start`
 4. Kernel initializes HAL (serial, VGA)
 5. Kernel sets up IDT and exception handlers
-6. Kernel initializes memory management (MUST happen before first allocation)
-7. Kernel enters main loop
+6. Kernel initializes memory management:
+   - Parses bootloader memory map
+   - Initializes frame allocator with usable memory range
+   - Reserves frame 0 (BIOS/IVT)
+   - Reserves kernel image (first 16 MB)
+   - Reserves bootloader structures
+   - Reserves active page table frames
+7. Kernel maps and initializes heap:
+   - Allocates frames for heap
+   - Immediately reserves heap frames to prevent re-allocation
+   - Initializes heap allocator
+8. Kernel enters main loop
 
 ## Interrupt Handling
 

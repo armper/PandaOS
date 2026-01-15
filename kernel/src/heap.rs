@@ -71,6 +71,8 @@ static ALLOCATOR: CheckedAllocator = CheckedAllocator;
 /// Currently uses identity-mapped low memory from bootloader for simplicity.
 /// TODO: Implement proper page table mapping for high kernel addresses.
 pub unsafe fn map_heap() -> Result<(), &'static str> {
+    use panda_hal::memory::ReservationReason;
+
     // Calculate number of frames needed
     let num_frames = (HEAP_SIZE + 4095) / 4096;
 
@@ -99,6 +101,18 @@ pub unsafe fn map_heap() -> Result<(), &'static str> {
 
     println!("Heap: {} frames allocated ({} KiB)", frames_allocated, HEAP_SIZE / 1024);
     println!("Heap physical: {:#x}..{:#x}", heap_start, heap_start + HEAP_SIZE);
+
+    // Reserve heap frames so they won't be allocated again
+    // Reserve each frame individually since they may not be consecutive
+    unsafe {
+        for i in 0..frames_allocated {
+            crate::memory::reserve_frames(
+                heap_frames[i],
+                heap_frames[i] + 1,
+                ReservationReason::Heap,
+            );
+        }
+    }
 
     // Store actual heap start for init
     ACTUAL_HEAP_START.store(heap_start, Ordering::SeqCst);
