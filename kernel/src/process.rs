@@ -205,8 +205,8 @@ impl Process {
         // Copy parent's CPU context - child will have rax=0 set by caller
         let child_context = self.context;
 
-        // Duplicate FD table
-        let child_fd_table = self.fd_table;
+        // Duplicate FD table with proper refcounting
+        let child_fd_table = self.fd_table.fork_copy().map_err(|_| "Failed to fork FD table")?;
 
         Ok(Self {
             pid: child_pid,

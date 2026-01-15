@@ -1,5 +1,6 @@
 //! Minimal in-memory filesystem for exec() and VFS reads.
 
+use crate::pipe::PipeId;
 use crate::syscall::ErrorCode;
 
 pub const MAX_FDS: usize = 16;
@@ -16,9 +17,20 @@ pub struct OpenFile {
     pub offset: usize,
 }
 
+/// File descriptor kinds
+#[derive(Clone, Copy, Debug)]
+pub enum FdKind {
+    /// Regular file
+    File(OpenFile),
+    /// Pipe read end
+    PipeRead(PipeId),
+    /// Pipe write end
+    PipeWrite(PipeId),
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct FdTable {
-    entries: [Option<OpenFile>; MAX_FDS],
+    entries: [Option<FdKind>; MAX_FDS],
 }
 
 impl FdTable {
@@ -26,14 +38,45 @@ impl FdTable {
         Self { entries: [None; MAX_FDS] }
     }
 
-    pub fn open_node(&mut self, node_index: usize) -> Result<i32, ErrorCode> {
+    /// Allocate the lowest available fd >= 3
+    fn allocate_fd(&mut self) -> Result<usize, ErrorCode> {
         for fd in FIRST_NONSTD_FD..MAX_FDS {
             if self.entries[fd].is_none() {
-                self.entries[fd] = Some(OpenFile { node_index, offset: 0 });
-                return Ok(fd as i32);
+                return Ok(fd);
             }
         }
         Err(ErrorCode::EMFILE)
+    }
+
+    pub fn open_node(&mut self, node_index: usize) -> Result<i32, ErrorCode> {
+        let fd = self.allocate_fd()?;
+        self.entries[fd] = Some(FdKind::File(OpenFile { node_index, offset: 0 }));
+        Ok(fd as i32)
+    }
+
+    /// Open a pipe read end
+    pub fn open_pipe_read(&mut self, pipe_id: PipeId) -> Result<i32, ErrorCode> {
+        let fd = self.allocate_fd()?;
+        self.entries[fd] = Some(FdKind::PipeRead(pipe_id));
+        Ok(fd as i32)
+    }
+
+    /// Open a pipe write end
+    pub fn open_pipe_write(&mut self, pipe_id: PipeId) -> Result<i32, ErrorCode> {
+        let fd = self.allocate_fd()?;
+        self.entries[fd] = Some(FdKind::PipeWrite(pipe_id));
+        Ok(fd as i32)
+    }
+
+    /// Get the fd kind
+    pub fn get(&self, fd: i32) -> Result<FdKind, ErrorCode> {
+        if fd < 0 || fd as usize >= MAX_FDS {
+            return Err(ErrorCode::EBADF);
+        }
+        if fd < FIRST_NONSTD_FD as i32 {
+            return Err(ErrorCode::EBADF);
+        }
+        self.entries[fd as usize].ok_or(ErrorCode::EBADF)
     }
 
     pub fn close(&mut self, fd: i32) -> Result<(), ErrorCode> {
@@ -44,8 +87,19 @@ impl FdTable {
             return Err(ErrorCode::EINVAL);
         }
         let slot = &mut self.entries[fd as usize];
-        if slot.is_some() {
-            *slot = None;
+        if let Some(kind) = slot.take() {
+            // Close pipe ends if needed
+            match kind {
+                FdKind::PipeRead(pipe_id) => {
+                    crate::pipe::pipe_close_read(pipe_id)?;
+                }
+                FdKind::PipeWrite(pipe_id) => {
+                    crate::pipe::pipe_close_write(pipe_id)?;
+                }
+                FdKind::File(_) => {
+                    // Files don't need cleanup
+                }
+            }
             Ok(())
         } else {
             Err(ErrorCode::EBADF)
@@ -59,17 +113,90 @@ impl FdTable {
         if fd < FIRST_NONSTD_FD as i32 {
             return Err(ErrorCode::EBADF);
         }
-        let open = self.entries[fd as usize].ok_or(ErrorCode::EBADF)?;
-        let node = FILES.get(open.node_index).ok_or(ErrorCode::ENOENT)?;
-        if open.offset >= node.data.len() || count == 0 {
-            return Ok(&[]);
+        let kind = self.entries[fd as usize].ok_or(ErrorCode::EBADF)?;
+        match kind {
+            FdKind::File(open) => {
+                let node = FILES.get(open.node_index).ok_or(ErrorCode::ENOENT)?;
+                if open.offset >= node.data.len() || count == 0 {
+                    return Ok(&[]);
+                }
+                let available = node.data.len() - open.offset;
+                let to_read = available.min(count);
+                let start = open.offset;
+                let end = start + to_read;
+                self.entries[fd as usize] =
+                    Some(FdKind::File(OpenFile { node_index: open.node_index, offset: end }));
+                Ok(&node.data[start..end])
+            }
+            FdKind::PipeRead(_) | FdKind::PipeWrite(_) => {
+                // Pipes are handled through separate syscall path
+                Err(ErrorCode::EBADF)
+            }
         }
-        let available = node.data.len() - open.offset;
-        let to_read = available.min(count);
-        let start = open.offset;
-        let end = start + to_read;
-        self.entries[fd as usize] = Some(OpenFile { node_index: open.node_index, offset: end });
-        Ok(&node.data[start..end])
+    }
+
+    /// Duplicate fd (for dup2)
+    pub fn dup2(&mut self, oldfd: i32, newfd: i32) -> Result<(), ErrorCode> {
+        if oldfd < 0 || oldfd as usize >= MAX_FDS {
+            return Err(ErrorCode::EBADF);
+        }
+        if newfd < 0 || newfd as usize >= MAX_FDS {
+            return Err(ErrorCode::EBADF);
+        }
+
+        // Can't dup stdin/stdout/stderr
+        if oldfd < FIRST_NONSTD_FD as i32 || newfd < FIRST_NONSTD_FD as i32 {
+            return Err(ErrorCode::EINVAL);
+        }
+
+        let old_kind = self.entries[oldfd as usize].ok_or(ErrorCode::EBADF)?;
+
+        // Close newfd if it's open
+        if self.entries[newfd as usize].is_some() {
+            self.close(newfd)?;
+        }
+
+        // Duplicate the fd kind and increment refcounts for pipes
+        match old_kind {
+            FdKind::File(open) => {
+                self.entries[newfd as usize] = Some(FdKind::File(open));
+            }
+            FdKind::PipeRead(pipe_id) => {
+                crate::pipe::pipe_open_read_end(pipe_id)?;
+                self.entries[newfd as usize] = Some(FdKind::PipeRead(pipe_id));
+            }
+            FdKind::PipeWrite(pipe_id) => {
+                crate::pipe::pipe_open_write_end(pipe_id)?;
+                self.entries[newfd as usize] = Some(FdKind::PipeWrite(pipe_id));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Fork the FD table (for use in fork())
+    /// Increments refcounts for all pipe fds
+    pub fn fork_copy(&self) -> Result<Self, ErrorCode> {
+        let mut new_table = *self;
+
+        // Increment refcounts for all pipe fds
+        for entry in &new_table.entries {
+            if let Some(kind) = entry {
+                match kind {
+                    FdKind::PipeRead(pipe_id) => {
+                        crate::pipe::pipe_open_read_end(*pipe_id)?;
+                    }
+                    FdKind::PipeWrite(pipe_id) => {
+                        crate::pipe::pipe_open_write_end(*pipe_id)?;
+                    }
+                    FdKind::File(_) => {
+                        // Files don't need refcounting
+                    }
+                }
+            }
+        }
+
+        Ok(new_table)
     }
 }
 
