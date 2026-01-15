@@ -37,7 +37,7 @@ The main kernel crate contains:
 - **main.rs**: Kernel entry point and initialization
 - **interrupts.rs**: Interrupt Descriptor Table (IDT) and exception handling
 - **memory.rs**: Memory management subsystem
-- **fs.rs**: In-memory VFS and per-process file descriptors (see [VFS.md](VFS.md))
+- **fs.rs**: In-memory VFS with file descriptors, metadata (stat/fstat), and directory listing (see [VFS.md](VFS.md))
 - Additional modules for process management, syscalls, etc. (future)
 
 **Invariants:**

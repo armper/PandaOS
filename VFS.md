@@ -4,8 +4,8 @@
 
 PandaOS provides a tiny read-only virtual filesystem backed by an in-memory table of static
 file nodes. It supports absolute and relative path lookup, per-process file descriptors, 
-per-process current working directory, sequential reads with per-fd offsets, and directory 
-listing via `getdents64`.
+per-process current working directory, sequential reads with per-fd offsets, directory 
+listing via `getdents64`, and file metadata queries via `stat`/`fstat`.
 
 ## Invariants
 
@@ -20,6 +20,43 @@ listing via `getdents64`.
 - close(0/1/2) returns EINVAL.
 - read() advances the per-fd offset and returns 0 on EOF.
 - read() on directories returns EISDIR (use getdents64 instead).
+- stat()/fstat() return FileMetadata with file type and size.
+
+## File Metadata
+
+The VFS supports minimal file metadata queries:
+
+### FileMetadata Structure
+```rust
+pub struct FileMetadata {
+    pub file_type: FileType,  // File or Directory
+    pub size: u64,             // Size in bytes (0 for directories)
+}
+```
+
+### Syscalls
+- `stat(path, buf)` - Get metadata for a file by path (resolved relative to cwd)
+- `fstat(fd, buf)` - Get metadata for an open file descriptor
+
+### Metadata Format
+Metadata is returned as a 16-byte structure:
+- Byte 0: `file_type` (0 = File, 1 = Directory)
+- Bytes 1-7: Padding
+- Bytes 8-15: `size` (little-endian u64, 0 for directories)
+
+### Usage Example
+```asm
+; Call stat on a path
+mov rax, 4              ; SYS_STAT
+lea rdi, [path]         ; path pointer
+lea rsi, [stat_buf]     ; buffer for result
+syscall
+
+; Check if it's a directory
+mov al, byte [stat_buf]
+cmp al, 1
+je is_directory
+```
 
 ## Directory Structure
 
