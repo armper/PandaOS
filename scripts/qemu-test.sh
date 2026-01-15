@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# QEMU integration test runner for PandaOS
+# Watches serial output for TEST PASS/FAIL markers
+
+set -e
+
+TIMEOUT=${QEMU_TIMEOUT:-30}
+SERIAL_LOG="/tmp/panda-qemu-serial.log"
+
+echo "==================================="
+echo "PandaOS QEMU Integration Tests"
+echo "==================================="
+
+# Build kernel first
+echo "Building kernel..."
+cd kernel
+cargo bootimage --release 2>&1 | tail -3
+cd ..
+
+# Find the kernel image
+KERNEL_IMAGE=$(find kernel/target -name "*.bin" -type f | head -1)
+
+if [ -z "$KERNEL_IMAGE" ]; then
+    echo "Error: Could not find kernel image"
+    exit 1
+fi
+
+echo "Kernel image: $KERNEL_IMAGE"
+echo ""
+
+# Run QEMU with serial output capture
+echo "Starting QEMU (timeout: ${TIMEOUT}s)..."
+timeout $TIMEOUT qemu-system-x86_64 \
+    -drive format=raw,file="$KERNEL_IMAGE" \
+    -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
+    -serial stdio \
+    -display none \
+    2>&1 | tee "$SERIAL_LOG" &
+
+QEMU_PID=$!
+
+# Wait for QEMU to finish
+wait $QEMU_PID || EXIT_CODE=$?
+
+echo ""
+echo "==================================="
+
+# Parse test results from serial output
+if grep -q "TEST PASS" "$SERIAL_LOG"; then
+    PASS_COUNT=$(grep -c "TEST PASS" "$SERIAL_LOG")
+    echo "✓ Tests passed: $PASS_COUNT"
+fi
+
+if grep -q "TEST FAIL" "$SERIAL_LOG"; then
+    FAIL_COUNT=$(grep -c "TEST FAIL" "$SERIAL_LOG")
+    echo "✗ Tests failed: $FAIL_COUNT"
+    exit 1
+fi
+
+if grep -q "KERNEL PANIC" "$SERIAL_LOG"; then
+    echo "✗ Kernel panic detected!"
+    exit 1
+fi
+
+# Check exit code (QEMU exit device returns exit code + 1)
+if [ "${EXIT_CODE:-0}" -eq 33 ]; then
+    echo "✓ Kernel exited successfully"
+    exit 0
+fi
+
+echo "✓ QEMU test completed"

@@ -101,7 +101,7 @@ where
                 write!(f, ", ")?;
             }
             if let Some(ref item) = self.data[idx] {
-                write!(f, "{}", item)?;
+                write!(f, "{item}")?;
             }
             idx = (idx + 1) % N;
         }

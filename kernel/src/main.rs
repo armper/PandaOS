@@ -2,12 +2,23 @@
 //!
 //! This is the main entry point for the PandaOS kernel. It follows clean
 //! architecture principles with modular design and strict crate boundaries.
+//!
+//! ## Invariants
+//!
+//! - No allocation before heap is initialized
+//! - All unsafe code is in arch_x86_64 or driver modules
+//! - Subsystems are initialized explicitly and passed by reference
+//! - Hardware access goes through HAL only
 
 #![no_std]
 #![no_main]
 #![feature(custom_test_frameworks)]
 #![test_runner(crate::test_runner)]
 #![reexport_test_harness_main = "test_main"]
+#![deny(unsafe_op_in_unsafe_fn)]
+#![deny(clippy::all)]
+#![warn(clippy::pedantic)]
+#![allow(clippy::missing_panics_doc)]
 
 use core::panic::PanicInfo;
 

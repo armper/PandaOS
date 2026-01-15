@@ -17,7 +17,7 @@ impl Bitmap {
     /// * `data` - Byte slice to use for bitmap storage
     /// * `size` - Number of bits to track
     pub fn new(data: &'static mut [u8], size: usize) -> Self {
-        let required_bytes = (size + 7) / 8;
+        let required_bytes = size.div_ceil(8);
         assert!(
             data.len() >= required_bytes,
             "Bitmap data too small: {} bytes available, {} required",
@@ -26,7 +26,7 @@ impl Bitmap {
         );
 
         // Clear all bits initially
-        for byte in data[..required_bytes].iter_mut() {
+        for byte in &mut data[..required_bytes] {
             *byte = 0;
         }
 
@@ -99,7 +99,7 @@ mod tests {
     use std::vec;
 
     fn create_test_bitmap(size: usize) -> Bitmap {
-        let required_bytes = (size + 7) / 8;
+        let required_bytes = size.div_ceil(8);
         let mut data = vec![0u8; required_bytes];
 
         // SAFETY: We're creating a test bitmap with a leaked Vec

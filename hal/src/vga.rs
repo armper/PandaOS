@@ -1,4 +1,4 @@
-//! VGA text mode driver for x86_64
+//! VGA text mode driver for `x86_64`
 //!
 //! Provides a simple text buffer interface for writing to the VGA display.
 //! This is essential for early boot messages and debugging.
@@ -13,6 +13,7 @@ const BUFFER_HEIGHT: usize = 25;
 const BUFFER_WIDTH: usize = 80;
 
 /// VGA color codes
+#[allow(missing_docs)]
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -63,14 +64,16 @@ struct Buffer {
 impl Buffer {
     fn write(&mut self, row: usize, col: usize, screen_char: ScreenChar) {
         // Use volatile write to prevent compiler optimization
+        // SAFETY: We're writing to VGA buffer memory which is mapped at 0xb8000
         unsafe {
-            ptr::write_volatile(&mut self.chars[row][col], screen_char);
+            ptr::write_volatile(&raw mut self.chars[row][col], screen_char);
         }
     }
 
     fn read(&self, row: usize, col: usize) -> ScreenChar {
         // Use volatile read to prevent compiler optimization
-        unsafe { ptr::read_volatile(&self.chars[row][col]) }
+        // SAFETY: We're reading from VGA buffer memory which is mapped at 0xb8000
+        unsafe { ptr::read_volatile(&raw const self.chars[row][col]) }
     }
 }
 

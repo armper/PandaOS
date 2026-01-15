@@ -139,4 +139,90 @@ mod tests {
         assert_eq!(allocator.total_frames(), 0);
         assert_eq!(allocator.allocate_frame(), None);
     }
+
+    // Property-based tests
+    mod proptests {
+        use super::*;
+        extern crate std;
+        use proptest::prelude::*;
+
+        proptest! {
+            /// Property: Allocated frames are always within the valid range
+            #[test]
+            fn prop_allocated_frames_in_range(start in 0usize..1000, count in 1usize..100) {
+                let mut allocator = FrameAllocator::new(start, start + count);
+                let mut allocated = std::vec::Vec::new();
+
+                // Allocate all frames
+                for _ in 0..count {
+                    if let Some(frame) = allocator.allocate_frame() {
+                        allocated.push(frame);
+                        // Check frame is in valid range
+                        prop_assert!(frame >= start && frame < start + count);
+                    }
+                }
+
+                // Should have allocated exactly 'count' frames
+                prop_assert_eq!(allocated.len(), count);
+            }
+
+            /// Property: No frame is allocated twice
+            #[test]
+            fn prop_no_double_allocation(start in 0usize..1000, count in 1usize..100) {
+                let mut allocator = FrameAllocator::new(start, start + count);
+                let mut allocated = std::vec::Vec::new();
+
+                // Allocate all frames
+                for _ in 0..count {
+                    if let Some(frame) = allocator.allocate_frame() {
+                        // Check this frame hasn't been allocated before
+                        prop_assert!(!allocated.contains(&frame), "Frame {} allocated twice", frame);
+                        allocated.push(frame);
+                    }
+                }
+            }
+
+            /// Property: Total frames equals allocated + available
+            #[test]
+            fn prop_frame_count_invariant(start in 0usize..1000, count in 1usize..100, alloc_count in 0usize..100) {
+                let mut allocator = FrameAllocator::new(start, start + count);
+                let alloc_count = alloc_count.min(count);
+
+                // Allocate some frames
+                for _ in 0..alloc_count {
+                    let _ = allocator.allocate_frame();
+                }
+
+                // Invariant: total = allocated + available
+                prop_assert_eq!(
+                    allocator.total_frames(),
+                    allocator.allocated_frames() + allocator.available_frames()
+                );
+            }
+
+            /// Property: Address conversion is bijective
+            #[test]
+            fn prop_address_conversion_bijective(frame_num in 0usize..10000) {
+                let addr = FrameAllocator::frame_to_addr(frame_num);
+                let back_to_frame = FrameAllocator::addr_to_frame(addr);
+                prop_assert_eq!(frame_num, back_to_frame);
+            }
+
+            /// Property: Exhausted allocator always returns None
+            #[test]
+            fn prop_exhausted_allocator(start in 0usize..1000, count in 1usize..50) {
+                let mut allocator = FrameAllocator::new(start, start + count);
+
+                // Exhaust the allocator
+                for _ in 0..count {
+                    let _ = allocator.allocate_frame();
+                }
+
+                // Should always return None now
+                for _ in 0..10 {
+                    prop_assert_eq!(allocator.allocate_frame(), None);
+                }
+            }
+        }
+    }
 }

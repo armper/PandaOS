@@ -1,4 +1,4 @@
-//! Serial port driver for x86_64
+//! Serial port driver for `x86_64`
 //!
 //! Provides a simple interface for serial communication via COM1-COM4 ports.
 //! This is essential for kernel debugging and early boot logging.
