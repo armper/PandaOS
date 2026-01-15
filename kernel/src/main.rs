@@ -33,6 +33,7 @@ pub mod elf;
 pub mod interrupts;
 pub mod invariants;
 pub mod memory;
+pub mod paging;
 pub mod process;
 pub mod syscall;
 pub mod usermode;

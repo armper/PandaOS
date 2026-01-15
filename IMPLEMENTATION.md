@@ -7,10 +7,11 @@ PandaOS is a Unix-like x86_64 kernel written in Rust with a focus on:
 - **Safety First**: Minimal unsafe code, comprehensive testing, documented invariants
 - **TDD Approach**: Host unit tests + QEMU integration tests
 - **POSIX/GNU Compatibility**: Targeting musl + Linux syscall ABI
+- **User Mode Execution**: ELF loading, process model, working syscalls
 
 ## Current Status
 
-### ✅ Completed
+### ✅ Completed (Phase 1-6)
 
 #### 1. Project Foundation
 - Workspace with 3 crates: `kernel`, `hal`, `bootloader`
@@ -36,6 +37,7 @@ PandaOS is a Unix-like x86_64 kernel written in Rust with a focus on:
 - `#![deny(unsafe_op_in_unsafe_fn)]` - All unsafe must be in unsafe blocks
 - `#![deny(clippy::all)]` - Zero clippy warnings policy
 - `#![warn(clippy::pedantic)]` - Extra lints for quality
+- `#![feature(naked_functions)]` - For syscall entry points
 
 **Runtime Safety**:
 - All unsafe blocks have SAFETY comments
@@ -45,7 +47,7 @@ PandaOS is a Unix-like x86_64 kernel written in Rust with a focus on:
 **Quality Gates** (`scripts/quality-gate.sh`):
 1. ✅ Code formatting check
 2. ✅ Clippy lints (zero warnings)
-3. ✅ Host unit tests (37 passing)
+3. ✅ Host unit tests (53 passing: 37 HAL + 9 kernel + 7 paging)
 4. ✅ Unsafe code placement check
 
 #### 4. Testing Infrastructure
