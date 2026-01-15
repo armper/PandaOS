@@ -43,6 +43,11 @@ read_loop:
     syscall
 
     mov al, [rel input_char]
+    
+    ; Check for Ctrl+C (0x03)
+    cmp al, 0x03
+    je handle_ctrlc
+    
     cmp al, 0x0D
     je line_done
     cmp al, 0x0A
@@ -70,6 +75,20 @@ read_loop:
     mov rdx, 1
     syscall
     jmp read_loop
+
+handle_ctrlc:
+    ; Clear the current input line
+    xor r12, r12
+    
+    ; Print ^C and newline
+    mov rax, SYS_WRITE
+    mov rdi, STDOUT
+    lea rsi, [rel ctrlc_msg]
+    mov rdx, ctrlc_msg_len
+    syscall
+    
+    ; Return to main loop to show prompt again
+    jmp main_loop
 
 handle_backspace:
     cmp r12, 0
@@ -598,6 +617,8 @@ bs_seq: db 0x08, ' ', 0x08
 bs_seq_len equ $ - bs_seq
 newline: db 0x0D, 0x0A
 newline_len equ $ - newline
+ctrlc_msg: db "^C", 0x0D, 0x0A
+ctrlc_msg_len equ $ - ctrlc_msg
 cat_usage: db "usage: cat <path>", 0x0D, 0x0A
 cat_usage_len equ $ - cat_usage
 exec_fail: db "exec failed", 0x0D, 0x0A

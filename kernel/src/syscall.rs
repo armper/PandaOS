@@ -22,7 +22,8 @@
     feature = "shell-smoke",
     feature = "vfs-cat-smoke",
     feature = "fork-exec-smoke",
-    feature = "pipe-smoke"
+    feature = "pipe-smoke",
+    feature = "ctrlc-smoke"
 ))]
 use core::sync::atomic::{AtomicUsize, Ordering};
 use panda_hal::serial_println;
@@ -71,7 +72,7 @@ pub enum SyscallNumber {
     /// Get process ID
     Getpid = 39,
     /// Send signal
-    Kill = 62,
+    Kill = 37,
     /// Yield CPU (sched_yield)
     Yield = 24,
 }
@@ -93,12 +94,12 @@ impl SyscallNumber {
             24 => Some(Self::Yield),
             32 => Some(Self::Dup),
             33 => Some(Self::Dup2),
+            37 => Some(Self::Kill),
             39 => Some(Self::Getpid),
             57 => Some(Self::Fork),
             59 => Some(Self::Execve),
             60 => Some(Self::Exit),
             61 => Some(Self::Wait4),
-            62 => Some(Self::Kill),
             79 => Some(Self::Getcwd),
             80 => Some(Self::Chdir),
             _ => None,
@@ -217,6 +218,7 @@ pub fn handle_syscall(
         SyscallNumber::Wait4 => sys_waitpid(arg1 as i64, arg2, arg3 as i32),
         SyscallNumber::Pipe => sys_pipe(arg1),
         SyscallNumber::Dup2 => sys_dup2(arg1 as i32, arg2 as i32),
+        SyscallNumber::Kill => sys_kill(arg1 as i32, arg2 as i32),
         // All other syscalls return ENOSYS for now
         _ => Err(ErrorCode::ENOSYS),
     };
@@ -319,29 +321,38 @@ const SCRIPTED_INPUT: &[u8] = b"cat /etc/version\ntrue\nexit\n";
 #[cfg(feature = "pipe-smoke")]
 const SCRIPTED_INPUT: &[u8] = b"echo hello | wc\nexit\n";
 
+#[cfg(feature = "ctrlc-smoke")]
+const SCRIPTED_INPUT: &[u8] = b"echo test\x03\nhelp\nexit\n";
+
 #[cfg(all(
     feature = "shell-smoke",
-    any(feature = "vfs-cat-smoke", feature = "fork-exec-smoke", feature = "pipe-smoke")
+    any(feature = "vfs-cat-smoke", feature = "fork-exec-smoke", feature = "pipe-smoke", feature = "ctrlc-smoke")
 ))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, and pipe-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, and ctrlc-smoke are mutually exclusive"
 );
 
-#[cfg(all(feature = "vfs-cat-smoke", any(feature = "fork-exec-smoke", feature = "pipe-smoke")))]
+#[cfg(all(feature = "vfs-cat-smoke", any(feature = "fork-exec-smoke", feature = "pipe-smoke", feature = "ctrlc-smoke")))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, and pipe-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, and ctrlc-smoke are mutually exclusive"
 );
 
-#[cfg(all(feature = "fork-exec-smoke", feature = "pipe-smoke"))]
+#[cfg(all(feature = "fork-exec-smoke", any(feature = "pipe-smoke", feature = "ctrlc-smoke")))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, and pipe-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, and ctrlc-smoke are mutually exclusive"
+);
+
+#[cfg(all(feature = "pipe-smoke", feature = "ctrlc-smoke"))]
+compile_error!(
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, and ctrlc-smoke are mutually exclusive"
 );
 
 #[cfg(any(
     feature = "shell-smoke",
     feature = "vfs-cat-smoke",
     feature = "fork-exec-smoke",
-    feature = "pipe-smoke"
+    feature = "pipe-smoke",
+    feature = "ctrlc-smoke"
 ))]
 static SCRIPTED_POS: AtomicUsize = AtomicUsize::new(0);
 
@@ -350,7 +361,8 @@ fn read_byte() -> Option<u8> {
         feature = "shell-smoke",
         feature = "vfs-cat-smoke",
         feature = "fork-exec-smoke",
-        feature = "pipe-smoke"
+        feature = "pipe-smoke",
+        feature = "ctrlc-smoke"
     ))]
     {
         let pos = SCRIPTED_POS.fetch_add(1, Ordering::Relaxed);
@@ -361,7 +373,8 @@ fn read_byte() -> Option<u8> {
         feature = "shell-smoke",
         feature = "vfs-cat-smoke",
         feature = "fork-exec-smoke",
-        feature = "pipe-smoke"
+        feature = "pipe-smoke",
+        feature = "ctrlc-smoke"
     )))]
     {
         return panda_hal::serial::serial_read_byte();
@@ -535,6 +548,15 @@ fn sys_dup2(oldfd: i32, newfd: i32) -> SyscallResult {
     }
 }
 
+/// sys_kill - Send a signal to a process
+fn sys_kill(pid: i32, sig: i32) -> SyscallResult {
+    if let Some(kill_fn) = KILL_HANDLER.get() {
+        kill_fn(pid, sig)
+    } else {
+        Err(ErrorCode::ENOSYS)
+    }
+}
+
 /// Yield handler function pointer for scheduler integration
 static YIELD_HANDLER: Once<fn()> = Once::new();
 static EXEC_HANDLER: Once<fn(&str, Option<&str>) -> Result<(), ErrorCode>> = Once::new();
@@ -547,6 +569,7 @@ static FORK_HANDLER: Once<fn() -> SyscallResult> = Once::new();
 static WAITPID_HANDLER: Once<fn(i64, u64, i32) -> SyscallResult> = Once::new();
 static PIPE_HANDLER: Once<fn(u64) -> SyscallResult> = Once::new();
 static DUP2_HANDLER: Once<fn(i32, i32) -> SyscallResult> = Once::new();
+static KILL_HANDLER: Once<fn(i32, i32) -> SyscallResult> = Once::new();
 
 /// Set the yield handler for syscall yield
 ///
@@ -606,6 +629,11 @@ pub fn set_pipe_handler(handler: fn(u64) -> SyscallResult) {
 /// Set the dup2 handler for syscall dup2
 pub fn set_dup2_handler(handler: fn(i32, i32) -> SyscallResult) {
     DUP2_HANDLER.call_once(|| handler);
+}
+
+/// Set the kill handler for syscall kill
+pub fn set_kill_handler(handler: fn(i32, i32) -> SyscallResult) {
+    KILL_HANDLER.call_once(|| handler);
 }
 
 #[cfg(test)]
