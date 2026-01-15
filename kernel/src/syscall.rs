@@ -24,7 +24,8 @@
     feature = "fork-exec-smoke",
     feature = "pipe-smoke",
     feature = "ctrlc-smoke",
-    feature = "ls-smoke"
+    feature = "ls-smoke",
+    feature = "cd-smoke"
 ))]
 use core::sync::atomic::{AtomicUsize, Ordering};
 use panda_hal::serial_println;
@@ -342,6 +343,9 @@ const SCRIPTED_INPUT: &[u8] = b"echo test\x03\nhelp\nexit\n";
 #[cfg(feature = "ls-smoke")]
 const SCRIPTED_INPUT: &[u8] = b"ls\nexit\n";
 
+#[cfg(feature = "cd-smoke")]
+const SCRIPTED_INPUT: &[u8] = b"ls\ncd bin\nls\ncd ..\nls\nexit\n";
+
 #[cfg(all(
     feature = "shell-smoke",
     any(
@@ -349,34 +353,40 @@ const SCRIPTED_INPUT: &[u8] = b"ls\nexit\n";
         feature = "fork-exec-smoke",
         feature = "pipe-smoke",
         feature = "ctrlc-smoke",
-        feature = "ls-smoke"
+        feature = "ls-smoke",
+        feature = "cd-smoke"
     )
 ))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, and ls-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, and cd-smoke are mutually exclusive"
 );
 
 #[cfg(all(
     feature = "vfs-cat-smoke",
-    any(feature = "fork-exec-smoke", feature = "pipe-smoke", feature = "ctrlc-smoke", feature = "ls-smoke")
+    any(feature = "fork-exec-smoke", feature = "pipe-smoke", feature = "ctrlc-smoke", feature = "ls-smoke", feature = "cd-smoke")
 ))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, and ls-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, and cd-smoke are mutually exclusive"
 );
 
-#[cfg(all(feature = "fork-exec-smoke", any(feature = "pipe-smoke", feature = "ctrlc-smoke", feature = "ls-smoke")))]
+#[cfg(all(feature = "fork-exec-smoke", any(feature = "pipe-smoke", feature = "ctrlc-smoke", feature = "ls-smoke", feature = "cd-smoke")))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, and ls-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, and cd-smoke are mutually exclusive"
 );
 
-#[cfg(all(feature = "pipe-smoke", any(feature = "ctrlc-smoke", feature = "ls-smoke")))]
+#[cfg(all(feature = "pipe-smoke", any(feature = "ctrlc-smoke", feature = "ls-smoke", feature = "cd-smoke")))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, and ls-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, and cd-smoke are mutually exclusive"
 );
 
-#[cfg(all(feature = "ctrlc-smoke", feature = "ls-smoke"))]
+#[cfg(all(feature = "ctrlc-smoke", any(feature = "ls-smoke", feature = "cd-smoke")))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, and ls-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, and cd-smoke are mutually exclusive"
+);
+
+#[cfg(all(feature = "ls-smoke", feature = "cd-smoke"))]
+compile_error!(
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, and cd-smoke are mutually exclusive"
 );
 
 #[cfg(any(
@@ -385,7 +395,8 @@ compile_error!(
     feature = "fork-exec-smoke",
     feature = "pipe-smoke",
     feature = "ctrlc-smoke",
-    feature = "ls-smoke"
+    feature = "ls-smoke",
+    feature = "cd-smoke"
 ))]
 static SCRIPTED_POS: AtomicUsize = AtomicUsize::new(0);
 
@@ -396,7 +407,8 @@ fn read_byte() -> Option<u8> {
         feature = "fork-exec-smoke",
         feature = "pipe-smoke",
         feature = "ctrlc-smoke",
-        feature = "ls-smoke"
+        feature = "ls-smoke",
+        feature = "cd-smoke"
     ))]
     {
         let pos = SCRIPTED_POS.fetch_add(1, Ordering::Relaxed);
@@ -409,7 +421,8 @@ fn read_byte() -> Option<u8> {
         feature = "fork-exec-smoke",
         feature = "pipe-smoke",
         feature = "ctrlc-smoke",
-        feature = "ls-smoke"
+        feature = "ls-smoke",
+        feature = "cd-smoke"
     )))]
     {
         return panda_hal::serial::serial_read_byte();

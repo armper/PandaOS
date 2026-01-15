@@ -26,6 +26,7 @@ fork-exec-smoke = []
 pipe-smoke = []
 ctrlc-smoke = []
 ls-smoke = []
+cd-smoke = []
 build-userland = []
 
 [package.metadata.bootimage]
