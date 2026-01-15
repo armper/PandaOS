@@ -211,13 +211,18 @@ pub fn handle_syscall(
 fn sys_exit(status: i32) -> SyscallResult {
     serial_println!("Process exiting with status: {}", status);
 
-    // Exit QEMU if exit handler is set
+    // Exit QEMU if exit handler is set (for testing)
+    // SAFETY: EXIT_HANDLER is set during initialization before any processes run
     if let Some(exit_fn) = unsafe { EXIT_HANDLER } {
         exit_fn(status);
+        // Never returns - function signature is fn(i32) -> !
     }
 
-    // TODO: Actually terminate the process and return to scheduler
-    // For now, just halt the system
+    // If no exit handler, halt the system
+    // In a full implementation, this would:
+    // - Mark process as exited in the scheduler
+    // - Free process resources (memory, file descriptors, etc.)
+    // - Schedule next process
     loop {
         x86_64::instructions::hlt();
     }

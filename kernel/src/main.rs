@@ -229,6 +229,25 @@ pub fn exit_qemu(exit_code: QemuExitCode) -> ! {
 }
 
 /// Global scheduler instance
+///
+/// # Safety
+///
+/// This global mutable static is initialized exactly once during kernel boot
+/// in `init_scheduler_and_start()`, before any interrupts are enabled or user
+/// processes run. After initialization:
+///
+/// - It is accessed only from interrupt handlers (timer, syscall) where interrupts
+///   are disabled, preventing concurrent access
+/// - Each access uses `addr_of_mut!` to create a raw pointer, then converts to
+///   a mutable reference with proper lifetime bounds
+/// - The scheduler itself uses safe Rust internally; only the global access is unsafe
+/// - No aliasing violations occur because interrupt handlers run atomically
+///
+/// Alternative approaches considered:
+/// - `Once`/`Lazy`: Not available in no_std without custom implementation
+/// - `Mutex`/`RwLock`: Cannot be used from interrupt context (may deadlock)
+/// - `static mut`: Using raw pointers via `addr_of_mut!` is the recommended pattern
+///   for interrupt handlers in the 2024 edition
 static mut SCHEDULER: Option<scheduler::Scheduler> = None;
 
 /// Initialize scheduler, load user programs, and start multitasking
@@ -318,6 +337,25 @@ unsafe fn init_scheduler_and_start() -> ! {
     }
 }
 
+/// Get a mutable reference to the global scheduler
+///
+/// # Safety
+///
+/// Must be called only from contexts where:
+/// - Interrupts are disabled (ensuring no concurrent access)
+/// - Scheduler has been initialized via `init_scheduler_and_start()`
+///
+/// This is safe in interrupt handlers and syscall handlers as they
+/// run with interrupts disabled.
+unsafe fn get_scheduler() -> &'static mut scheduler::Scheduler {
+    // SAFETY: Caller guarantees interrupts are disabled and scheduler is initialized
+    unsafe {
+        (*core::ptr::addr_of_mut!(SCHEDULER))
+            .as_mut()
+            .expect("Scheduler not initialized")
+    }
+}
+
 /// Timer interrupt handler - called on each timer tick
 fn timer_tick_handler() {
     // For now, just acknowledge the timer tick
@@ -336,13 +374,8 @@ fn timer_tick_handler() {
 fn yield_handler() {
     serial_println!("[YIELD] Process yielding CPU");
     
-    // Get scheduler reference
-    // SAFETY: Scheduler is initialized before user processes run
-    let scheduler = unsafe {
-        (*core::ptr::addr_of_mut!(SCHEDULER))
-            .as_mut()
-            .expect("Scheduler not initialized")
-    };
+    // SAFETY: Called from syscall handler with interrupts disabled
+    let scheduler = unsafe { get_scheduler() };
 
     // Get next process (current will be moved to ready queue)
     if let Some(next) = scheduler.schedule_next() {
@@ -360,13 +393,8 @@ fn yield_handler() {
 fn exit_handler(status: i32) -> ! {
     serial_println!("Process exiting with status: {}", status);
 
-    // Get scheduler reference
-    // SAFETY: Scheduler is initialized before user processes run
-    let scheduler = unsafe {
-        (*core::ptr::addr_of_mut!(SCHEDULER))
-            .as_mut()
-            .expect("Scheduler not initialized")
-    };
+    // SAFETY: Called from syscall handler with interrupts disabled
+    let scheduler = unsafe { get_scheduler() };
 
     // Mark current process as exited
     scheduler.exit_current(status);
@@ -393,13 +421,8 @@ fn exit_handler(status: i32) -> ! {
 ///
 /// Must be called with interrupts disabled and scheduler initialized.
 unsafe fn start_first_process() -> ! {
-    // Get scheduler reference
     // SAFETY: Scheduler is initialized before this is called
-    let scheduler = unsafe {
-        (*core::ptr::addr_of_mut!(SCHEDULER))
-            .as_mut()
-            .expect("Scheduler not initialized")
-    };
+    let scheduler = unsafe { get_scheduler() };
 
     // Get first process to run
     let first_process = scheduler.schedule_next().expect("No processes to run");
