@@ -324,6 +324,9 @@ pub unsafe fn switch_to_new_page_table(page_table_phys_addr: u64) -> Result<(), 
     Ok(())
 }
 
+/// Page size constant
+const PAGE_SIZE: u64 = 4096;
+
 /// Create a new user page table with kernel mappings
 ///
 /// Creates a fresh L4 page table and copies kernel mappings from the current
@@ -344,7 +347,9 @@ pub unsafe fn create_user_page_table() -> Result<u64, &'static str> {
     let l4_phys_addr = l4_frame as u64 * panda_hal::memory::FRAME_SIZE as u64;
     
     // Zero out the new page table
-    // SAFETY: We just allocated this frame
+    // NOTE: This assumes identity mapping of physical memory
+    // TODO: Use proper virtual address translation
+    // SAFETY: We just allocated this frame and assume identity mapping
     let l4_table = unsafe {
         &mut *(l4_phys_addr as *mut PageTable)
     };
@@ -356,7 +361,9 @@ pub unsafe fn create_user_page_table() -> Result<u64, &'static str> {
     let (current_l4_frame, _) = Cr3::read();
     let current_l4_phys = current_l4_frame.start_address().as_u64();
     
-    // SAFETY: Current L4 is valid and mapped
+    // NOTE: This assumes identity mapping of physical memory
+    // TODO: Use proper virtual address translation
+    // SAFETY: Current L4 is valid and we assume identity mapping
     let current_l4 = unsafe {
         &*(current_l4_phys as *const PageTable)
     };
@@ -387,6 +394,8 @@ pub unsafe fn map_page(
     flags: PageTableFlags,
 ) -> Result<(), &'static str> {
     // SAFETY: Caller guarantees page table is valid
+    // NOTE: All pointer casts assume identity mapping of physical memory
+    // TODO: Use proper virtual address translation
     let l4_table = unsafe { &mut *(page_table_phys as *mut PageTable) };
 
     let p4_index = virt_addr.p4_index();
@@ -500,7 +509,7 @@ pub unsafe fn allocate_user_stack(
         let phys_addr = PhysAddr::new(frame as u64 * panda_hal::memory::FRAME_SIZE as u64);
         
         // Stack grows down, so subtract from top
-        let virt_addr = VirtAddr::new(stack_top - ((i + 1) as u64 * 4096));
+        let virt_addr = VirtAddr::new(stack_top - ((i + 1) as u64 * PAGE_SIZE));
         
         // SAFETY: Caller guarantees page table is valid
         unsafe {
@@ -508,10 +517,12 @@ pub unsafe fn allocate_user_stack(
         }
         
         // Zero the stack page
-        // SAFETY: We just mapped this page
+        // NOTE: This assumes identity mapping of physical memory
+        // TODO: Use proper virtual address translation
+        // SAFETY: We just mapped this page and assume identity mapping
         let page_ptr = phys_addr.as_u64() as *mut u8;
         unsafe {
-            core::ptr::write_bytes(page_ptr, 0, 4096);
+            core::ptr::write_bytes(page_ptr, 0, PAGE_SIZE as usize);
         }
     }
 

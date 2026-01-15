@@ -32,6 +32,7 @@ pub unsafe fn init_syscall() {
 
     // Configure STAR register with segment selectors
     // SAFETY: We're configuring syscall/sysret during kernel init
+    // Note: Star::write returns Result but failure is not possible with valid selectors
     let _ = Star::write(
         selectors.user_code,
         selectors.user_data,
