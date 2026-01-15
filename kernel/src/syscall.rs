@@ -77,6 +77,8 @@ pub enum SyscallNumber {
     Setpgid = 109,
     /// Yield CPU (sched_yield)
     Yield = 24,
+    /// Get directory entries
+    Getdents64 = 217,
 }
 
 impl SyscallNumber {
@@ -105,6 +107,7 @@ impl SyscallNumber {
             79 => Some(Self::Getcwd),
             80 => Some(Self::Chdir),
             109 => Some(Self::Setpgid),
+            217 => Some(Self::Getdents64),
             _ => None,
         }
     }
@@ -134,6 +137,7 @@ impl SyscallNumber {
             Self::Kill => "kill",
             Self::Setpgid => "setpgid",
             Self::Yield => "yield",
+            Self::Getdents64 => "getdents64",
         }
     }
 }
@@ -224,6 +228,7 @@ pub fn handle_syscall(
         SyscallNumber::Dup2 => sys_dup2(arg1 as i32, arg2 as i32),
         SyscallNumber::Kill => sys_kill(arg1 as i32, arg2 as i32),
         SyscallNumber::Setpgid => sys_setpgid(arg1 as i32, arg2 as i32),
+        SyscallNumber::Getdents64 => sys_getdents64(arg1 as i32, arg2, arg3),
         // All other syscalls return ENOSYS for now
         _ => Err(ErrorCode::ENOSYS),
     };
@@ -329,35 +334,44 @@ const SCRIPTED_INPUT: &[u8] = b"echo hello | wc\nexit\n";
 #[cfg(feature = "ctrlc-smoke")]
 const SCRIPTED_INPUT: &[u8] = b"echo test\x03\nhelp\nexit\n";
 
+#[cfg(feature = "ls-smoke")]
+const SCRIPTED_INPUT: &[u8] = b"ls\nexit\n";
+
 #[cfg(all(
     feature = "shell-smoke",
     any(
         feature = "vfs-cat-smoke",
         feature = "fork-exec-smoke",
         feature = "pipe-smoke",
-        feature = "ctrlc-smoke"
+        feature = "ctrlc-smoke",
+        feature = "ls-smoke"
     )
 ))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, and ctrlc-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, and ls-smoke are mutually exclusive"
 );
 
 #[cfg(all(
     feature = "vfs-cat-smoke",
-    any(feature = "fork-exec-smoke", feature = "pipe-smoke", feature = "ctrlc-smoke")
+    any(feature = "fork-exec-smoke", feature = "pipe-smoke", feature = "ctrlc-smoke", feature = "ls-smoke")
 ))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, and ctrlc-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, and ls-smoke are mutually exclusive"
 );
 
-#[cfg(all(feature = "fork-exec-smoke", any(feature = "pipe-smoke", feature = "ctrlc-smoke")))]
+#[cfg(all(feature = "fork-exec-smoke", any(feature = "pipe-smoke", feature = "ctrlc-smoke", feature = "ls-smoke")))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, and ctrlc-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, and ls-smoke are mutually exclusive"
 );
 
-#[cfg(all(feature = "pipe-smoke", feature = "ctrlc-smoke"))]
+#[cfg(all(feature = "pipe-smoke", any(feature = "ctrlc-smoke", feature = "ls-smoke")))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, and ctrlc-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, and ls-smoke are mutually exclusive"
+);
+
+#[cfg(all(feature = "ctrlc-smoke", feature = "ls-smoke"))]
+compile_error!(
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, and ls-smoke are mutually exclusive"
 );
 
 #[cfg(any(
@@ -365,7 +379,8 @@ compile_error!(
     feature = "vfs-cat-smoke",
     feature = "fork-exec-smoke",
     feature = "pipe-smoke",
-    feature = "ctrlc-smoke"
+    feature = "ctrlc-smoke",
+    feature = "ls-smoke"
 ))]
 static SCRIPTED_POS: AtomicUsize = AtomicUsize::new(0);
 
@@ -375,7 +390,8 @@ fn read_byte() -> Option<u8> {
         feature = "vfs-cat-smoke",
         feature = "fork-exec-smoke",
         feature = "pipe-smoke",
-        feature = "ctrlc-smoke"
+        feature = "ctrlc-smoke",
+        feature = "ls-smoke"
     ))]
     {
         let pos = SCRIPTED_POS.fetch_add(1, Ordering::Relaxed);
@@ -387,7 +403,8 @@ fn read_byte() -> Option<u8> {
         feature = "vfs-cat-smoke",
         feature = "fork-exec-smoke",
         feature = "pipe-smoke",
-        feature = "ctrlc-smoke"
+        feature = "ctrlc-smoke",
+        feature = "ls-smoke"
     )))]
     {
         return panda_hal::serial::serial_read_byte();
@@ -579,6 +596,15 @@ fn sys_setpgid(pid: i32, pgid: i32) -> SyscallResult {
     }
 }
 
+/// sys_getdents64 - Get directory entries
+fn sys_getdents64(fd: i32, buf: u64, count: u64) -> SyscallResult {
+    if let Some(getdents_fn) = GETDENTS64_HANDLER.get() {
+        getdents_fn(fd, buf, count)
+    } else {
+        Err(ErrorCode::ENOSYS)
+    }
+}
+
 /// Yield handler function pointer for scheduler integration
 static YIELD_HANDLER: Once<fn()> = Once::new();
 static EXEC_HANDLER: Once<fn(&str, Option<&str>) -> Result<(), ErrorCode>> = Once::new();
@@ -593,6 +619,7 @@ static PIPE_HANDLER: Once<fn(u64) -> SyscallResult> = Once::new();
 static DUP2_HANDLER: Once<fn(i32, i32) -> SyscallResult> = Once::new();
 static KILL_HANDLER: Once<fn(i32, i32) -> SyscallResult> = Once::new();
 static SETPGID_HANDLER: Once<fn(i32, i32) -> SyscallResult> = Once::new();
+static GETDENTS64_HANDLER: Once<fn(i32, u64, u64) -> SyscallResult> = Once::new();
 
 /// Set the yield handler for syscall yield
 ///
@@ -662,6 +689,11 @@ pub fn set_kill_handler(handler: fn(i32, i32) -> SyscallResult) {
 /// Set the setpgid handler for syscall setpgid
 pub fn set_setpgid_handler(handler: fn(i32, i32) -> SyscallResult) {
     SETPGID_HANDLER.call_once(|| handler);
+}
+
+/// Set the getdents64 handler for syscall getdents64
+pub fn set_getdents64_handler(handler: fn(i32, u64, u64) -> SyscallResult) {
+    GETDENTS64_HANDLER.call_once(|| handler);
 }
 
 #[cfg(test)]
