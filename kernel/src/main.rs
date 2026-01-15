@@ -318,6 +318,7 @@ unsafe fn init_scheduler_and_start() -> ! {
     syscall::set_waitpid_handler(waitpid_handler);
     syscall::set_pipe_handler(pipe_handler);
     syscall::set_dup2_handler(dup2_handler);
+    syscall::set_kill_handler(kill_handler);
 
     // Unmask timer interrupt (IRQ 0)
     println!("Enabling timer interrupt...");
@@ -595,6 +596,37 @@ fn getpid_handler() -> syscall::SyscallResult {
     let current = scheduler.current_process().ok_or(syscall::ErrorCode::ESRCH)?;
     Ok(current.pid.as_u64())
 }
+
+/// kill handler - send signal to a process
+fn kill_handler(pid: i32, sig: i32) -> syscall::SyscallResult {
+    use crate::process::Signal;
+
+    serial_println!("[KILL] Sending signal {} to PID {}", sig, pid);
+
+    // Only support SIGINT (signal 2)
+    let signal = Signal::from_u32(sig as u32).ok_or(syscall::ErrorCode::EINVAL)?;
+
+    // SAFETY: Called from syscall handler with interrupts disabled
+    let scheduler = unsafe { get_scheduler() };
+
+    // Find the target process
+    let target_pid = panda_hal::pid::Pid::new(pid as u64);
+
+    // Check if it's the current process
+    if let Some(current) = scheduler.current_process_mut() {
+        if current.pid == target_pid {
+            current.send_signal(signal);
+            return Ok(0);
+        }
+    }
+
+    // Search in ready queue (we need to iterate through processes)
+    // For now, we'll return ESRCH if not current process
+    // A full implementation would search all processes
+    serial_println!("[KILL] Process {} not found or not current", pid);
+    Err(syscall::ErrorCode::ESRCH)
+}
+
 
 /// fork handler - create a child process
 fn fork_handler() -> syscall::SyscallResult {

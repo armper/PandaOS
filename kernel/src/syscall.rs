@@ -217,6 +217,7 @@ pub fn handle_syscall(
         SyscallNumber::Wait4 => sys_waitpid(arg1 as i64, arg2, arg3 as i32),
         SyscallNumber::Pipe => sys_pipe(arg1),
         SyscallNumber::Dup2 => sys_dup2(arg1 as i32, arg2 as i32),
+        SyscallNumber::Kill => sys_kill(arg1 as i32, arg2 as i32),
         // All other syscalls return ENOSYS for now
         _ => Err(ErrorCode::ENOSYS),
     };
@@ -535,6 +536,15 @@ fn sys_dup2(oldfd: i32, newfd: i32) -> SyscallResult {
     }
 }
 
+/// sys_kill - Send a signal to a process
+fn sys_kill(pid: i32, sig: i32) -> SyscallResult {
+    if let Some(kill_fn) = KILL_HANDLER.get() {
+        kill_fn(pid, sig)
+    } else {
+        Err(ErrorCode::ENOSYS)
+    }
+}
+
 /// Yield handler function pointer for scheduler integration
 static YIELD_HANDLER: Once<fn()> = Once::new();
 static EXEC_HANDLER: Once<fn(&str, Option<&str>) -> Result<(), ErrorCode>> = Once::new();
@@ -547,6 +557,7 @@ static FORK_HANDLER: Once<fn() -> SyscallResult> = Once::new();
 static WAITPID_HANDLER: Once<fn(i64, u64, i32) -> SyscallResult> = Once::new();
 static PIPE_HANDLER: Once<fn(u64) -> SyscallResult> = Once::new();
 static DUP2_HANDLER: Once<fn(i32, i32) -> SyscallResult> = Once::new();
+static KILL_HANDLER: Once<fn(i32, i32) -> SyscallResult> = Once::new();
 
 /// Set the yield handler for syscall yield
 ///
@@ -606,6 +617,11 @@ pub fn set_pipe_handler(handler: fn(u64) -> SyscallResult) {
 /// Set the dup2 handler for syscall dup2
 pub fn set_dup2_handler(handler: fn(i32, i32) -> SyscallResult) {
     DUP2_HANDLER.call_once(|| handler);
+}
+
+/// Set the kill handler for syscall kill
+pub fn set_kill_handler(handler: fn(i32, i32) -> SyscallResult) {
+    KILL_HANDLER.call_once(|| handler);
 }
 
 #[cfg(test)]

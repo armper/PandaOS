@@ -74,6 +74,9 @@ impl Scheduler {
     /// If a process is currently running, it is moved back to the ready queue
     /// (unless it has exited).
     ///
+    /// This also checks for pending signals and terminates processes that
+    /// receive SIGINT.
+    ///
     /// # Returns
     ///
     /// - `Some(&mut Process)` - The next process to run
@@ -82,8 +85,14 @@ impl Scheduler {
         // If there's a current process that's not exited, move it back to ready queue
         if let Some(mut proc) = self.current.take() {
             if !proc.is_exited() {
-                proc.state = ProcessState::Ready;
-                self.ready_queue.push_back(proc);
+                // Check for pending signals before re-queueing
+                if proc.deliver_signals() {
+                    // Process was terminated by signal
+                    proc.set_exited(128 + 2); // 128 + SIGINT (standard exit code for signal)
+                } else {
+                    proc.state = ProcessState::Ready;
+                    self.ready_queue.push_back(proc);
+                }
             }
             // If exited, drop it (it won't be added back to queue)
         }

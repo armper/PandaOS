@@ -14,6 +14,24 @@ use crate::elf::ElfInfo;
 use crate::fs::FdTable;
 use panda_hal::pid::{Pid, PidAllocator};
 
+/// Signal types supported by PandaOS
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum Signal {
+    /// SIGINT - Interrupt signal (Ctrl+C)
+    SIGINT = 2,
+}
+
+impl Signal {
+    /// Convert from raw signal number
+    pub const fn from_u32(n: u32) -> Option<Self> {
+        match n {
+            2 => Some(Self::SIGINT),
+            _ => None,
+        }
+    }
+}
+
 /// Process state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessState {
@@ -47,6 +65,8 @@ pub struct Process {
     pub context: CpuContext,
     /// Per-process file descriptor table
     pub fd_table: FdTable,
+    /// Pending signals (bitmask)
+    pub pending_signals: u32,
 }
 
 impl Process {
@@ -120,6 +140,7 @@ impl Process {
             page_table_phys,
             context,
             fd_table: FdTable::new(),
+            pending_signals: 0,
         })
     }
 
@@ -218,6 +239,7 @@ impl Process {
             page_table_phys: child_page_table,
             context: child_context,
             fd_table: child_fd_table,
+            pending_signals: 0,
         })
     }
 
@@ -252,6 +274,35 @@ impl Process {
     /// Check if process is a zombie
     pub const fn is_zombie(&self) -> bool {
         matches!(self.state, ProcessState::Zombie(_))
+    }
+
+    /// Send a signal to this process
+    ///
+    /// Signals are stored as a bitmask in pending_signals.
+    pub fn send_signal(&mut self, signal: Signal) {
+        self.pending_signals |= 1 << (signal as u32);
+    }
+
+    /// Check if a signal is pending
+    pub fn has_signal(&self, signal: Signal) -> bool {
+        (self.pending_signals & (1 << (signal as u32))) != 0
+    }
+
+    /// Clear a pending signal
+    pub fn clear_signal(&mut self, signal: Signal) {
+        self.pending_signals &= !(1 << (signal as u32));
+    }
+
+    /// Deliver pending signals and return true if process should be terminated
+    ///
+    /// For SIGINT, the default action is to terminate the process.
+    pub fn deliver_signals(&mut self) -> bool {
+        if self.has_signal(Signal::SIGINT) {
+            self.clear_signal(Signal::SIGINT);
+            // Default action: terminate
+            return true;
+        }
+        false
     }
 }
 
@@ -292,6 +343,7 @@ mod tests {
             page_table_phys: 0x1000,
             context: crate::context::CpuContext::zero(),
             fd_table: FdTable::new(),
+            pending_signals: 0,
         };
 
         assert_eq!(process.state, ProcessState::Ready);
@@ -320,6 +372,7 @@ mod tests {
             page_table_phys: 0x1000,
             context: crate::context::CpuContext::zero(),
             fd_table: FdTable::new(),
+            pending_signals: 0,
         };
 
         // Parent has no parent
@@ -341,6 +394,7 @@ mod tests {
             page_table_phys: 0x1000,
             context: crate::context::CpuContext::zero(),
             fd_table: FdTable::new(),
+            pending_signals: 0,
         };
 
         // Initially not a zombie
