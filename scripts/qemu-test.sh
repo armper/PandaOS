@@ -47,14 +47,20 @@ if [ "${FORK_EXEC_SMOKE:-0}" -eq 1 ]; then
     FEATURES+=(--features fork-exec-smoke)
     EXPECTED_MARKER="TEST PASS fork_exec_smoke"
 fi
+if [ "${PIPE_SMOKE:-0}" -eq 1 ]; then
+    FEATURE_COUNT=$((FEATURE_COUNT + 1))
+    TEST_NAME="pipe_smoke"
+    FEATURES+=(--test pipe_smoke)
+    EXPECTED_MARKER="TEST PASS pipe_smoke"
+fi
 
 if [ $FEATURE_COUNT -gt 1 ]; then
-    echo "Error: SHELL_SMOKE, VFS_CAT_SMOKE, and FORK_EXEC_SMOKE are mutually exclusive"
+    echo "Error: SHELL_SMOKE, VFS_CAT_SMOKE, FORK_EXEC_SMOKE, and PIPE_SMOKE are mutually exclusive"
     exit 1
 fi
 
 if [ $FEATURE_COUNT -eq 0 ]; then
-    echo "Error: Must set one of SHELL_SMOKE, VFS_CAT_SMOKE, or FORK_EXEC_SMOKE"
+    echo "Error: Must set one of SHELL_SMOKE, VFS_CAT_SMOKE, FORK_EXEC_SMOKE, or PIPE_SMOKE"
     exit 1
 fi
 

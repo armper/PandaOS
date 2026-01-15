@@ -13,7 +13,6 @@
 //! - Pipe operations return EAGAIN when buffer full/empty (non-blocking)
 
 use crate::syscall::ErrorCode;
-use core::sync::atomic::{AtomicUsize, Ordering};
 use spin::Mutex;
 
 /// Pipe buffer size (4KB)
