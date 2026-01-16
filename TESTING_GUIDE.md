@@ -228,6 +228,43 @@ TEST PASS pipe_smoke
 - `dup2` allows redirecting pipe fds to stdin (fd 0) and stdout (fd 1)
 - Both `/bin/echo` and `/bin/wc` are prebuilt ELFs embedded in kernel VFS
 
+### Test 5: ls_stat_smoke - File Metadata with Enhanced ls
+
+**Run:**
+```bash
+LS_STAT_SMOKE=1 ./scripts/qemu-test.sh
+```
+
+**Serial log:** `target/qemu/ls_stat_smoke.log`
+
+**Expected Output (serial, excerpt):**
+```
+panda> ls
+bin/
+etc/
+init
+panda> exit
+TEST PASS ls_stat_smoke
+```
+
+**What it tests:**
+- `ls` command lists root directory entries
+- For each entry, calls `stat()` syscall to get file metadata
+- Prints `/` suffix for directories (e.g., `bin/`, `etc/`)
+- Regular files printed without suffix (e.g., `init`)
+- Shell exits cleanly after `exit` command
+
+**Technical details:**
+- Uses kernel syscalls: `open(2)`, `getdents64(217)`, `stat(4)`, `close(3)`
+- `stat()` returns `FileMetadata` structure with file_type and size
+- `/bin/ls` is enhanced assembly program that:
+  1. Opens root directory
+  2. Reads entries with `getdents64`
+  3. For each entry, builds full path and calls `stat()`
+  4. Checks file_type field to determine if directory
+  5. Prints entry name with `/` suffix if directory
+- Metadata format: 16 bytes (1 byte file_type, 7 bytes padding, 8 bytes size)
+
 ### Debugging Smoke Tests
 
 All QEMU smoke tests write serial output to `target/qemu/<test_name>.log`:
@@ -235,6 +272,7 @@ All QEMU smoke tests write serial output to `target/qemu/<test_name>.log`:
 - `target/qemu/vfs_cat_smoke.log`
 - `target/qemu/fork_exec_smoke.log`
 - `target/qemu/pipe_smoke.log`
+- `target/qemu/ls_stat_smoke.log`
 
 The test script uses QEMU's `-serial file:` option to write serial output directly to these
 log files without buffering. This ensures reliable capture of kernel output.

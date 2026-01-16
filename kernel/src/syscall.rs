@@ -25,6 +25,7 @@
     feature = "pipe-smoke",
     feature = "ctrlc-smoke",
     feature = "ls-smoke",
+    feature = "ls-stat-smoke",
     feature = "cd-smoke",
     feature = "path-smoke"
 ))]
@@ -229,6 +230,8 @@ pub fn handle_syscall(
         SyscallNumber::Write => sys_write(arg1 as i32, arg2, arg3),
         SyscallNumber::Open => sys_open(arg1, arg2, arg3),
         SyscallNumber::Close => sys_close(arg1 as i32),
+        SyscallNumber::Stat => sys_stat(arg1, arg2),
+        SyscallNumber::Fstat => sys_fstat(arg1 as i32, arg2),
         SyscallNumber::Getpid => sys_getpid(),
         SyscallNumber::Yield => sys_yield(),
         SyscallNumber::Execve => sys_exec(arg1, arg2),
@@ -350,6 +353,9 @@ const SCRIPTED_INPUT: &[u8] = b"echo test\x03\nhelp\nexit\n";
 #[cfg(feature = "ls-smoke")]
 const SCRIPTED_INPUT: &[u8] = b"ls\nexit\n";
 
+#[cfg(feature = "ls-stat-smoke")]
+const SCRIPTED_INPUT: &[u8] = b"ls\nexit\n";
+
 #[cfg(feature = "cd-smoke")]
 const SCRIPTED_INPUT: &[u8] = b"ls\ncd bin\nls\ncd ..\nls\nexit\n";
 
@@ -364,12 +370,13 @@ const SCRIPTED_INPUT: &[u8] = b"ls\ncat /etc/version\ncd bin\nls\nexit\n";
         feature = "pipe-smoke",
         feature = "ctrlc-smoke",
         feature = "ls-smoke",
+        feature = "ls-stat-smoke",
         feature = "cd-smoke",
         feature = "path-smoke"
     )
 ))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, cd-smoke, and path-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, and path-smoke are mutually exclusive"
 );
 
 #[cfg(all(
@@ -379,12 +386,13 @@ compile_error!(
         feature = "pipe-smoke",
         feature = "ctrlc-smoke",
         feature = "ls-smoke",
+        feature = "ls-stat-smoke",
         feature = "cd-smoke",
         feature = "path-smoke"
     )
 ))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, cd-smoke, and path-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, and path-smoke are mutually exclusive"
 );
 
 #[cfg(all(
@@ -393,12 +401,13 @@ compile_error!(
         feature = "pipe-smoke",
         feature = "ctrlc-smoke",
         feature = "ls-smoke",
+        feature = "ls-stat-smoke",
         feature = "cd-smoke",
         feature = "path-smoke"
     )
 ))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, cd-smoke, and path-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, and path-smoke are mutually exclusive"
 );
 
 #[cfg(all(
@@ -406,30 +415,36 @@ compile_error!(
     any(
         feature = "ctrlc-smoke",
         feature = "ls-smoke",
+        feature = "ls-stat-smoke",
         feature = "cd-smoke",
         feature = "path-smoke"
     )
 ))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, cd-smoke, and path-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, and path-smoke are mutually exclusive"
 );
 
 #[cfg(all(
     feature = "ctrlc-smoke",
-    any(feature = "ls-smoke", feature = "cd-smoke", feature = "path-smoke")
+    any(feature = "ls-smoke", feature = "ls-stat-smoke", feature = "cd-smoke", feature = "path-smoke")
 ))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, cd-smoke, and path-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, and path-smoke are mutually exclusive"
 );
 
-#[cfg(all(feature = "ls-smoke", any(feature = "cd-smoke", feature = "path-smoke")))]
+#[cfg(all(feature = "ls-smoke", any(feature = "ls-stat-smoke", feature = "cd-smoke", feature = "path-smoke")))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, cd-smoke, and path-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, and path-smoke are mutually exclusive"
+);
+
+#[cfg(all(feature = "ls-stat-smoke", any(feature = "cd-smoke", feature = "path-smoke")))]
+compile_error!(
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, and path-smoke are mutually exclusive"
 );
 
 #[cfg(all(feature = "cd-smoke", feature = "path-smoke"))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, cd-smoke, and path-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, and path-smoke are mutually exclusive"
 );
 
 #[cfg(any(
@@ -439,6 +454,7 @@ compile_error!(
     feature = "pipe-smoke",
     feature = "ctrlc-smoke",
     feature = "ls-smoke",
+    feature = "ls-stat-smoke",
     feature = "cd-smoke",
     feature = "path-smoke"
 ))]
@@ -452,6 +468,7 @@ fn read_byte() -> Option<u8> {
         feature = "pipe-smoke",
         feature = "ctrlc-smoke",
         feature = "ls-smoke",
+        feature = "ls-stat-smoke",
         feature = "cd-smoke",
         feature = "path-smoke"
     ))]
@@ -467,6 +484,7 @@ fn read_byte() -> Option<u8> {
         feature = "pipe-smoke",
         feature = "ctrlc-smoke",
         feature = "ls-smoke",
+        feature = "ls-stat-smoke",
         feature = "cd-smoke",
         feature = "path-smoke"
     )))]
@@ -557,6 +575,24 @@ fn sys_open(path_ptr: u64, _flags: u64, _mode: u64) -> SyscallResult {
 fn sys_close(fd: i32) -> SyscallResult {
     if let Some(close_fn) = CLOSE_HANDLER.get() {
         close_fn(fd)
+    } else {
+        Err(ErrorCode::ENOSYS)
+    }
+}
+
+/// sys_stat - Get file metadata by path
+fn sys_stat(path_ptr: u64, stat_buf: u64) -> SyscallResult {
+    if let Some(stat_fn) = STAT_HANDLER.get() {
+        stat_fn(path_ptr, stat_buf)
+    } else {
+        Err(ErrorCode::ENOSYS)
+    }
+}
+
+/// sys_fstat - Get file metadata by file descriptor
+fn sys_fstat(fd: i32, stat_buf: u64) -> SyscallResult {
+    if let Some(fstat_fn) = FSTAT_HANDLER.get() {
+        fstat_fn(fd, stat_buf)
     } else {
         Err(ErrorCode::ENOSYS)
     }
@@ -714,6 +750,8 @@ static GETDENTS64_HANDLER: Once<fn(i32, u64, u64) -> SyscallResult> = Once::new(
 static GETCWD_HANDLER: Once<fn(u64, u64) -> SyscallResult> = Once::new();
 static CHDIR_HANDLER: Once<fn(u64) -> SyscallResult> = Once::new();
 static GETENV_HANDLER: Once<fn(u64, u64, u64) -> SyscallResult> = Once::new();
+static STAT_HANDLER: Once<fn(u64, u64) -> SyscallResult> = Once::new();
+static FSTAT_HANDLER: Once<fn(i32, u64) -> SyscallResult> = Once::new();
 
 /// Set the yield handler for syscall yield
 ///
@@ -803,6 +841,16 @@ pub fn set_chdir_handler(handler: fn(u64) -> SyscallResult) {
 /// Set the getenv handler for syscall getenv
 pub fn set_getenv_handler(handler: fn(u64, u64, u64) -> SyscallResult) {
     GETENV_HANDLER.call_once(|| handler);
+}
+
+/// Set the stat handler for syscall stat
+pub fn set_stat_handler(handler: fn(u64, u64) -> SyscallResult) {
+    STAT_HANDLER.call_once(|| handler);
+}
+
+/// Set the fstat handler for syscall fstat
+pub fn set_fstat_handler(handler: fn(i32, u64) -> SyscallResult) {
+    FSTAT_HANDLER.call_once(|| handler);
 }
 
 #[cfg(test)]

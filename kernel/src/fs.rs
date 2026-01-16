@@ -16,6 +16,15 @@ pub enum FileType {
     Directory = 1,
 }
 
+/// File metadata returned by stat/fstat
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FileMetadata {
+    /// File type (File or Directory)
+    pub file_type: FileType,
+    /// Size in bytes (0 for directories)
+    pub size: u64,
+}
+
 pub struct FileNode {
     pub path: &'static str,
     pub data: &'static [u8],
@@ -449,6 +458,41 @@ pub fn validate_directory(path: &str) -> Result<(), ErrorCode> {
         return Err(ErrorCode::ENOTDIR);
     }
     Ok(())
+}
+
+/// Get file metadata by path
+pub fn stat_path(path: &str) -> Result<FileMetadata, ErrorCode> {
+    let (_, node) = lookup_node(path).ok_or(ErrorCode::ENOENT)?;
+    Ok(FileMetadata {
+        file_type: node.file_type,
+        size: if node.file_type == FileType::Directory {
+            0
+        } else {
+            node.data.len() as u64
+        },
+    })
+}
+
+/// Get file metadata by file descriptor
+pub fn fstat_fd(table: &FdTable, fd: i32) -> Result<FileMetadata, ErrorCode> {
+    let kind = table.get(fd)?;
+    match kind {
+        FdKind::File(open) | FdKind::Directory(open) => {
+            let node = FILES.get(open.node_index).ok_or(ErrorCode::ENOENT)?;
+            Ok(FileMetadata {
+                file_type: node.file_type,
+                size: if node.file_type == FileType::Directory {
+                    0
+                } else {
+                    node.data.len() as u64
+                },
+            })
+        }
+        FdKind::PipeRead(_) | FdKind::PipeWrite(_) => {
+            // Pipes don't have traditional stat metadata
+            Err(ErrorCode::EBADF)
+        }
+    }
 }
 
 #[cfg(test)]
