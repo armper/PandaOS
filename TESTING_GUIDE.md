@@ -899,3 +899,92 @@ Tmpfs includes comprehensive unit tests in `kernel/src/tmpfs.rs`:
 - No hard or symbolic links
 - Empty directories must be explicitly deleted
 - Root `/tmp` directory cannot be deleted
+
+## ELF Program Loader Testing
+
+### elf_exec_smoke Test
+
+**Purpose**: Verify dynamic ELF loading from disk filesystem works correctly.
+
+**Test Flow**:
+1. Disk image contains binaries in `/mnt/bin/` (init, sh, ls, cat, etc.)
+2. Init starts from `/mnt/bin/init` (no embedded binaries)
+3. Shell resolves commands from `/mnt/bin`
+4. User executes `/mnt/bin/ls` with absolute path
+5. User executes `/mnt/bin/cat /mnt/version` with absolute paths
+6. Shell exits cleanly
+
+**Expected Output**:
+```
+panda> /mnt/bin/ls
+hello.txt
+README
+test.txt
+version
+bin
+panda> /mnt/bin/cat /mnt/version
+PandaOS 0.1.0
+panda> exit
+TEST PASS elf_exec_smoke
+```
+
+**Running the Test**:
+```bash
+# Generate disk image with binaries
+python3 scripts/mkdiskimg.py
+
+# Build and test
+cargo bootimage --manifest-path kernel/Cargo.toml --release \
+  --target x86_64-unknown-none --features elf-exec-smoke
+```
+
+**Test Input Sequence**:
+```
+"/mnt/bin/ls\n"              → execute ls from disk
+"/mnt/bin/cat /mnt/version\n" → execute cat from disk
+"exit\n"                     → clean exit
+```
+
+**What's Tested**:
+- Dynamic ELF loading from filesystem
+- No embedded binaries in kernel
+- Disk filesystem access for executable files
+- Complete file reading via `fs::read_file_to_vec()`
+- ELF parsing and validation
+- Process image replacement
+- PATH resolution (defaults to `/mnt/bin:/bin`)
+- Init loads from `/mnt/bin/init`
+
+**Implementation Notes**:
+- Kernel no longer uses `include_bytes!()` for binaries
+- `/bin` directory is empty in in-memory filesystem
+- All programs loaded from disk at `/mnt/bin/`
+- ELF loader validates magic, class, endianness, machine type
+- Supports static ELF64 x86-64 executables only
+- No dynamic linking or shared libraries
+- W^X enforcement (no writable + executable pages)
+
+**Disk Image Creation**:
+The `scripts/mkdiskimg.py` script creates `fs.img` with:
+- `/bin/init` - Init process (8832 bytes)
+- `/bin/sh` - Shell (12960 bytes)
+- `/bin/ls` - Directory listing (9664 bytes)
+- `/bin/cat` - File concatenation (9208 bytes)
+- `/bin/echo` - Echo command (8976 bytes)
+- `/bin/wc` - Word count (9160 bytes)
+- `/bin/true` - True command (4648 bytes)
+- `/version` - Version file
+
+**Verification Points**:
+1. **No Embedded Binaries**: Check `kernel/src/fs.rs` has no `include_bytes!()` for programs
+2. **Disk Loading**: Programs execute from `/mnt/bin/` path
+3. **Dynamic Loading**: Each exec loads fresh ELF from filesystem
+4. **Init Bootstrap**: Init process loads from disk, not embedded
+5. **PATH Resolution**: Commands resolve via `/mnt/bin:/bin`
+
+**Known Behaviors**:
+- Init must exist at `/mnt/bin/init` or system won't boot
+- Binaries must be valid ELF64 static executables
+- Invalid ELF files return EINVAL error
+- Missing files return ENOENT error
+- Disk filesystem is read-only

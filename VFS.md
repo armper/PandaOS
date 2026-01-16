@@ -389,3 +389,61 @@ The tmpfs implementation:
 - Manages inodes independently from other filesystems
 - Integrated with VFS mount table at `/tmp`
 - See `kernel/src/tmpfs.rs` and `kernel/src/mount.rs`
+
+## Executable Files
+
+PandaOS supports executing ELF64 binaries directly from the filesystem.
+
+### Execution Model
+- No special "executable" permission bit required
+- Any regular file can be executed if it's a valid ELF64 binary
+- Programs are loaded dynamically from filesystem (no embedded binaries)
+- Static linking only (no dynamic linker or shared libraries)
+
+### Binary Locations
+Programs are typically stored in:
+- `/mnt/bin/` - Persistent binaries on disk filesystem
+- `/tmp/bin/` - Temporary binaries (e.g., compiled at runtime)
+
+The PATH environment variable (default: `/mnt/bin:/bin`) determines search order for command execution.
+
+### Loading Process
+1. **Path Resolution**: Command names without '/' are resolved via PATH
+2. **File Reading**: Complete ELF binary loaded into memory via `fs::read_file_to_vec()`
+3. **ELF Validation**: Binary must be valid ELF64 x86-64 static executable
+4. **Image Replacement**: Current process address space is destroyed and rebuilt
+5. **Execution**: Control transferred to new program's entry point
+
+### File Reading API
+
+The VFS provides `read_file_to_vec()` for loading complete files into memory:
+- Works with all filesystem backends (in-memory, disk, tmpfs)
+- Allocates Vec<u8> with file contents
+- Returns `ErrorCode::EISDIR` if path is a directory
+- Used by exec handler to load ELF binaries dynamically
+
+### Supported Backends
+Executables can be loaded from:
+- **Disk filesystem** (`/mnt/bin/*`) - Persistent storage
+- **Tmpfs** (`/tmp/bin/*`) - Temporary files created at runtime
+- **In-memory** (legacy) - For bootstrap binaries if needed
+
+### Example Usage
+```
+# Direct path execution
+/mnt/bin/ls
+
+# PATH-based execution (searches /mnt/bin:/bin)
+ls
+
+# Execute from tmpfs
+gcc -o /tmp/bin/hello hello.c
+/tmp/bin/hello
+```
+
+### Limitations
+- No PIE (Position Independent Executable) support
+- No dynamic linking or shared libraries
+- No shebangs or script interpretation
+- No execute permission checking
+- Binary must be valid ELF64 static executable
