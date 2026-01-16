@@ -92,6 +92,8 @@ pub enum SyscallNumber {
     /// Get environment variable (custom syscall, not in Linux ABI)
     /// Uses 63 as it's unused in standard Linux x86_64 ABI
     Getenv = 63,
+    /// Change file mode (chmod)
+    Chmod = 90,
 }
 
 impl SyscallNumber {
@@ -120,6 +122,7 @@ impl SyscallNumber {
             79 => Some(Self::Getcwd),
             80 => Some(Self::Chdir),
             87 => Some(Self::Unlink),
+            90 => Some(Self::Chmod),
             109 => Some(Self::Setpgid),
             217 => Some(Self::Getdents64),
             63 => Some(Self::Getenv),
@@ -155,6 +158,7 @@ impl SyscallNumber {
             Self::Yield => "yield",
             Self::Getdents64 => "getdents64",
             Self::Getenv => "getenv",
+            Self::Chmod => "chmod",
         }
     }
 }
@@ -258,6 +262,7 @@ pub fn handle_syscall(
         SyscallNumber::Chdir => sys_chdir(arg1),
         SyscallNumber::Unlink => sys_unlink(arg1),
         SyscallNumber::Getenv => sys_getenv(arg1, arg2, arg3),
+        SyscallNumber::Chmod => sys_chmod(arg1, arg2 as u16),
         // All other syscalls return ENOSYS for now
         _ => Err(ErrorCode::ENOSYS),
     };
@@ -861,6 +866,15 @@ fn sys_getenv(name_ptr: u64, buf_ptr: u64, size: u64) -> SyscallResult {
     }
 }
 
+/// sys_chmod - Change file mode
+fn sys_chmod(path_ptr: u64, mode: u16) -> SyscallResult {
+    if let Some(chmod_fn) = CHMOD_HANDLER.get() {
+        chmod_fn(path_ptr, mode)
+    } else {
+        Err(ErrorCode::ENOSYS)
+    }
+}
+
 /// Yield handler function pointer for scheduler integration
 static YIELD_HANDLER: Once<fn()> = Once::new();
 static EXEC_HANDLER: Once<fn(&str, Option<&str>) -> Result<(), ErrorCode>> = Once::new();
@@ -883,6 +897,7 @@ static UNLINK_HANDLER: Once<fn(u64) -> SyscallResult> = Once::new();
 static GETENV_HANDLER: Once<fn(u64, u64, u64) -> SyscallResult> = Once::new();
 static STAT_HANDLER: Once<fn(u64, u64) -> SyscallResult> = Once::new();
 static FSTAT_HANDLER: Once<fn(i32, u64) -> SyscallResult> = Once::new();
+static CHMOD_HANDLER: Once<fn(u64, u16) -> SyscallResult> = Once::new();
 
 /// Set the yield handler for syscall yield
 ///
@@ -987,6 +1002,11 @@ pub fn set_stat_handler(handler: fn(u64, u64) -> SyscallResult) {
 /// Set the fstat handler for syscall fstat
 pub fn set_fstat_handler(handler: fn(i32, u64) -> SyscallResult) {
     FSTAT_HANDLER.call_once(|| handler);
+}
+
+/// Set the chmod handler for syscall chmod
+pub fn set_chmod_handler(handler: fn(u64, u16) -> SyscallResult) {
+    CHMOD_HANDLER.call_once(|| handler);
 }
 
 /// Set the signal handler for TTY Ctrl+C

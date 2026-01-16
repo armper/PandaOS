@@ -25,6 +25,10 @@ static WRITABLE_FILES: Mutex<Option<BTreeMap<usize, Vec<u8>>>> = Mutex::new(None
 /// Maps path to node index
 static DYNAMIC_FILES: Mutex<Option<BTreeMap<String, usize>>> = Mutex::new(None);
 
+/// Mode storage for writable files (in-memory and dynamic)
+/// Maps node_index to mode bits
+static FILE_MODES: Mutex<Option<BTreeMap<usize, u16>>> = Mutex::new(None);
+
 /// File type enumeration
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -85,10 +89,39 @@ impl FileMetadata {
     }
 }
 
+/// Permission check helpers
+/// These check owner permissions only (uid always 0 for now)
+
+/// Check if a file/directory is readable by the owner
+pub fn can_read(mode: u16) -> bool {
+    (mode & S_IRUSR) != 0
+}
+
+/// Check if a file/directory is writable by the owner
+pub fn can_write(mode: u16) -> bool {
+    (mode & S_IWUSR) != 0
+}
+
+/// Check if a file is executable by the owner
+pub fn can_exec(mode: u16) -> bool {
+    (mode & S_IXUSR) != 0
+}
+
+/// Check if a directory can be traversed (x permission) by the owner
+pub fn can_traverse(mode: u16) -> bool {
+    (mode & S_IXUSR) != 0
+}
+
+/// Check if a directory can be listed (r permission) by the owner
+pub fn can_list(mode: u16) -> bool {
+    (mode & S_IRUSR) != 0
+}
+
 pub struct FileNode {
     pub path: &'static str,
     pub data: &'static [u8],
     pub file_type: FileType,
+    pub mode: u16,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -164,8 +197,24 @@ impl FdTable {
         let node = FILES.get(node_index).ok_or(ErrorCode::ENOENT)?;
         let fd = self.allocate_fd()?;
 
+        // Get file metadata to check permissions
+        let metadata = stat_path(node.path)?;
+
         // Check access mode
+        // O_RDONLY=0, O_WRONLY=1, O_RDWR=2
+        // Writable if O_WRONLY or O_RDWR is set
         let writable = (flags & O_WRONLY) != 0 || (flags & O_RDWR) != 0;
+        // Readable if not O_WRONLY (covers O_RDONLY and O_RDWR)
+        // We need both conditions because O_RDWR (2) & O_WRONLY (1) == 0
+        let readable = (flags & O_WRONLY) == 0 || (flags & O_RDWR) != 0;
+
+        // Check permissions
+        if readable && !can_read(metadata.mode) {
+            return Err(ErrorCode::EACCES);
+        }
+        if writable && !can_write(metadata.mode) {
+            return Err(ErrorCode::EACCES);
+        }
 
         match node.file_type {
             FileType::File => {
@@ -548,22 +597,23 @@ impl FdTable {
 
 pub static FILES: &[FileNode] = &[
     // Root directory
-    FileNode { path: "/", data: b"", file_type: FileType::Directory },
+    FileNode { path: "/", data: b"", file_type: FileType::Directory, mode: DEFAULT_DIR_MODE },
     // /bin directory (now empty - programs loaded from disk/tmpfs)
-    FileNode { path: "/bin", data: b"", file_type: FileType::Directory },
+    FileNode { path: "/bin", data: b"", file_type: FileType::Directory, mode: DEFAULT_DIR_MODE },
     // /etc directory
-    FileNode { path: "/etc", data: b"", file_type: FileType::Directory },
+    FileNode { path: "/etc", data: b"", file_type: FileType::Directory, mode: DEFAULT_DIR_MODE },
     // /tmp directory (writable)
-    FileNode { path: "/tmp", data: b"", file_type: FileType::Directory },
+    FileNode { path: "/tmp", data: b"", file_type: FileType::Directory, mode: DEFAULT_DIR_MODE },
     // /mnt directory (mount point for disk filesystem)
-    FileNode { path: "/mnt", data: b"", file_type: FileType::Directory },
+    FileNode { path: "/mnt", data: b"", file_type: FileType::Directory, mode: DEFAULT_DIR_MODE },
     // Configuration files
     FileNode {
         path: "/etc/motd",
         data: b"Welcome to PandaOS.\r\nType 'help' for commands.\r\n",
         file_type: FileType::File,
+        mode: DEFAULT_FILE_MODE,
     },
-    FileNode { path: "/etc/version", data: b"PandaOS 0.1.0\r\n", file_type: FileType::File },
+    FileNode { path: "/etc/version", data: b"PandaOS 0.1.0\r\n", file_type: FileType::File, mode: DEFAULT_FILE_MODE },
 ];
 
 /// Look up a file by absolute path.
@@ -629,14 +679,27 @@ pub fn open_path_with_flags(table: &mut FdTable, path: &str, flags: u64) -> Resu
                 let inode = crate::mount::diskfs_lookup(&rel_path)?;
                 let metadata = crate::mount::diskfs_stat(inode)?;
 
+                // Check access mode and permissions
+                // O_RDONLY=0, O_WRONLY=1, O_RDWR=2
+                let writable = (flags & O_WRONLY) != 0 || (flags & O_RDWR) != 0;
+                // Readable if not O_WRONLY (covers O_RDONLY and O_RDWR)
+                let readable = (flags & O_WRONLY) == 0 || (flags & O_RDWR) != 0;
+
+                // Check permissions
+                if readable && !can_read(metadata.mode) {
+                    return Err(ErrorCode::EACCES);
+                }
+                if writable {
+                    // Check write permission
+                    if !can_write(metadata.mode) {
+                        return Err(ErrorCode::EACCES);
+                    }
+                    // Disk fs is read-only
+                    return Err(ErrorCode::EROFS);
+                }
+
                 // Allocate FD
                 let fd = table.allocate_fd()?;
-
-                // Check if writable (disk fs is read-only)
-                let writable = (flags & O_WRONLY) != 0 || (flags & O_RDWR) != 0;
-                if writable {
-                    return Err(ErrorCode::EROFS); // Read-only filesystem
-                }
 
                 // Open based on file type
                 match metadata.file_type {
@@ -690,6 +753,20 @@ pub fn open_path_with_flags(table: &mut FdTable, path: &str, flags: u64) -> Resu
 
                 // Get metadata
                 let metadata = crate::mount::tmpfs_stat(inode)?;
+
+                // Check access mode and permissions
+                // O_RDONLY=0, O_WRONLY=1, O_RDWR=2
+                let writable = (flags & O_WRONLY) != 0 || (flags & O_RDWR) != 0;
+                // Readable if not O_WRONLY (covers O_RDONLY and O_RDWR)
+                let readable = (flags & O_WRONLY) == 0 || (flags & O_RDWR) != 0;
+
+                // Check permissions
+                if readable && !can_read(metadata.mode) {
+                    return Err(ErrorCode::EACCES);
+                }
+                if writable && !can_write(metadata.mode) {
+                    return Err(ErrorCode::EACCES);
+                }
 
                 // Allocate FD
                 let fd = table.allocate_fd()?;
@@ -944,6 +1021,39 @@ pub fn unlink_path(path: &str) -> Result<(), ErrorCode> {
     Err(ErrorCode::ENOENT)
 }
 
+/// Change file mode (chmod)
+pub fn chmod_path(path: &str, new_mode: u16) -> Result<(), ErrorCode> {
+    // Check if path is on a mounted filesystem
+    if let Some((_mount, rel_path, fs_type)) = crate::mount::resolve_mount_path(path) {
+        match fs_type {
+            crate::mount::FsType::Disk => {
+                // Disk filesystem is read-only
+                return Err(ErrorCode::EROFS);
+            }
+            crate::mount::FsType::Tmpfs => {
+                // Change mode in tmpfs
+                let inode = crate::mount::tmpfs_lookup(&rel_path)?;
+                return crate::mount::tmpfs_chmod(inode, new_mode);
+            }
+        }
+    }
+
+    // For in-memory filesystem, store mode in FILE_MODES
+    let (node_index, node) = lookup_node(path).ok_or(ErrorCode::ENOENT)?;
+
+    // Preserve file type bits, only change permission bits
+    let file_type_bits = node.mode & S_IFMT;
+    let permission_bits = new_mode & 0o777;
+    let final_mode = file_type_bits | permission_bits;
+
+    // Store the new mode
+    let mut modes = FILE_MODES.lock();
+    let mode_map = modes.get_or_insert_with(BTreeMap::new);
+    mode_map.insert(node_index, final_mode);
+
+    Ok(())
+}
+
 /// Get file metadata by path
 pub fn stat_path(path: &str) -> Result<FileMetadata, ErrorCode> {
     // Check if path is on a mounted filesystem
@@ -962,6 +1072,16 @@ pub fn stat_path(path: &str) -> Result<FileMetadata, ErrorCode> {
 
     let (node_index, node) = lookup_node(path).ok_or(ErrorCode::ENOENT)?;
 
+    // Get mode from FILE_MODES if it exists, otherwise use node mode
+    let mode = {
+        let modes = FILE_MODES.lock();
+        if let Some(ref mode_map) = *modes {
+            mode_map.get(&node_index).copied().unwrap_or(node.mode)
+        } else {
+            node.mode
+        }
+    };
+
     // Check if this is a dynamic file with data in WRITABLE_FILES
     let files = WRITABLE_FILES.lock();
     if let Some(ref store) = *files {
@@ -969,16 +1089,12 @@ pub fn stat_path(path: &str) -> Result<FileMetadata, ErrorCode> {
             return Ok(FileMetadata {
                 file_type: FileType::File,
                 size: file_data.len() as u64,
-                mode: DEFAULT_FILE_MODE,
+                mode,
             });
         }
     }
 
     // Fall back to static node data
-    let mode = match node.file_type {
-        FileType::Directory => DEFAULT_DIR_MODE,
-        FileType::File => DEFAULT_FILE_MODE,
-    };
     Ok(FileMetadata {
         file_type: node.file_type,
         size: if node.file_type == FileType::Directory { 0 } else { node.data.len() as u64 },
@@ -991,6 +1107,17 @@ pub fn fstat_fd(table: &FdTable, fd: i32) -> Result<FileMetadata, ErrorCode> {
     let kind = table.get(fd)?;
     match kind {
         FdKind::File(open, _) => {
+            // Get mode from FILE_MODES if it exists, otherwise use node mode
+            let node = FILES.get(open.node_index).ok_or(ErrorCode::ENOENT)?;
+            let mode = {
+                let modes = FILE_MODES.lock();
+                if let Some(ref mode_map) = *modes {
+                    mode_map.get(&open.node_index).copied().unwrap_or(node.mode)
+                } else {
+                    node.mode
+                }
+            };
+
             // Check if this is a dynamic file with data in WRITABLE_FILES
             let files = WRITABLE_FILES.lock();
             if let Some(ref store) = *files {
@@ -998,17 +1125,12 @@ pub fn fstat_fd(table: &FdTable, fd: i32) -> Result<FileMetadata, ErrorCode> {
                     return Ok(FileMetadata {
                         file_type: FileType::File,
                         size: file_data.len() as u64,
-                        mode: DEFAULT_FILE_MODE,
+                        mode,
                     });
                 }
             }
 
             // Fall back to static node
-            let node = FILES.get(open.node_index).ok_or(ErrorCode::ENOENT)?;
-            let mode = match node.file_type {
-                FileType::Directory => DEFAULT_DIR_MODE,
-                FileType::File => DEFAULT_FILE_MODE,
-            };
             Ok(FileMetadata {
                 file_type: node.file_type,
                 size: if node.file_type == FileType::Directory {
@@ -1021,7 +1143,15 @@ pub fn fstat_fd(table: &FdTable, fd: i32) -> Result<FileMetadata, ErrorCode> {
         }
         FdKind::Directory(open) => {
             let node = FILES.get(open.node_index).ok_or(ErrorCode::ENOENT)?;
-            Ok(FileMetadata { file_type: node.file_type, size: 0, mode: DEFAULT_DIR_MODE })
+            let mode = {
+                let modes = FILE_MODES.lock();
+                if let Some(ref mode_map) = *modes {
+                    mode_map.get(&open.node_index).copied().unwrap_or(node.mode)
+                } else {
+                    node.mode
+                }
+            };
+            Ok(FileMetadata { file_type: node.file_type, size: 0, mode })
         }
         FdKind::DiskFile(open) | FdKind::DiskDirectory(open) => {
             crate::mount::diskfs_stat(open.inode)
