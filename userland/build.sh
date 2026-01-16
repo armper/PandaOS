@@ -104,7 +104,32 @@ echo "Building vm_test..."
 nasm -f elf64 vm_test.asm -o build/vm_test.o
 $LINKER -o build/vm_test build/vm_test.o -static -nostdlib --entry=_start
 
-cp build/hello build/hello1 build/hello2 build/init build/sh build/cat build/true build/echo build/wc build/ls build/chmod build/id build/su build/chown build/brk_test build/mmap_test build/vm_test bin/
+# Build touch program
+echo "Building touch..."
+nasm -f elf64 touch.asm -o build/touch.o
+$LINKER -o build/touch build/touch.o -static -nostdlib --entry=_start
+
+# Build mkdir_cmd program
+echo "Building mkdir..."
+nasm -f elf64 mkdir_cmd.asm -o build/mkdir.o
+$LINKER -o build/mkdir build/mkdir.o -static -nostdlib --entry=_start
+
+# Build rm program
+echo "Building rm..."
+nasm -f elf64 rm.asm -o build/rm.o
+$LINKER -o build/rm build/rm.o -static -nostdlib --entry=_start
+
+# Build mv program
+echo "Building mv..."
+nasm -f elf64 mv.asm -o build/mv.o
+$LINKER -o build/mv build/mv.o -static -nostdlib --entry=_start
+
+# Build cp program
+echo "Building cp..."
+nasm -f elf64 cp.asm -o build/cp.o
+$LINKER -o build/cp build/cp.o -static -nostdlib --entry=_start
+
+cp build/hello build/hello1 build/hello2 build/init build/sh build/cat build/true build/echo build/wc build/ls build/chmod build/id build/su build/chown build/brk_test build/mmap_test build/vm_test build/touch build/mkdir build/rm build/mv build/cp bin/
 
 echo "Userland programs built successfully!"
 ls -lh build/
