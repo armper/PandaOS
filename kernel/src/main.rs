@@ -358,6 +358,8 @@ unsafe fn init_scheduler_and_start() -> ! {
     syscall::set_fstat_handler(fstat_handler);
     syscall::set_getpid_handler(getpid_handler);
     syscall::set_fork_handler(fork_handler);
+    syscall::set_brk_handler(brk_handler);
+    syscall::set_mmap_handler(mmap_handler);
     syscall::set_waitpid_handler(waitpid_handler);
     syscall::set_pipe_handler(pipe_handler);
     syscall::set_dup2_handler(dup2_handler);
@@ -1291,6 +1293,228 @@ fn fork_handler() -> syscall::SyscallResult {
 
     // Return child PID to parent (already set in rax)
     Ok(child_pid.as_u64())
+}
+
+/// brk handler - manage program break (heap allocation)
+fn brk_handler(addr: u64) -> syscall::SyscallResult {
+    // SAFETY: Called from syscall handler with interrupts disabled
+    let scheduler = unsafe { get_scheduler() };
+    let current = scheduler.current_process_mut().ok_or(syscall::ErrorCode::ESRCH)?;
+
+    // If addr is 0, return current break
+    if addr == 0 {
+        return Ok(current.heap.heap_end);
+    }
+
+    // Validate address range
+    if addr < current.heap.heap_start || addr > current.heap.heap_limit {
+        serial_println!(
+            "[BRK] Invalid address {:#x} (start={:#x}, limit={:#x})",
+            addr,
+            current.heap.heap_start,
+            current.heap.heap_limit
+        );
+        return Ok(current.heap.heap_end); // Return current break on invalid request
+    }
+
+    let old_break = current.heap.heap_end;
+    let new_break = (addr + 0xFFF) & !0xFFF; // Page-align upward
+
+    serial_println!(
+        "[BRK] Change break from {:#x} to {:#x} (requested {:#x})",
+        old_break,
+        new_break,
+        addr
+    );
+
+    if new_break > old_break {
+        // Growing heap - map new pages
+        let num_pages = ((new_break - old_break) / 4096) as usize;
+        serial_println!("[BRK] Growing heap by {} pages", num_pages);
+
+        for i in 0..num_pages {
+            let page_addr = old_break + (i as u64 * 4096);
+
+            // Allocate physical frame
+            // SAFETY: Frame allocator is initialized
+            let frame = unsafe {
+                memory::allocate_frame().ok_or(syscall::ErrorCode::ENOMEM)?
+            };
+
+            let phys_addr = paging::PhysAddr::new(frame as u64 * panda_hal::memory::FRAME_SIZE as u64);
+            let virt_addr = paging::VirtAddr::new(page_addr);
+
+            // Map page with RW, NX, USER flags
+            let flags = paging::PageTableFlags::PRESENT
+                .or(paging::PageTableFlags::WRITABLE)
+                .or(paging::PageTableFlags::USER_ACCESSIBLE)
+                .or(paging::PageTableFlags::NO_EXECUTE);
+
+            // SAFETY: Page table is valid, frame is allocated
+            unsafe {
+                paging::map_page(current.page_table_phys, virt_addr, phys_addr, flags)
+                    .map_err(|_| syscall::ErrorCode::ENOMEM)?;
+            }
+
+            // Zero the page
+            // SAFETY: We just mapped this page, assuming identity mapping
+            unsafe {
+                core::ptr::write_bytes(phys_addr.as_u64() as *mut u8, 0, 4096);
+            }
+        }
+
+        current.heap.heap_end = new_break;
+    } else if new_break < old_break {
+        // Shrinking heap - unmap pages
+        let num_pages = ((old_break - new_break) / 4096) as usize;
+        serial_println!("[BRK] Shrinking heap by {} pages", num_pages);
+
+        for i in 0..num_pages {
+            let page_addr = new_break + (i as u64 * 4096);
+            let virt_addr = paging::VirtAddr::new(page_addr);
+
+            // Unmap and deallocate
+            // SAFETY: Page table is valid
+            unsafe {
+                if let Ok(phys_addr) = paging::unmap_page(current.page_table_phys, virt_addr) {
+                    let frame = phys_addr.as_u64() / panda_hal::memory::FRAME_SIZE as u64;
+                    memory::deallocate_frame(frame as usize);
+                }
+            }
+        }
+
+        current.heap.heap_end = new_break;
+    }
+
+    // Return new break
+    Ok(new_break)
+}
+
+/// mmap handler - map anonymous memory
+fn mmap_handler(
+    addr: u64,
+    length: u64,
+    prot: i32,
+    flags: i32,
+    fd: i32,
+    _offset: u64,
+) -> syscall::SyscallResult {
+    serial_println!(
+        "[MMAP] addr={:#x}, length={}, prot={}, flags={:#x}, fd={}",
+        addr,
+        length,
+        prot,
+        flags,
+        fd
+    );
+
+    // Validate length
+    if length == 0 || length > 0x4000_0000 {
+        // Max 1GB
+        return Err(syscall::ErrorCode::EINVAL);
+    }
+
+    // Round up to page size
+    let size = (length + 0xFFF) & !0xFFF;
+    let num_pages = (size / 4096) as usize;
+
+    // Only support MAP_PRIVATE | MAP_ANONYMOUS
+    const MAP_PRIVATE: i32 = 0x02;
+    const MAP_ANONYMOUS: i32 = 0x20;
+
+    if (flags & MAP_ANONYMOUS) == 0 || (flags & MAP_PRIVATE) == 0 {
+        serial_println!("[MMAP] Only MAP_PRIVATE|MAP_ANONYMOUS supported");
+        return Err(syscall::ErrorCode::EINVAL);
+    }
+
+    // fd must be -1 for anonymous mappings
+    if fd != -1 {
+        return Err(syscall::ErrorCode::EINVAL);
+    }
+
+    // Parse protection flags
+    const PROT_READ: i32 = 0x1;
+    const PROT_WRITE: i32 = 0x2;
+    const PROT_EXEC: i32 = 0x4;
+
+    // Enforce W^X: reject PROT_WRITE | PROT_EXEC
+    if (prot & PROT_WRITE) != 0 && (prot & PROT_EXEC) != 0 {
+        serial_println!("[MMAP] W^X violation: PROT_WRITE and PROT_EXEC both set");
+        return Err(syscall::ErrorCode::EINVAL);
+    }
+
+    // SAFETY: Called from syscall handler with interrupts disabled
+    let scheduler = unsafe { get_scheduler() };
+    let current = scheduler.current_process_mut().ok_or(syscall::ErrorCode::ESRCH)?;
+
+    // Choose address if addr == 0
+    let map_addr = if addr == 0 {
+        // Allocate from mmap_base, growing downward
+        current.mmap_base = current.mmap_base.saturating_sub(size);
+        current.mmap_base
+    } else {
+        // User specified address - validate it's page-aligned
+        if (addr & 0xFFF) != 0 {
+            return Err(syscall::ErrorCode::EINVAL);
+        }
+        addr
+    };
+
+    // Validate address doesn't overlap kernel space
+    if map_addr >= 0x8000_0000_0000 {
+        return Err(syscall::ErrorCode::EINVAL);
+    }
+
+    serial_println!("[MMAP] Mapping {} pages at {:#x}", num_pages, map_addr);
+
+    // Map pages
+    for i in 0..num_pages {
+        let page_addr = map_addr + (i as u64 * 4096);
+
+        // Allocate physical frame
+        // SAFETY: Frame allocator is initialized
+        let frame = unsafe {
+            memory::allocate_frame().ok_or(syscall::ErrorCode::ENOMEM)?
+        };
+
+        let phys_addr = paging::PhysAddr::new(frame as u64 * panda_hal::memory::FRAME_SIZE as u64);
+        let virt_addr = paging::VirtAddr::new(page_addr);
+
+        // Build page table flags
+        let mut page_flags = paging::PageTableFlags::PRESENT
+            .or(paging::PageTableFlags::USER_ACCESSIBLE);
+
+        if (prot & PROT_WRITE) != 0 {
+            page_flags = page_flags.or(paging::PageTableFlags::WRITABLE);
+        }
+
+        if (prot & PROT_EXEC) == 0 {
+            page_flags = page_flags.or(paging::PageTableFlags::NO_EXECUTE);
+        }
+
+        // SAFETY: Page table is valid, frame is allocated
+        unsafe {
+            paging::map_page(current.page_table_phys, virt_addr, phys_addr, page_flags)
+                .map_err(|_| syscall::ErrorCode::ENOMEM)?;
+        }
+
+        // Zero the page
+        // SAFETY: We just mapped this page, assuming identity mapping
+        unsafe {
+            core::ptr::write_bytes(phys_addr.as_u64() as *mut u8, 0, 4096);
+        }
+    }
+
+    // Track mapping
+    current.mappings.push(process::MemoryMapping {
+        addr: map_addr,
+        length: size,
+        prot: prot as u32,
+        flags: flags as u32,
+    });
+
+    serial_println!("[MMAP] Successfully mapped at {:#x}", map_addr);
+    Ok(map_addr)
 }
 
 /// waitpid handler - wait for child process to exit
