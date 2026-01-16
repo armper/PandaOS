@@ -377,7 +377,7 @@ const SCRIPTED_INPUT: &[u8] = b"echo hello > /tmp/x\ncat < /tmp/x\nls /tmp\nexit
         feature = "ls-stat-smoke",
         feature = "cd-smoke",
         feature = "path-smoke",
-    feature = "redir-smoke"
+        feature = "redir-smoke"
     )
 ))]
 compile_error!(
@@ -394,7 +394,7 @@ compile_error!(
         feature = "ls-stat-smoke",
         feature = "cd-smoke",
         feature = "path-smoke",
-    feature = "redir-smoke"
+        feature = "redir-smoke"
     )
 ))]
 compile_error!(
@@ -410,7 +410,7 @@ compile_error!(
         feature = "ls-stat-smoke",
         feature = "cd-smoke",
         feature = "path-smoke",
-    feature = "redir-smoke"
+        feature = "redir-smoke"
     )
 ))]
 compile_error!(
@@ -425,7 +425,7 @@ compile_error!(
         feature = "ls-stat-smoke",
         feature = "cd-smoke",
         feature = "path-smoke",
-    feature = "redir-smoke"
+        feature = "redir-smoke"
     )
 ))]
 compile_error!(
@@ -434,27 +434,40 @@ compile_error!(
 
 #[cfg(all(
     feature = "ctrlc-smoke",
-    any(feature = "ls-smoke", feature = "ls-stat-smoke", feature = "cd-smoke", feature = "path-smoke",
-    feature = "redir-smoke")
+    any(
+        feature = "ls-smoke",
+        feature = "ls-stat-smoke",
+        feature = "cd-smoke",
+        feature = "path-smoke",
+        feature = "redir-smoke"
+    )
 ))]
 compile_error!(
     "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, and redir-smoke are mutually exclusive"
 );
 
-#[cfg(all(feature = "ls-smoke", any(feature = "ls-stat-smoke", feature = "cd-smoke", feature = "path-smoke",
-    feature = "redir-smoke")))]
+#[cfg(all(
+    feature = "ls-smoke",
+    any(
+        feature = "ls-stat-smoke",
+        feature = "cd-smoke",
+        feature = "path-smoke",
+        feature = "redir-smoke"
+    )
+))]
 compile_error!(
     "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, and redir-smoke are mutually exclusive"
 );
 
-#[cfg(all(feature = "ls-stat-smoke", any(feature = "cd-smoke", feature = "path-smoke",
-    feature = "redir-smoke")))]
+#[cfg(all(
+    feature = "ls-stat-smoke",
+    any(feature = "cd-smoke", feature = "path-smoke", feature = "redir-smoke")
+))]
 compile_error!(
     "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, and redir-smoke are mutually exclusive"
 );
 
-#[cfg(all(feature = "cd-smoke", feature = "path-smoke",
-    feature = "redir-smoke"))]
+#[cfg(all(feature = "cd-smoke", feature = "path-smoke", feature = "redir-smoke"))]
 compile_error!(
     "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, and redir-smoke are mutually exclusive"
 );
@@ -484,7 +497,7 @@ fn read_byte() -> Option<u8> {
         feature = "ls-stat-smoke",
         feature = "cd-smoke",
         feature = "path-smoke",
-    feature = "redir-smoke"
+        feature = "redir-smoke"
     ))]
     {
         let pos = SCRIPTED_POS.fetch_add(1, Ordering::Relaxed);
@@ -501,7 +514,7 @@ fn read_byte() -> Option<u8> {
         feature = "ls-stat-smoke",
         feature = "cd-smoke",
         feature = "path-smoke",
-    feature = "redir-smoke"
+        feature = "redir-smoke"
     )))]
     {
         return panda_hal::serial::serial_read_byte();
