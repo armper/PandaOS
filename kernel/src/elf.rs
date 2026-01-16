@@ -328,6 +328,26 @@ pub unsafe fn load_elf_segments(
     Ok(())
 }
 
+/// Calculate the heap start address from ELF segments
+///
+/// The heap starts after the last loaded segment (typically .data or .bss).
+/// The address is page-aligned upward.
+pub fn calculate_heap_start(elf_info: &ElfInfo) -> u64 {
+    let mut max_addr = 0u64;
+
+    for i in 0..elf_info.segment_count {
+        if let Some(segment) = elf_info.load_segments[i] {
+            let segment_end = segment.vaddr + segment.mem_size;
+            if segment_end > max_addr {
+                max_addr = segment_end;
+            }
+        }
+    }
+
+    // Page-align upward
+    (max_addr + 0xFFF) & !0xFFF
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

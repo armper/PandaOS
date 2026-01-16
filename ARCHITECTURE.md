@@ -49,6 +49,43 @@ The main kernel crate contains:
 - All subsystems initialized explicitly
 - No unsafe outside arch-specific code
 
+## Memory Model
+
+PandaOS implements Unix-like virtual memory with per-process address spaces. See [MEMORY_MODEL.md](MEMORY_MODEL.md) for complete documentation.
+
+### Address Space Layout
+
+Each process has isolated 64-bit virtual address space:
+- **ELF segments** (0x0 - variable): Code (RX), data (RW, NX), BSS (RW, NX)
+- **Heap** (after ELF): Dynamic allocation via `brk()` syscall, grows upward, RW+NX
+- **mmap region** (0x7FFF_0000_0000_0000): Anonymous mappings via `mmap()`, grows downward
+- **User stack** (0x7FFF_FFFF_F000): 16KB fixed size, grows downward, RW+NX
+- **Kernel space** (0xFFFF_8000_0000_0000+): Higher-half mapping, includes per-process kernel stack
+
+### Dynamic Memory Management
+
+**brk/sbrk (syscall #12)**:
+- Manages heap growth and shrinkage
+- Returns current program break when called with addr=0
+- Page-aligned allocations, immediate physical frame allocation
+- Maximum 1GB heap by default
+- Used by musl malloc for small allocations
+
+**mmap (syscall #9)**:
+- Anonymous memory mappings only (no file-backed)
+- Supports MAP_PRIVATE | MAP_ANONYMOUS
+- Enforces W^X: rejects PROT_WRITE + PROT_EXEC
+- Used by musl malloc for large allocations
+- No munmap yet (mappings persist until process exit)
+
+### Memory Safety
+
+- W^X enforcement: writable pages are not executable
+- User space isolated from kernel space via page table permissions
+- All user pointers validated before dereferencing
+- No kernel mappings in user space
+- TLB flushed on page table changes
+
 ## ELF Loading Pipeline
 
 PandaOS implements a complete ELF64 loader that enables dynamic program execution from the filesystem:
@@ -117,6 +154,13 @@ PandaOS implements a Linux-compatible x86_64 syscall ABI, enabling it to run rea
 - Pipes for inter-process communication
 - Directory listing (getdents64)
 - File metadata (stat, fstat)
+
+✅ **Memory Management:**
+- brk/sbrk for heap allocation
+- mmap for anonymous memory mappings (MAP_PRIVATE | MAP_ANONYMOUS)
+- Per-process isolated address spaces
+- W^X enforcement (no writable + executable pages)
+- Automatic heap initialization after ELF load
 
 ✅ **Simple Programs:**
 - Hello world programs

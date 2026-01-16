@@ -13,7 +13,66 @@ use crate::context::CpuContext;
 use crate::elf::ElfInfo;
 use crate::fs::FdTable;
 use alloc::string::String;
+use alloc::vec::Vec;
 use panda_hal::pid::{Pid, PidAllocator};
+
+/// Memory region protection flags (for mmap)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProtFlags(pub u32);
+
+impl ProtFlags {
+    pub const PROT_READ: Self = Self(0x1);
+    pub const PROT_WRITE: Self = Self(0x2);
+    pub const PROT_EXEC: Self = Self(0x4);
+    pub const PROT_NONE: Self = Self(0x0);
+}
+
+/// Memory mapping flags (for mmap)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MapFlags(pub u32);
+
+impl MapFlags {
+    pub const MAP_PRIVATE: Self = Self(0x02);
+    pub const MAP_ANONYMOUS: Self = Self(0x20);
+}
+
+/// A single memory mapping created by mmap
+#[derive(Debug, Clone)]
+pub struct MemoryMapping {
+    /// Starting virtual address
+    pub addr: u64,
+    /// Size in bytes
+    pub length: u64,
+    /// Protection flags
+    pub prot: u32,
+    /// Mapping flags
+    pub flags: u32,
+}
+
+/// Heap management for a process
+#[derive(Debug, Clone)]
+pub struct HeapInfo {
+    /// Start of heap (end of ELF data/bss)
+    pub heap_start: u64,
+    /// Current program break (end of allocated heap)
+    pub heap_end: u64,
+    /// Maximum allowed heap address
+    pub heap_limit: u64,
+}
+
+impl HeapInfo {
+    /// Create a new heap info with start address
+    pub fn new(heap_start: u64) -> Self {
+        // Align heap start to page boundary
+        let aligned_start = (heap_start + 0xFFF) & !0xFFF;
+        Self {
+            heap_start: aligned_start,
+            heap_end: aligned_start,
+            // Allow 1 GB of heap by default
+            heap_limit: aligned_start + 0x4000_0000,
+        }
+    }
+}
 
 /// Signal types supported by PandaOS
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +146,12 @@ pub struct Process {
     pub cwd: String,
     /// PATH environment variable for command lookup
     pub path_env: String,
+    /// Heap management
+    pub heap: HeapInfo,
+    /// Memory mappings created by mmap
+    pub mappings: Vec<MemoryMapping>,
+    /// Base address for mmap allocations
+    pub mmap_base: u64,
 }
 
 impl Process {
@@ -150,6 +215,14 @@ impl Process {
         // Initialize CPU context for user mode
         let context = CpuContext::new_user(elf_info.entry_point, user_stack_top, user_cs, user_ss);
 
+        // Calculate heap start (after ELF segments)
+        let heap_start = crate::elf::calculate_heap_start(elf_info);
+        let heap = HeapInfo::new(heap_start);
+
+        // mmap base: start from high address and grow downward
+        // Place it below the stack, leaving room for stack growth
+        let mmap_base = 0x7FFF_0000_0000u64;
+
         Ok(Self {
             pid,
             pgid: pid, // Initially, process is its own group leader
@@ -165,6 +238,9 @@ impl Process {
             pending_signals: 0,
             cwd: String::from("/"),
             path_env: String::from("/mnt/bin:/bin"),
+            heap,
+            mappings: Vec::new(),
+            mmap_base,
         })
     }
 
@@ -200,11 +276,17 @@ impl Process {
             let user_cs = selectors.user_code.0 as u64;
             let user_ss = selectors.user_data.0 as u64;
 
+            // Calculate new heap start
+            let heap_start = crate::elf::calculate_heap_start(elf_info);
+            let heap = HeapInfo::new(heap_start);
+
             self.entry_point = elf_info.entry_point;
             self.user_stack_ptr = user_stack_top;
             self.page_table_phys = new_page_table;
             self.context =
                 CpuContext::new_user(elf_info.entry_point, user_stack_top, user_cs, user_ss);
+            self.heap = heap;
+            self.mappings.clear();
 
             Ok(())
         })();
@@ -268,6 +350,9 @@ impl Process {
             pending_signals: 0,
             cwd: self.cwd.clone(),
             path_env: self.path_env.clone(),
+            heap: self.heap.clone(),
+            mappings: self.mappings.clone(),
+            mmap_base: self.mmap_base,
         })
     }
 
@@ -412,6 +497,11 @@ mod tests {
             context: crate::context::CpuContext::zero(),
             fd_table: FdTable::new(),
             pending_signals: 0,
+            cwd: String::from("/"),
+            path_env: String::from("/bin"),
+            heap: HeapInfo::new(0x1000000),
+            mappings: Vec::new(),
+            mmap_base: 0x7FFF_0000_0000,
         };
 
         assert_eq!(process.state, ProcessState::Ready);
@@ -443,6 +533,11 @@ mod tests {
             context: crate::context::CpuContext::zero(),
             fd_table: FdTable::new(),
             pending_signals: 0,
+            cwd: String::from("/"),
+            path_env: String::from("/bin"),
+            heap: HeapInfo::new(0x1000000),
+            mappings: Vec::new(),
+            mmap_base: 0x7FFF_0000_0000,
         };
 
         // Parent has no parent
@@ -467,6 +562,11 @@ mod tests {
             context: crate::context::CpuContext::zero(),
             fd_table: FdTable::new(),
             pending_signals: 0,
+            cwd: String::from("/"),
+            path_env: String::from("/bin"),
+            heap: HeapInfo::new(0x1000000),
+            mappings: Vec::new(),
+            mmap_base: 0x7FFF_0000_0000,
         };
 
         // Initially not a zombie

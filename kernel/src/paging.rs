@@ -477,6 +477,70 @@ pub unsafe fn map_page(
     Ok(())
 }
 
+/// Unmap a single page from a page table
+///
+/// Returns the physical address that was unmapped, or an error if the page was not mapped.
+///
+/// # Safety
+///
+/// - Page table must be valid and properly initialized
+/// - TLB must be flushed after unmapping
+#[allow(clippy::cast_ptr_alignment)]
+pub unsafe fn unmap_page(
+    page_table_phys: u64,
+    virt_addr: VirtAddr,
+) -> Result<PhysAddr, &'static str> {
+    // SAFETY: Caller guarantees page table is valid
+    // NOTE: All pointer casts assume identity mapping of physical memory
+    let l4_table = unsafe { &mut *(page_table_phys as *mut PageTable) };
+
+    let p4_index = virt_addr.p4_index();
+    let p3_index = virt_addr.p3_index();
+    let p2_index = virt_addr.p2_index();
+    let p1_index = virt_addr.p1_index();
+
+    // Walk the page table hierarchy
+    if !l4_table[p4_index].is_present() {
+        return Err("Page not mapped (L4 entry missing)");
+    }
+
+    // SAFETY: Entry is present
+    let l3_table = unsafe { &mut *(l4_table[p4_index].addr() as *mut PageTable) };
+
+    if !l3_table[p3_index].is_present() {
+        return Err("Page not mapped (L3 entry missing)");
+    }
+
+    // SAFETY: Entry is present
+    let l2_table = unsafe { &mut *(l3_table[p3_index].addr() as *mut PageTable) };
+
+    if !l2_table[p2_index].is_present() {
+        return Err("Page not mapped (L2 entry missing)");
+    }
+
+    // SAFETY: Entry is present
+    let l1_table = unsafe { &mut *(l2_table[p2_index].addr() as *mut PageTable) };
+
+    if !l1_table[p1_index].is_present() {
+        return Err("Page not mapped (L1 entry missing)");
+    }
+
+    // Get the physical address before clearing
+    let phys_addr = PhysAddr::new(l1_table[p1_index].addr());
+
+    // Clear the entry
+    l1_table[p1_index].clear();
+
+    // Flush TLB for this address
+    // SAFETY: We're unmapping a page we just verified exists
+    unsafe {
+        use x86_64::instructions::tlb;
+        tlb::flush(x86_64::VirtAddr::new(virt_addr.as_u64()));
+    }
+
+    Ok(phys_addr)
+}
+
 /// Allocate and map user stack
 ///
 /// Allocates physical frames and maps them to a user stack region.

@@ -54,47 +54,49 @@ pub enum SyscallNumber {
     Stat = 4,
     /// Get file status (by fd)
     Fstat = 5,
-    /// Exit process
-    Exit = 60,
-    /// Fork process
-    Fork = 57,
-    /// Execute program
-    Execve = 59,
-    /// Wait for process
-    Wait4 = 61,
     /// Memory map
     Mmap = 9,
-    /// Memory unmap
-    Munmap = 11,
     /// Memory protect
     Mprotect = 10,
+    /// Memory unmap
+    Munmap = 11,
+    /// Change program break (heap management)
+    Brk = 12,
     /// Create pipe
     Pipe = 22,
+    /// Yield CPU (sched_yield)
+    Yield = 24,
     /// Duplicate file descriptor
     Dup = 32,
     /// Duplicate file descriptor (with target)
     Dup2 = 33,
+    /// Send signal
+    Kill = 37,
+    /// Get process ID
+    Getpid = 39,
+    /// Fork process
+    Fork = 57,
+    /// Execute program
+    Execve = 59,
+    /// Exit process
+    Exit = 60,
+    /// Wait for process
+    Wait4 = 61,
+    /// Get environment variable (custom syscall, not in Linux ABI)
+    /// Uses 63 as it's unused in standard Linux x86_64 ABI
+    Getenv = 63,
     /// Get current directory
     Getcwd = 79,
     /// Change directory
     Chdir = 80,
     /// Unlink (delete) file
     Unlink = 87,
-    /// Get process ID
-    Getpid = 39,
-    /// Send signal
-    Kill = 37,
-    /// Set process group ID
-    Setpgid = 109,
-    /// Yield CPU (sched_yield)
-    Yield = 24,
-    /// Get directory entries
-    Getdents64 = 217,
-    /// Get environment variable (custom syscall, not in Linux ABI)
-    /// Uses 63 as it's unused in standard Linux x86_64 ABI
-    Getenv = 63,
     /// Change file mode (chmod)
     Chmod = 90,
+    /// Set process group ID
+    Setpgid = 109,
+    /// Get directory entries
+    Getdents64 = 217,
 }
 
 impl SyscallNumber {
@@ -110,6 +112,7 @@ impl SyscallNumber {
             9 => Some(Self::Mmap),
             10 => Some(Self::Mprotect),
             11 => Some(Self::Munmap),
+            12 => Some(Self::Brk),
             22 => Some(Self::Pipe),
             24 => Some(Self::Yield),
             32 => Some(Self::Dup),
@@ -144,6 +147,7 @@ impl SyscallNumber {
             Self::Fork => "fork",
             Self::Execve => "execve",
             Self::Wait4 => "wait4",
+            Self::Brk => "brk",
             Self::Mmap => "mmap",
             Self::Munmap => "munmap",
             Self::Mprotect => "mprotect",
@@ -253,6 +257,8 @@ pub fn handle_syscall(
         SyscallNumber::Close => sys_close(arg1 as i32),
         SyscallNumber::Stat => sys_stat(arg1, arg2),
         SyscallNumber::Fstat => sys_fstat(arg1 as i32, arg2),
+        SyscallNumber::Brk => sys_brk(arg1),
+        SyscallNumber::Mmap => sys_mmap(arg1, arg2, arg3 as i32, _arg4 as i32, _arg5 as i32, _arg6),
         SyscallNumber::Getpid => sys_getpid(),
         SyscallNumber::Yield => sys_yield(),
         SyscallNumber::Execve => sys_execve(arg1, arg2, arg3),
@@ -930,6 +936,47 @@ fn sys_chmod(path_ptr: u64, mode: u16) -> SyscallResult {
     }
 }
 
+/// sys_brk - Change the program break (heap management)
+///
+/// Linux-compatible brk syscall:
+/// - arg: new program break address (0 to query current break)
+///
+/// Returns current or new program break on success, or -ENOMEM on failure.
+fn sys_brk(addr: u64) -> SyscallResult {
+    if let Some(brk_fn) = BRK_HANDLER.get() {
+        brk_fn(addr)
+    } else {
+        Err(ErrorCode::ENOSYS)
+    }
+}
+
+/// sys_mmap - Map memory
+///
+/// Linux-compatible mmap syscall (minimal implementation):
+/// - addr: requested address (0 = kernel chooses)
+/// - length: size in bytes
+/// - prot: protection flags (PROT_READ|PROT_WRITE|PROT_EXEC)
+/// - flags: mapping flags (MAP_PRIVATE|MAP_ANONYMOUS only)
+/// - fd: file descriptor (-1 for anonymous)
+/// - offset: file offset (ignored for anonymous)
+///
+/// Returns mapped address on success, or -errno on failure.
+#[allow(clippy::too_many_arguments)]
+fn sys_mmap(
+    addr: u64,
+    length: u64,
+    prot: i32,
+    flags: i32,
+    fd: i32,
+    offset: u64,
+) -> SyscallResult {
+    if let Some(mmap_fn) = MMAP_HANDLER.get() {
+        mmap_fn(addr, length, prot, flags, fd, offset)
+    } else {
+        Err(ErrorCode::ENOSYS)
+    }
+}
+
 /// Yield handler function pointer for scheduler integration
 static YIELD_HANDLER: Once<fn()> = Once::new();
 static EXECVE_HANDLER: Once<fn(&str, &[Vec<u8>], &[Vec<u8>]) -> Result<(), ErrorCode>> =
@@ -954,6 +1001,8 @@ static GETENV_HANDLER: Once<fn(u64, u64, u64) -> SyscallResult> = Once::new();
 static STAT_HANDLER: Once<fn(u64, u64) -> SyscallResult> = Once::new();
 static FSTAT_HANDLER: Once<fn(i32, u64) -> SyscallResult> = Once::new();
 static CHMOD_HANDLER: Once<fn(u64, u16) -> SyscallResult> = Once::new();
+static BRK_HANDLER: Once<fn(u64) -> SyscallResult> = Once::new();
+static MMAP_HANDLER: Once<fn(u64, u64, i32, i32, i32, u64) -> SyscallResult> = Once::new();
 
 /// Set the yield handler for syscall yield
 ///
@@ -1065,6 +1114,16 @@ pub fn set_fstat_handler(handler: fn(i32, u64) -> SyscallResult) {
 /// Set the chmod handler for syscall chmod
 pub fn set_chmod_handler(handler: fn(u64, u16) -> SyscallResult) {
     CHMOD_HANDLER.call_once(|| handler);
+}
+
+/// Set the brk handler for syscall brk
+pub fn set_brk_handler(handler: fn(u64) -> SyscallResult) {
+    BRK_HANDLER.call_once(|| handler);
+}
+
+/// Set the mmap handler for syscall mmap
+pub fn set_mmap_handler(handler: fn(u64, u64, i32, i32, i32, u64) -> SyscallResult) {
+    MMAP_HANDLER.call_once(|| handler);
 }
 
 /// Set the signal handler for TTY Ctrl+C
