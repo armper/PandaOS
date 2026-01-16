@@ -701,7 +701,7 @@ child_process:
     mov rax, SYS_OPEN         ; SYS_OPEN
     ; rdi already has filename
     mov rsi, O_WRONLY | O_CREAT | O_TRUNC  ; flags
-    mov rdx, 0644o            ; mode (octal)
+    mov rdx, 0o644            ; mode (octal)
     syscall
     test rax, rax
     js child_redir_failed

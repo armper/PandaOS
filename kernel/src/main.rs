@@ -1279,6 +1279,8 @@ fn exit_handler(status: i32) -> ! {
         serial_println!("TEST PASS cd_smoke");
         #[cfg(feature = "path-smoke")]
         serial_println!("TEST PASS path_smoke");
+        #[cfg(feature = "redir-smoke")]
+        serial_println!("TEST PASS redir_smoke");
         #[cfg(not(any(
             feature = "shell-smoke",
             feature = "vfs-cat-smoke",
@@ -1288,7 +1290,8 @@ fn exit_handler(status: i32) -> ! {
             feature = "ls-smoke",
             feature = "ls-stat-smoke",
             feature = "cd-smoke",
-            feature = "path-smoke"
+            feature = "path-smoke",
+            feature = "redir-smoke"
         )))]
         serial_println!("TEST PASS exec_smoke");
         let kernel_pt = usermode::kernel_page_table_phys();
