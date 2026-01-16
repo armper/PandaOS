@@ -34,6 +34,7 @@
     feature = "tty-smoke"
 ))]
 use core::sync::atomic::{AtomicUsize, Ordering};
+use alloc::vec::Vec;
 use panda_hal::serial_println;
 use spin::Once;
 
@@ -199,6 +200,10 @@ pub enum ErrorCode {
     EMFILE = 24,
     /// Read-only filesystem
     EROFS = 30,
+    /// Exec format error
+    ENOEXEC = 8,
+    /// Argument list too long
+    E2BIG = 7,
     /// Broken pipe
     EPIPE = 32,
     /// Result too large
@@ -250,7 +255,7 @@ pub fn handle_syscall(
         SyscallNumber::Fstat => sys_fstat(arg1 as i32, arg2),
         SyscallNumber::Getpid => sys_getpid(),
         SyscallNumber::Yield => sys_yield(),
-        SyscallNumber::Execve => sys_exec(arg1, arg2),
+        SyscallNumber::Execve => sys_execve(arg1, arg2, arg3),
         SyscallNumber::Fork => sys_fork(),
         SyscallNumber::Wait4 => sys_waitpid(arg1 as i64, arg2, arg3 as i32),
         SyscallNumber::Pipe => sys_pipe(arg1),
@@ -761,7 +766,54 @@ fn sys_yield() -> SyscallResult {
     Ok(0)
 }
 
-/// sys_exec - Replace the current process image with an optional argument string
+/// sys_execve - Replace the current process image with a new program
+///
+/// Linux-compatible execve syscall:
+/// - arg1: path to executable
+/// - arg2: argv array (NULL-terminated array of string pointers)
+/// - arg3: envp array (NULL-terminated array of string pointers)
+///
+/// For backward compatibility, if argv is 0 or points to a single string,
+/// the old simplified interface is used.
+fn sys_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> SyscallResult {
+    const MAX_PATH_LEN: usize = 256;
+    let mut path_buf = [0u8; MAX_PATH_LEN];
+
+    let path = crate::usermode::copy_user_cstr(path_ptr, &mut path_buf)?;
+
+    // Check if we're using the new argv/envp interface or old single-arg interface
+    if argv_ptr == 0 {
+        // Old interface: no arguments
+        if let Some(exec_fn) = EXECVE_HANDLER.get() {
+            match exec_fn(path, &[], &[]) {
+                Ok(()) => Err(ErrorCode::EIO), // exec never returns on success
+                Err(err) => Err(err),
+            }
+        } else {
+            Err(ErrorCode::ENOSYS)
+        }
+    } else {
+        // New interface: parse argv and envp arrays
+        // SAFETY: User provides argv_ptr and envp_ptr, we validate in parse functions
+        let argv = unsafe { crate::exec_stack::parse_argv(argv_ptr)? };
+        let envp = unsafe { crate::exec_stack::parse_envp(envp_ptr)? };
+
+        if let Some(exec_fn) = EXECVE_HANDLER.get() {
+            match exec_fn(path, &argv, &envp) {
+                Ok(()) => Err(ErrorCode::EIO), // exec never returns on success
+                Err(err) => Err(err),
+            }
+        } else {
+            Err(ErrorCode::ENOSYS)
+        }
+    }
+}
+
+/// sys_exec - DEPRECATED: Old simplified exec interface
+///
+/// This is kept for backward compatibility with existing code.
+/// Use sys_execve instead.
+#[allow(dead_code)]
 fn sys_exec(path_ptr: u64, arg_ptr: u64) -> SyscallResult {
     const MAX_PATH_LEN: usize = 64;
     const MAX_ARG_LEN: usize = 128;
@@ -769,14 +821,17 @@ fn sys_exec(path_ptr: u64, arg_ptr: u64) -> SyscallResult {
     let mut arg_buf = [0u8; MAX_ARG_LEN];
 
     let path = crate::usermode::copy_user_cstr(path_ptr, &mut path_buf)?;
-    let arg = if arg_ptr == 0 {
-        None
+    
+    // Convert old-style arg to new argv format
+    let argv: Vec<Vec<u8>> = if arg_ptr == 0 {
+        Vec::new()
     } else {
-        Some(crate::usermode::copy_user_cstr(arg_ptr, &mut arg_buf)?)
+        let arg_str = crate::usermode::copy_user_cstr(arg_ptr, &mut arg_buf)?;
+        alloc::vec![arg_str.as_bytes().to_vec()]
     };
 
-    if let Some(exec_fn) = EXEC_HANDLER.get() {
-        match exec_fn(path, arg) {
+    if let Some(exec_fn) = EXECVE_HANDLER.get() {
+        match exec_fn(path, &argv, &[]) {
             Ok(()) => Err(ErrorCode::EIO),
             Err(err) => Err(err),
         }
@@ -877,7 +932,8 @@ fn sys_chmod(path_ptr: u64, mode: u16) -> SyscallResult {
 
 /// Yield handler function pointer for scheduler integration
 static YIELD_HANDLER: Once<fn()> = Once::new();
-static EXEC_HANDLER: Once<fn(&str, Option<&str>) -> Result<(), ErrorCode>> = Once::new();
+static EXECVE_HANDLER: Once<fn(&str, &[Vec<u8>], &[Vec<u8>]) -> Result<(), ErrorCode>> =
+    Once::new();
 static OPEN_HANDLER: Once<fn(&str, u64) -> SyscallResult> = Once::new();
 static READ_HANDLER: Once<fn(i32, u64, u64) -> SyscallResult> = Once::new();
 static WRITE_HANDLER: Once<fn(i32, u64, u64) -> SyscallResult> = Once::new();
@@ -906,12 +962,14 @@ pub fn set_yield_handler(handler: fn()) {
     YIELD_HANDLER.call_once(|| handler);
 }
 
-/// Set the exec handler for syscall execve
+/// Set the execve handler for syscall execve
 ///
 /// Must be called before any user processes run.
-/// The second argument is an optional single argument string.
-pub fn set_exec_handler(handler: fn(&str, Option<&str>) -> Result<(), ErrorCode>) {
-    EXEC_HANDLER.call_once(|| handler);
+/// Handler receives path, argv array, and envp array.
+pub fn set_execve_handler(
+    handler: fn(&str, &[Vec<u8>], &[Vec<u8>]) -> Result<(), ErrorCode>,
+) {
+    EXECVE_HANDLER.call_once(|| handler);
 }
 
 /// Set the open handler for syscall open
