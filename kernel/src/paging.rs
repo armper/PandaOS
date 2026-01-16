@@ -471,6 +471,22 @@ pub unsafe fn map_page(
     // SAFETY: Entry is now present
     let l1_table = unsafe { &mut *(l2_table[p2_index].addr() as *mut PageTable) };
 
+    // Check if the page is already mapped
+    if l1_table[p1_index].is_present() {
+        let existing_addr = l1_table[p1_index].addr();
+        let new_addr = phys_addr.as_u64() & 0x000F_FFFF_FFFF_F000;
+        
+        // If already mapped to the same frame, this is an idempotent operation - allow it
+        if existing_addr == new_addr {
+            // Update flags in case they changed
+            l1_table[p1_index].set(phys_addr.as_u64(), flags);
+            return Ok(());
+        }
+        
+        // If mapped to a different frame, this is an error
+        return Err("Page already mapped to a different physical frame");
+    }
+
     // Map the page
     l1_table[p1_index].set(phys_addr.as_u64(), flags);
 
