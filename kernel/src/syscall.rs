@@ -27,7 +27,8 @@
     feature = "ls-smoke",
     feature = "ls-stat-smoke",
     feature = "cd-smoke",
-    feature = "path-smoke"
+    feature = "path-smoke",
+    feature = "redir-smoke"
 ))]
 use core::sync::atomic::{AtomicUsize, Ordering};
 use panda_hal::serial_println;
@@ -362,6 +363,9 @@ const SCRIPTED_INPUT: &[u8] = b"ls\ncd bin\nls\ncd ..\nls\nexit\n";
 #[cfg(feature = "path-smoke")]
 const SCRIPTED_INPUT: &[u8] = b"ls\ncat /etc/version\ncd bin\nls\nexit\n";
 
+#[cfg(feature = "redir-smoke")]
+const SCRIPTED_INPUT: &[u8] = b"echo hello > /tmp/x\ncat < /tmp/x\nls /tmp\nexit\n";
+
 #[cfg(all(
     feature = "shell-smoke",
     any(
@@ -372,11 +376,12 @@ const SCRIPTED_INPUT: &[u8] = b"ls\ncat /etc/version\ncd bin\nls\nexit\n";
         feature = "ls-smoke",
         feature = "ls-stat-smoke",
         feature = "cd-smoke",
-        feature = "path-smoke"
+        feature = "path-smoke",
+    feature = "redir-smoke"
     )
 ))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, and path-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, and redir-smoke are mutually exclusive"
 );
 
 #[cfg(all(
@@ -388,11 +393,12 @@ compile_error!(
         feature = "ls-smoke",
         feature = "ls-stat-smoke",
         feature = "cd-smoke",
-        feature = "path-smoke"
+        feature = "path-smoke",
+    feature = "redir-smoke"
     )
 ))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, and path-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, and redir-smoke are mutually exclusive"
 );
 
 #[cfg(all(
@@ -403,11 +409,12 @@ compile_error!(
         feature = "ls-smoke",
         feature = "ls-stat-smoke",
         feature = "cd-smoke",
-        feature = "path-smoke"
+        feature = "path-smoke",
+    feature = "redir-smoke"
     )
 ))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, and path-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, and redir-smoke are mutually exclusive"
 );
 
 #[cfg(all(
@@ -417,34 +424,39 @@ compile_error!(
         feature = "ls-smoke",
         feature = "ls-stat-smoke",
         feature = "cd-smoke",
-        feature = "path-smoke"
+        feature = "path-smoke",
+    feature = "redir-smoke"
     )
 ))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, and path-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, and redir-smoke are mutually exclusive"
 );
 
 #[cfg(all(
     feature = "ctrlc-smoke",
-    any(feature = "ls-smoke", feature = "ls-stat-smoke", feature = "cd-smoke", feature = "path-smoke")
+    any(feature = "ls-smoke", feature = "ls-stat-smoke", feature = "cd-smoke", feature = "path-smoke",
+    feature = "redir-smoke")
 ))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, and path-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, and redir-smoke are mutually exclusive"
 );
 
-#[cfg(all(feature = "ls-smoke", any(feature = "ls-stat-smoke", feature = "cd-smoke", feature = "path-smoke")))]
+#[cfg(all(feature = "ls-smoke", any(feature = "ls-stat-smoke", feature = "cd-smoke", feature = "path-smoke",
+    feature = "redir-smoke")))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, and path-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, and redir-smoke are mutually exclusive"
 );
 
-#[cfg(all(feature = "ls-stat-smoke", any(feature = "cd-smoke", feature = "path-smoke")))]
+#[cfg(all(feature = "ls-stat-smoke", any(feature = "cd-smoke", feature = "path-smoke",
+    feature = "redir-smoke")))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, and path-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, and redir-smoke are mutually exclusive"
 );
 
-#[cfg(all(feature = "cd-smoke", feature = "path-smoke"))]
+#[cfg(all(feature = "cd-smoke", feature = "path-smoke",
+    feature = "redir-smoke"))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, and path-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, and redir-smoke are mutually exclusive"
 );
 
 #[cfg(any(
@@ -456,7 +468,8 @@ compile_error!(
     feature = "ls-smoke",
     feature = "ls-stat-smoke",
     feature = "cd-smoke",
-    feature = "path-smoke"
+    feature = "path-smoke",
+    feature = "redir-smoke"
 ))]
 static SCRIPTED_POS: AtomicUsize = AtomicUsize::new(0);
 
@@ -470,7 +483,8 @@ fn read_byte() -> Option<u8> {
         feature = "ls-smoke",
         feature = "ls-stat-smoke",
         feature = "cd-smoke",
-        feature = "path-smoke"
+        feature = "path-smoke",
+    feature = "redir-smoke"
     ))]
     {
         let pos = SCRIPTED_POS.fetch_add(1, Ordering::Relaxed);
@@ -486,7 +500,8 @@ fn read_byte() -> Option<u8> {
         feature = "ls-smoke",
         feature = "ls-stat-smoke",
         feature = "cd-smoke",
-        feature = "path-smoke"
+        feature = "path-smoke",
+    feature = "redir-smoke"
     )))]
     {
         return panda_hal::serial::serial_read_byte();
@@ -557,15 +572,15 @@ fn sys_read(fd: i32, buf: u64, count: u64) -> SyscallResult {
     }
 }
 
-/// sys_open - Open a file path (read-only)
-fn sys_open(path_ptr: u64, _flags: u64, _mode: u64) -> SyscallResult {
+/// sys_open - Open a file path with flags
+fn sys_open(path_ptr: u64, flags: u64, _mode: u64) -> SyscallResult {
     const MAX_PATH_LEN: usize = 64;
     let mut path_buf = [0u8; MAX_PATH_LEN];
 
     let path = crate::usermode::copy_user_cstr(path_ptr, &mut path_buf)?;
 
     if let Some(open_fn) = OPEN_HANDLER.get() {
-        open_fn(path)
+        open_fn(path, flags)
     } else {
         Err(ErrorCode::ENOSYS)
     }
@@ -735,7 +750,7 @@ fn sys_getenv(name_ptr: u64, buf_ptr: u64, size: u64) -> SyscallResult {
 /// Yield handler function pointer for scheduler integration
 static YIELD_HANDLER: Once<fn()> = Once::new();
 static EXEC_HANDLER: Once<fn(&str, Option<&str>) -> Result<(), ErrorCode>> = Once::new();
-static OPEN_HANDLER: Once<fn(&str) -> SyscallResult> = Once::new();
+static OPEN_HANDLER: Once<fn(&str, u64) -> SyscallResult> = Once::new();
 static READ_HANDLER: Once<fn(i32, u64, u64) -> SyscallResult> = Once::new();
 static WRITE_HANDLER: Once<fn(i32, u64, u64) -> SyscallResult> = Once::new();
 static CLOSE_HANDLER: Once<fn(i32) -> SyscallResult> = Once::new();
@@ -769,7 +784,7 @@ pub fn set_exec_handler(handler: fn(&str, Option<&str>) -> Result<(), ErrorCode>
 }
 
 /// Set the open handler for syscall open
-pub fn set_open_handler(handler: fn(&str) -> SyscallResult) {
+pub fn set_open_handler(handler: fn(&str, u64) -> SyscallResult) {
     OPEN_HANDLER.call_once(|| handler);
 }
 

@@ -83,14 +83,20 @@ if [ "${PATH_SMOKE:-0}" -eq 1 ]; then
     FEATURES+=(--features path-smoke)
     EXPECTED_MARKER="TEST PASS path_smoke"
 fi
+if [ "${REDIR_SMOKE:-0}" -eq 1 ]; then
+    FEATURE_COUNT=$((FEATURE_COUNT + 1))
+    TEST_NAME="redir_smoke"
+    FEATURES+=(--features redir-smoke)
+    EXPECTED_MARKER="TEST PASS redir_smoke"
+fi
 
 if [ $FEATURE_COUNT -gt 1 ]; then
-    echo "Error: SHELL_SMOKE, VFS_CAT_SMOKE, FORK_EXEC_SMOKE, PIPE_SMOKE, CTRLC_SMOKE, LS_SMOKE, LS_STAT_SMOKE, CD_SMOKE, and PATH_SMOKE are mutually exclusive"
+    echo "Error: SHELL_SMOKE, VFS_CAT_SMOKE, FORK_EXEC_SMOKE, PIPE_SMOKE, CTRLC_SMOKE, LS_SMOKE, LS_STAT_SMOKE, CD_SMOKE, PATH_SMOKE, and REDIR_SMOKE are mutually exclusive"
     exit 1
 fi
 
 if [ $FEATURE_COUNT -eq 0 ]; then
-    echo "Error: Must set one of SHELL_SMOKE, VFS_CAT_SMOKE, FORK_EXEC_SMOKE, PIPE_SMOKE, CTRLC_SMOKE, LS_SMOKE, LS_STAT_SMOKE, CD_SMOKE, or PATH_SMOKE"
+    echo "Error: Must set one of SHELL_SMOKE, VFS_CAT_SMOKE, FORK_EXEC_SMOKE, PIPE_SMOKE, CTRLC_SMOKE, LS_SMOKE, LS_STAT_SMOKE, CD_SMOKE, PATH_SMOKE, or REDIR_SMOKE"
     exit 1
 fi
 

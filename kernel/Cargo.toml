@@ -29,6 +29,7 @@ ls-smoke = []
 ls-stat-smoke = []
 cd-smoke = []
 path-smoke = []
+redir-smoke = []
 build-userland = []
 
 [package.metadata.bootimage]

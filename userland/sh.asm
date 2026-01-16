@@ -5,6 +5,7 @@ BITS 64
 
 %define SYS_READ 0
 %define SYS_WRITE 1
+%define SYS_OPEN 2
 %define SYS_CLOSE 3
 %define SYS_PIPE 22
 %define SYS_DUP2 33
@@ -21,6 +22,11 @@ BITS 64
 %define STDOUT 1
 
 %define SIGINT 2
+
+%define O_RDONLY 0x0000
+%define O_WRONLY 0x0001
+%define O_CREAT 0x0040
+%define O_TRUNC 0x0200
 
 %define BUF_SIZE 128
 
@@ -146,6 +152,85 @@ line_done:
     cmp r12, 0
     je main_loop
 
+    ; Check for redirection operators ('>' or '<')
+    ; We'll support only one redirection per command
+    xor rbx, rbx              ; rbx = position counter
+    mov qword [rel redir_type], 0    ; 0 = none, 1 = input (<), 2 = output (>)
+    
+check_redir_loop:
+    cmp rbx, r12
+    jae check_pipe_after_redir  ; No redirection found, check for pipe
+    mov al, [r13 + rbx]
+    cmp al, '<'
+    je input_redir_found
+    cmp al, '>'
+    je output_redir_found
+    inc rbx
+    jmp check_redir_loop
+
+input_redir_found:
+    mov qword [rel redir_type], 1
+    jmp process_redirection
+
+output_redir_found:
+    mov qword [rel redir_type], 2
+    ; jmp process_redirection (fallthrough)
+
+process_redirection:
+    ; rbx = position of redirection operator
+    ; Null-terminate command before redirection
+    mov byte [r13 + rbx], 0
+    
+    ; Find filename start (skip spaces after operator)
+    lea r15, [r13 + rbx + 1]
+skip_redir_spaces:
+    mov al, [r15]
+    cmp al, 0
+    je redir_error
+    cmp al, ' '
+    jne found_redir_filename
+    inc r15
+    jmp skip_redir_spaces
+    
+found_redir_filename:
+    ; r15 = start of filename
+    ; Find end of filename (space or null)
+    mov r14, r15
+find_redir_end:
+    mov al, [r14]
+    cmp al, 0
+    je redir_filename_done
+    cmp al, ' '
+    je redir_filename_done
+    inc r14
+    jmp find_redir_end
+    
+redir_filename_done:
+    mov byte [r14], 0   ; Null-terminate filename
+    mov [rel redir_file], r15  ; Save filename pointer
+    
+    ; Trim trailing spaces from command
+    lea r8, [r13 + rbx]
+    dec r8
+trim_cmd_before_redir:
+    cmp r8, r13
+    jb check_pipe_after_redir
+    mov al, [r8]
+    cmp al, ' '
+    jne check_pipe_after_redir
+    mov byte [r8], 0
+    dec r8
+    jmp trim_cmd_before_redir
+
+redir_error:
+    mov rax, SYS_WRITE
+    mov rdi, STDOUT
+    lea rsi, [rel redir_err]
+    mov rdx, redir_err_len
+    syscall
+    jmp main_loop
+
+check_pipe_after_redir:
     ; Check for pipe operator '|'
     xor rbx, rbx              ; rbx = position counter
 check_pipe_loop:
@@ -421,7 +506,7 @@ check_cd:
     syscall
     test rax, rax
     js cd_failed
-    jmp prompt_loop      ; success, show new prompt
+    jmp main_loop      ; success, show new prompt
     
 cd_failed:
     mov rax, SYS_WRITE
@@ -429,14 +514,14 @@ cd_failed:
     lea rsi, [rel cd_err]
     mov rdx, cd_err_len
     syscall
-    jmp prompt_loop
+    jmp main_loop
 
 cmd_cd_home:
     ; cd with no args -> change to /
     lea rdi, [rel root_dir]
     mov rax, SYS_CHDIR
     syscall
-    jmp prompt_loop
+    jmp main_loop
 
 check_echo:
     cmp r12, 4
@@ -600,6 +685,80 @@ child_process:
     xor rsi, rsi              ; pgid = 0 (use own PID)
     syscall
     
+    ; Handle redirection if present
+    mov rax, [rel redir_type]
+    cmp rax, 0
+    je child_exec  ; No redirection
+    
+    ; Open the redirection file
+    mov rdi, [rel redir_file]  ; filename
+    
+    cmp rax, 1
+    je child_redir_input
+    
+    ; Output redirection (>)
+    ; open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0644)
+    mov rax, SYS_OPEN         ; SYS_OPEN
+    ; rdi already has filename
+    mov rsi, O_WRONLY | O_CREAT | O_TRUNC  ; flags
+    mov rdx, 0o644            ; mode (octal)
+    syscall
+    test rax, rax
+    js child_redir_failed
+    
+    ; dup2(fd, STDOUT)
+    mov rdi, rax
+    mov rsi, STDOUT
+    mov rax, SYS_DUP2
+    syscall
+    test rax, rax
+    js child_redir_failed
+    
+    ; Close original fd
+    mov rax, SYS_CLOSE
+    ; rdi already has the fd
+    syscall
+    
+    jmp child_exec
+    
+child_redir_input:
+    ; Input redirection (<)
+    ; open(filename, O_RDONLY, 0)
+    mov rax, SYS_OPEN         ; SYS_OPEN
+    ; rdi already has filename
+    mov rsi, O_RDONLY         ; flags
+    mov rdx, 0
+    syscall
+    test rax, rax
+    js child_redir_failed
+    
+    ; dup2(fd, STDIN)
+    mov rdi, rax
+    mov rsi, STDIN
+    mov rax, SYS_DUP2
+    syscall
+    test rax, rax
+    js child_redir_failed
+    
+    ; Close original fd
+    mov rax, SYS_CLOSE
+    ; rdi already has the fd
+    syscall
+    
+    jmp child_exec
+
+child_redir_failed:
+    mov rax, SYS_WRITE
+    mov rdi, STDOUT
+    lea rsi, [rel redir_fail]
+    mov rdx, redir_fail_len
+    syscall
+    
+    mov rax, SYS_EXIT
+    mov rdi, 1
+    syscall
+
+child_exec:
     ; Exec the program
     mov rax, SYS_EXECVE
     mov rdi, r14
@@ -729,6 +888,10 @@ fork_fail: db "fork failed", 0x0D, 0x0A
 fork_fail_len equ $ - fork_fail
 pipe_error: db "pipe syntax error", 0x0D, 0x0A
 pipe_error_len equ $ - pipe_error
+redir_err: db "redirection syntax error", 0x0D, 0x0A
+redir_err_len equ $ - redir_err
+redir_fail: db "redirection failed", 0x0D, 0x0A
+redir_fail_len equ $ - redir_fail
 cat_path: db "/bin/cat", 0
 true_path: db "/bin/true", 0
 bin_prefix: db "/bin/"
@@ -746,3 +909,5 @@ right_cmd_ptr: resq 1
 cmd_buf: resb 64
 foreground_pgid: resq 1
 pipeline_pgid: resq 1
+redir_type: resq 1      ; 0 = none, 1 = input (<), 2 = output (>)
+redir_file: resq 1      ; pointer to filename
