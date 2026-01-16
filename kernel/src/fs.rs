@@ -63,6 +63,13 @@ pub struct OpenDiskFile {
     pub offset: usize,
 }
 
+/// Open tmpfs file descriptor
+#[derive(Clone, Copy, Debug)]
+pub struct OpenTmpfsFile {
+    pub inode: u32,
+    pub offset: usize,
+}
+
 /// File descriptor kinds
 #[derive(Clone, Copy, Debug)]
 pub enum FdKind {
@@ -74,6 +81,10 @@ pub enum FdKind {
     DiskFile(OpenDiskFile),
     /// Disk directory from mounted filesystem
     DiskDirectory(OpenDiskFile),
+    /// Tmpfs file from tmpfs filesystem
+    TmpfsFile(OpenTmpfsFile),
+    /// Tmpfs directory from tmpfs filesystem
+    TmpfsDirectory(OpenTmpfsFile),
     /// Pipe read end
     PipeRead(PipeId),
     /// Pipe write end
@@ -179,7 +190,7 @@ impl FdTable {
                 FdKind::PipeWrite(pipe_id) => {
                     crate::pipe::pipe_close_write(pipe_id)?;
                 }
-                FdKind::File(_, _) | FdKind::Directory(_) | FdKind::DiskFile(_) | FdKind::DiskDirectory(_) => {
+                FdKind::File(_, _) | FdKind::Directory(_) | FdKind::DiskFile(_) | FdKind::DiskDirectory(_) | FdKind::TmpfsFile(_) | FdKind::TmpfsDirectory(_) => {
                     // Files and directories don't need cleanup
                 }
             }
@@ -272,6 +283,25 @@ impl FdTable {
                 // Reading directories via read() is not supported
                 Err(ErrorCode::EISDIR)
             }
+            FdKind::TmpfsFile(open) => {
+                // Read from tmpfs file
+                let mut buffer_vec = alloc::vec![0u8; buffer.len()];
+                let bytes_read = crate::mount::tmpfs_read(open.inode, open.offset, &mut buffer_vec)?;
+                buffer[..bytes_read].copy_from_slice(&buffer_vec[..bytes_read]);
+                
+                // Update offset
+                let new_offset = open.offset + bytes_read;
+                self.entries[fd as usize] = Some(FdKind::TmpfsFile(OpenTmpfsFile {
+                    inode: open.inode,
+                    offset: new_offset,
+                }));
+                
+                Ok(bytes_read)
+            }
+            FdKind::TmpfsDirectory(_) => {
+                // Reading directories via read() is not supported
+                Err(ErrorCode::EISDIR)
+            }
             FdKind::PipeRead(_) | FdKind::PipeWrite(_) => {
                 // Pipes are handled through separate syscall path
                 Err(ErrorCode::EBADF)
@@ -329,6 +359,20 @@ impl FdTable {
             }
             FdKind::Directory(_) => Err(ErrorCode::EBADF),
             FdKind::DiskFile(_) | FdKind::DiskDirectory(_) => Err(ErrorCode::EROFS),
+            FdKind::TmpfsFile(open) => {
+                // Write to tmpfs file
+                let bytes_written = crate::mount::tmpfs_write(open.inode, open.offset, data)?;
+                
+                // Update offset
+                let new_offset = open.offset + bytes_written;
+                self.entries[fd as usize] = Some(FdKind::TmpfsFile(OpenTmpfsFile {
+                    inode: open.inode,
+                    offset: new_offset,
+                }));
+                
+                Ok(bytes_written)
+            }
+            FdKind::TmpfsDirectory(_) => Err(ErrorCode::EBADF),
             FdKind::PipeRead(_) | FdKind::PipeWrite(_) => {
                 // Pipes are handled through separate syscall path
                 Err(ErrorCode::EBADF)
@@ -356,6 +400,13 @@ impl FdTable {
             }
             FdKind::DiskDirectory(open) => {
                 self.entries[fd as usize] = Some(FdKind::DiskDirectory(OpenDiskFile {
+                    inode: open.inode,
+                    offset: new_offset,
+                }));
+                Ok(())
+            }
+            FdKind::TmpfsDirectory(open) => {
+                self.entries[fd as usize] = Some(FdKind::TmpfsDirectory(OpenTmpfsFile {
                     inode: open.inode,
                     offset: new_offset,
                 }));
@@ -400,6 +451,12 @@ impl FdTable {
             FdKind::DiskDirectory(open) => {
                 self.entries[newfd as usize] = Some(FdKind::DiskDirectory(open));
             }
+            FdKind::TmpfsFile(open) => {
+                self.entries[newfd as usize] = Some(FdKind::TmpfsFile(open));
+            }
+            FdKind::TmpfsDirectory(open) => {
+                self.entries[newfd as usize] = Some(FdKind::TmpfsDirectory(open));
+            }
             FdKind::PipeRead(pipe_id) => {
                 crate::pipe::pipe_open_read_end(pipe_id)?;
                 self.entries[newfd as usize] = Some(FdKind::PipeRead(pipe_id));
@@ -428,7 +485,7 @@ impl FdTable {
                     FdKind::PipeWrite(pipe_id) => {
                         crate::pipe::pipe_open_write_end(*pipe_id)?;
                     }
-                    FdKind::File(_, _) | FdKind::Directory(_) | FdKind::DiskFile(_) | FdKind::DiskDirectory(_) => {
+                    FdKind::File(_, _) | FdKind::Directory(_) | FdKind::DiskFile(_) | FdKind::DiskDirectory(_) | FdKind::TmpfsFile(_) | FdKind::TmpfsDirectory(_) => {
                         // Files and directories don't need refcounting
                     }
                 }
@@ -550,31 +607,87 @@ fn create_dynamic_file(path: &str) -> Result<usize, ErrorCode> {
 /// Open a file by path into a file descriptor table with flags.
 pub fn open_path_with_flags(table: &mut FdTable, path: &str, flags: u64) -> Result<i32, ErrorCode> {
     // Check if path is on a mounted filesystem
-    if let Some((_mount, rel_path)) = crate::mount::resolve_mount_path(path) {
-        // Open file from disk filesystem
-        let inode = crate::mount::diskfs_lookup(&rel_path)?;
-        let metadata = crate::mount::diskfs_stat(inode)?;
-        
-        // Allocate FD
-        let fd = table.allocate_fd()?;
-        
-        // Check if writable (disk fs is read-only)
-        let writable = (flags & O_WRONLY) != 0 || (flags & O_RDWR) != 0;
-        if writable {
-            return Err(ErrorCode::EROFS); // Read-only filesystem
-        }
-        
-        // Open based on file type
-        match metadata.file_type {
-            FileType::File => {
-                table.entries[fd] = Some(FdKind::DiskFile(OpenDiskFile { inode, offset: 0 }));
+    if let Some((_mount, rel_path, fs_type)) = crate::mount::resolve_mount_path(path) {
+        match fs_type {
+            crate::mount::FsType::Disk => {
+                // Open file from disk filesystem
+                let inode = crate::mount::diskfs_lookup(&rel_path)?;
+                let metadata = crate::mount::diskfs_stat(inode)?;
+                
+                // Allocate FD
+                let fd = table.allocate_fd()?;
+                
+                // Check if writable (disk fs is read-only)
+                let writable = (flags & O_WRONLY) != 0 || (flags & O_RDWR) != 0;
+                if writable {
+                    return Err(ErrorCode::EROFS); // Read-only filesystem
+                }
+                
+                // Open based on file type
+                match metadata.file_type {
+                    FileType::File => {
+                        table.entries[fd] = Some(FdKind::DiskFile(OpenDiskFile { inode, offset: 0 }));
+                    }
+                    FileType::Directory => {
+                        table.entries[fd] = Some(FdKind::DiskDirectory(OpenDiskFile { inode, offset: 0 }));
+                    }
+                }
+                
+                return Ok(fd as i32);
             }
-            FileType::Directory => {
-                table.entries[fd] = Some(FdKind::DiskDirectory(OpenDiskFile { inode, offset: 0 }));
+            crate::mount::FsType::Tmpfs => {
+                // Try to lookup file in tmpfs
+                let inode_result = crate::mount::tmpfs_lookup(&rel_path);
+                
+                let inode = match inode_result {
+                    Ok(inode) => {
+                        // File exists
+                        // If O_TRUNC is set and writable, truncate it
+                        if (flags & O_TRUNC) != 0 && ((flags & O_WRONLY) != 0 || (flags & O_RDWR) != 0) {
+                            crate::mount::tmpfs_truncate(inode)?;
+                        }
+                        inode
+                    }
+                    Err(ErrorCode::ENOENT) => {
+                        // File doesn't exist - check if O_CREAT is set
+                        if (flags & O_CREAT) != 0 {
+                            // Extract parent path and filename
+                            let (parent, name) = if let Some(pos) = rel_path.rfind('/') {
+                                let parent = &rel_path[..pos];
+                                let name = &rel_path[pos + 1..];
+                                (if parent.is_empty() { "/" } else { parent }, name)
+                            } else {
+                                ("/", rel_path.as_str())
+                            };
+                            
+                            // Create the file
+                            crate::mount::tmpfs_create(parent, name, false)?
+                        } else {
+                            return Err(ErrorCode::ENOENT);
+                        }
+                    }
+                    Err(e) => return Err(e),
+                };
+                
+                // Get metadata
+                let metadata = crate::mount::tmpfs_stat(inode)?;
+                
+                // Allocate FD
+                let fd = table.allocate_fd()?;
+                
+                // Open based on file type
+                match metadata.file_type {
+                    FileType::File => {
+                        table.entries[fd] = Some(FdKind::TmpfsFile(OpenTmpfsFile { inode, offset: 0 }));
+                    }
+                    FileType::Directory => {
+                        table.entries[fd] = Some(FdKind::TmpfsDirectory(OpenTmpfsFile { inode, offset: 0 }));
+                    }
+                }
+                
+                return Ok(fd as i32);
             }
         }
-        
-        return Ok(fd as i32);
     }
     
     // Try to look up existing file in memory filesystem
@@ -621,10 +734,19 @@ pub fn list_directory(
     use alloc::vec::Vec;
 
     // Check if path is on a mounted filesystem
-    if let Some((_mount, rel_path)) = crate::mount::resolve_mount_path(dir_path) {
-        // List directory from disk filesystem
-        let inode = crate::mount::diskfs_lookup(&rel_path)?;
-        return crate::mount::diskfs_list_dir(inode);
+    if let Some((_mount, rel_path, fs_type)) = crate::mount::resolve_mount_path(dir_path) {
+        match fs_type {
+            crate::mount::FsType::Disk => {
+                // List directory from disk filesystem
+                let inode = crate::mount::diskfs_lookup(&rel_path)?;
+                return crate::mount::diskfs_list_dir(inode);
+            }
+            crate::mount::FsType::Tmpfs => {
+                // List directory from tmpfs
+                let inode = crate::mount::tmpfs_lookup(&rel_path)?;
+                return crate::mount::tmpfs_list_dir(inode);
+            }
+        }
     }
 
     // Verify the path is a directory
@@ -756,12 +878,65 @@ pub fn validate_directory(path: &str) -> Result<(), ErrorCode> {
     Ok(())
 }
 
+/// Unlink (delete) a file or empty directory
+pub fn unlink_path(path: &str) -> Result<(), ErrorCode> {
+    // Check if path is on a mounted filesystem
+    if let Some((_mount, rel_path, fs_type)) = crate::mount::resolve_mount_path(path) {
+        match fs_type {
+            crate::mount::FsType::Disk => {
+                // Disk filesystem is read-only
+                return Err(ErrorCode::EROFS);
+            }
+            crate::mount::FsType::Tmpfs => {
+                // Extract parent path and filename
+                let (parent, name) = if let Some(pos) = rel_path.rfind('/') {
+                    let parent = &rel_path[..pos];
+                    let name = &rel_path[pos + 1..];
+                    (if parent.is_empty() { "/" } else { parent }, name)
+                } else {
+                    ("/", rel_path.as_str())
+                };
+                
+                return crate::mount::tmpfs_unlink(parent, name);
+            }
+        }
+    }
+
+    // For in-memory filesystem, we can only unlink dynamic files in /tmp
+    if !path.starts_with("/tmp/") {
+        return Err(ErrorCode::EACCES);
+    }
+
+    // Check if file exists in dynamic files
+    let mut dynamic = DYNAMIC_FILES.lock();
+    if let Some(ref mut map) = *dynamic {
+        if let Some(node_index) = map.remove(path) {
+            // Remove from writable files storage
+            let mut files = WRITABLE_FILES.lock();
+            if let Some(ref mut store) = *files {
+                store.remove(&node_index);
+            }
+            return Ok(());
+        }
+    }
+
+    Err(ErrorCode::ENOENT)
+}
+
 /// Get file metadata by path
 pub fn stat_path(path: &str) -> Result<FileMetadata, ErrorCode> {
     // Check if path is on a mounted filesystem
-    if let Some((_mount, rel_path)) = crate::mount::resolve_mount_path(path) {
-        let inode = crate::mount::diskfs_lookup(&rel_path)?;
-        return crate::mount::diskfs_stat(inode);
+    if let Some((_mount, rel_path, fs_type)) = crate::mount::resolve_mount_path(path) {
+        match fs_type {
+            crate::mount::FsType::Disk => {
+                let inode = crate::mount::diskfs_lookup(&rel_path)?;
+                return crate::mount::diskfs_stat(inode);
+            }
+            crate::mount::FsType::Tmpfs => {
+                let inode = crate::mount::tmpfs_lookup(&rel_path)?;
+                return crate::mount::tmpfs_stat(inode);
+            }
+        }
     }
 
     let (node_index, node) = lookup_node(path).ok_or(ErrorCode::ENOENT)?;
@@ -814,6 +989,9 @@ pub fn fstat_fd(table: &FdTable, fd: i32) -> Result<FileMetadata, ErrorCode> {
         }
         FdKind::DiskFile(open) | FdKind::DiskDirectory(open) => {
             crate::mount::diskfs_stat(open.inode)
+        }
+        FdKind::TmpfsFile(open) | FdKind::TmpfsDirectory(open) => {
+            crate::mount::tmpfs_stat(open.inode)
         }
         FdKind::PipeRead(_) | FdKind::PipeWrite(_) => {
             // Pipes don't have traditional stat metadata

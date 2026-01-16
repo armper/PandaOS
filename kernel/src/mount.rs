@@ -1,15 +1,23 @@
 //! Mount point management for VFS
 //!
 //! This module provides a simple mount table that maps mount points
-//! to disk filesystem instances.
+//! to filesystem instances (disk filesystem and tmpfs).
 
 use crate::diskfs::{DiskFs, DiskFsError, InodeType};
 use crate::fs::{FileMetadata, FileType};
 use crate::syscall::ErrorCode;
+use crate::tmpfs::Inode as TmpfsInode;
 use alloc::string::String;
 use alloc::vec::Vec;
 use panda_hal::ata::AtaDisk;
 use spin::Mutex;
+
+/// Filesystem type
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FsType {
+    Disk,
+    Tmpfs,
+}
 
 /// Global mount table
 static MOUNT_TABLE: Mutex<Option<MountTable>> = Mutex::new(None);
@@ -17,11 +25,13 @@ static MOUNT_TABLE: Mutex<Option<MountTable>> = Mutex::new(None);
 /// Mount table entry
 #[derive(Clone, Copy, Debug)]
 pub struct MountEntry {
-    /// Mount point path (e.g., "/mnt")
+    /// Mount point path (e.g., "/mnt", "/tmp")
     mount_point: &'static str,
+    /// Filesystem type
+    fs_type: FsType,
 }
 
-/// Mount table with disk filesystem
+/// Mount table with filesystem instances
 pub struct MountTable {
     mounts: Vec<(String, MountEntry)>,
     disk_fs: Option<DiskFs<AtaDisk>>,
@@ -43,25 +53,32 @@ impl MountTable {
         let disk_fs = DiskFs::new(disk).map_err(|_| ErrorCode::EIO)?;
 
         // Add mount entry
-        self.mounts.push((String::from(mount_point), MountEntry { mount_point }));
+        self.mounts.push((String::from(mount_point), MountEntry { mount_point, fs_type: FsType::Disk }));
         self.disk_fs = Some(disk_fs);
 
         Ok(())
     }
 
+    /// Mount tmpfs at a mount point
+    pub fn mount_tmpfs(&mut self, mount_point: &'static str) -> Result<(), ErrorCode> {
+        // Add mount entry
+        self.mounts.push((String::from(mount_point), MountEntry { mount_point, fs_type: FsType::Tmpfs }));
+        Ok(())
+    }
+
     /// Check if a path is within a mounted filesystem
-    /// Returns the mount point and the relative path within that filesystem
-    pub fn resolve_mount<'a>(&'a self, path: &'a str) -> Option<(&'a str, &'a str)> {
-        for (mount_point, _) in &self.mounts {
+    /// Returns the mount point, the relative path, and the filesystem type
+    pub fn resolve_mount<'a>(&'a self, path: &'a str) -> Option<(&'a str, &'a str, FsType)> {
+        for (mount_point, entry) in &self.mounts {
             if path == mount_point.as_str() {
                 // Exact match - return root of mounted fs
-                return Some((mount_point.as_str(), "/"));
+                return Some((mount_point.as_str(), "/", entry.fs_type));
             }
             let mount_with_slash = alloc::format!("{}/", mount_point);
             if path.starts_with(&mount_with_slash) {
                 // Path is within this mount point
                 let relative = &path[mount_point.len()..];
-                return Some((mount_point.as_str(), relative));
+                return Some((mount_point.as_str(), relative, entry.fs_type));
             }
         }
         None
@@ -91,17 +108,28 @@ pub fn mount_disk_at_mnt() -> Result<(), ErrorCode> {
     mount_table.mount_disk("/mnt")
 }
 
+/// Mount tmpfs at /tmp
+pub fn mount_tmpfs_at_tmp() -> Result<(), ErrorCode> {
+    // Initialize tmpfs first
+    crate::tmpfs::init_tmpfs();
+    
+    // Add to mount table
+    let mut table = MOUNT_TABLE.lock();
+    let mount_table = table.as_mut().ok_or(ErrorCode::EIO)?;
+    mount_table.mount_tmpfs("/tmp")
+}
+
 /// Resolve a path that might be on a mounted filesystem
 ///
 /// Returns:
 /// - None if the path is in the in-memory VFS
-/// - Some((mount_point, relative_path)) if on a mounted filesystem
-pub fn resolve_mount_path(path: &str) -> Option<(String, String)> {
+/// - Some((mount_point, relative_path, fs_type)) if on a mounted filesystem
+pub fn resolve_mount_path(path: &str) -> Option<(String, String, FsType)> {
     let table = MOUNT_TABLE.lock();
     let mount_table = table.as_ref()?;
     mount_table
         .resolve_mount(path)
-        .map(|(mount, rel)| (String::from(mount), String::from(rel)))
+        .map(|(mount, rel, fs_type)| (String::from(mount), String::from(rel), fs_type))
 }
 
 /// Lookup a file on the disk filesystem
@@ -175,3 +203,75 @@ fn diskfs_error_to_errno(err: DiskFsError) -> ErrorCode {
         DiskFsError::NotAFile => ErrorCode::EISDIR,
     }
 }
+
+/// Tmpfs operations
+
+/// Lookup a file in tmpfs by path
+pub fn tmpfs_lookup(path: &str) -> Result<TmpfsInode, ErrorCode> {
+    crate::tmpfs::with_tmpfs(|fs| {
+        let root = fs.root_inode();
+        // Remove leading slash from path
+        let rel_path = path.strip_prefix('/').unwrap_or(path);
+        fs.lookup(root, rel_path)
+    })
+}
+
+/// Create a file or directory in tmpfs
+pub fn tmpfs_create(parent_path: &str, name: &str, is_dir: bool) -> Result<TmpfsInode, ErrorCode> {
+    crate::tmpfs::with_tmpfs(|fs| {
+        let root = fs.root_inode();
+        // Lookup parent directory
+        let parent_inode = if parent_path == "/" || parent_path.is_empty() {
+            root
+        } else {
+            let rel_path = parent_path.strip_prefix('/').unwrap_or(parent_path);
+            fs.lookup(root, rel_path)?
+        };
+        
+        // Create the file/dir
+        fs.create(parent_inode, name, is_dir)
+    })
+}
+
+/// Read from a tmpfs file
+pub fn tmpfs_read(inode: TmpfsInode, offset: usize, buffer: &mut [u8]) -> Result<usize, ErrorCode> {
+    crate::tmpfs::with_tmpfs(|fs| fs.read(inode, offset, buffer))
+}
+
+/// Write to a tmpfs file
+pub fn tmpfs_write(inode: TmpfsInode, offset: usize, data: &[u8]) -> Result<usize, ErrorCode> {
+    crate::tmpfs::with_tmpfs(|fs| fs.write(inode, offset, data))
+}
+
+/// Truncate a tmpfs file
+pub fn tmpfs_truncate(inode: TmpfsInode) -> Result<(), ErrorCode> {
+    crate::tmpfs::with_tmpfs(|fs| fs.truncate(inode))
+}
+
+/// Get file metadata from tmpfs
+pub fn tmpfs_stat(inode: TmpfsInode) -> Result<FileMetadata, ErrorCode> {
+    crate::tmpfs::with_tmpfs(|fs| fs.stat(inode))
+}
+
+/// List directory in tmpfs
+pub fn tmpfs_list_dir(inode: TmpfsInode) -> Result<Vec<(String, FileType)>, ErrorCode> {
+    crate::tmpfs::with_tmpfs(|fs| fs.read_dir(inode))
+}
+
+/// Unlink (delete) a file or empty directory from tmpfs
+pub fn tmpfs_unlink(parent_path: &str, name: &str) -> Result<(), ErrorCode> {
+    crate::tmpfs::with_tmpfs(|fs| {
+        let root = fs.root_inode();
+        // Lookup parent directory
+        let parent_inode = if parent_path == "/" || parent_path.is_empty() {
+            root
+        } else {
+            let rel_path = parent_path.strip_prefix('/').unwrap_or(parent_path);
+            fs.lookup(root, rel_path)?
+        };
+        
+        // Unlink the file
+        fs.unlink(parent_inode, name)
+    })
+}
+

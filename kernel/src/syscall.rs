@@ -74,6 +74,8 @@ pub enum SyscallNumber {
     Getcwd = 79,
     /// Change directory
     Chdir = 80,
+    /// Unlink (delete) file
+    Unlink = 87,
     /// Get process ID
     Getpid = 39,
     /// Send signal
@@ -114,6 +116,7 @@ impl SyscallNumber {
             61 => Some(Self::Wait4),
             79 => Some(Self::Getcwd),
             80 => Some(Self::Chdir),
+            87 => Some(Self::Unlink),
             109 => Some(Self::Setpgid),
             217 => Some(Self::Getdents64),
             63 => Some(Self::Getenv),
@@ -145,6 +148,7 @@ impl SyscallNumber {
             Self::Getpid => "getpid",
             Self::Kill => "kill",
             Self::Setpgid => "setpgid",
+            Self::Unlink => "unlink",
             Self::Yield => "yield",
             Self::Getdents64 => "getdents64",
             Self::Getenv => "getenv",
@@ -194,6 +198,8 @@ pub enum ErrorCode {
     ERANGE = 34,
     /// Function not implemented
     ENOSYS = 38,
+    /// Directory not empty
+    ENOTEMPTY = 39,
 }
 
 impl ErrorCode {
@@ -247,6 +253,7 @@ pub fn handle_syscall(
         SyscallNumber::Getdents64 => sys_getdents64(arg1 as i32, arg2, arg3),
         SyscallNumber::Getcwd => sys_getcwd(arg1, arg2),
         SyscallNumber::Chdir => sys_chdir(arg1),
+        SyscallNumber::Unlink => sys_unlink(arg1),
         SyscallNumber::Getenv => sys_getenv(arg1, arg2, arg3),
         // All other syscalls return ENOSYS for now
         _ => Err(ErrorCode::ENOSYS),
@@ -753,6 +760,15 @@ fn sys_chdir(path: u64) -> SyscallResult {
     }
 }
 
+/// sys_unlink - Delete a file or empty directory
+fn sys_unlink(path: u64) -> SyscallResult {
+    if let Some(unlink_fn) = UNLINK_HANDLER.get() {
+        unlink_fn(path)
+    } else {
+        Err(ErrorCode::ENOSYS)
+    }
+}
+
 /// sys_getenv - Get environment variable value
 fn sys_getenv(name_ptr: u64, buf_ptr: u64, size: u64) -> SyscallResult {
     if let Some(getenv_fn) = GETENV_HANDLER.get() {
@@ -779,6 +795,7 @@ static SETPGID_HANDLER: Once<fn(i32, i32) -> SyscallResult> = Once::new();
 static GETDENTS64_HANDLER: Once<fn(i32, u64, u64) -> SyscallResult> = Once::new();
 static GETCWD_HANDLER: Once<fn(u64, u64) -> SyscallResult> = Once::new();
 static CHDIR_HANDLER: Once<fn(u64) -> SyscallResult> = Once::new();
+static UNLINK_HANDLER: Once<fn(u64) -> SyscallResult> = Once::new();
 static GETENV_HANDLER: Once<fn(u64, u64, u64) -> SyscallResult> = Once::new();
 static STAT_HANDLER: Once<fn(u64, u64) -> SyscallResult> = Once::new();
 static FSTAT_HANDLER: Once<fn(i32, u64) -> SyscallResult> = Once::new();
@@ -866,6 +883,11 @@ pub fn set_getcwd_handler(handler: fn(u64, u64) -> SyscallResult) {
 /// Set the chdir handler for syscall chdir
 pub fn set_chdir_handler(handler: fn(u64) -> SyscallResult) {
     CHDIR_HANDLER.call_once(|| handler);
+}
+
+/// Set the unlink handler for syscall unlink
+pub fn set_unlink_handler(handler: fn(u64) -> SyscallResult) {
+    UNLINK_HANDLER.call_once(|| handler);
 }
 
 /// Set the getenv handler for syscall getenv
