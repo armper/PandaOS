@@ -50,7 +50,7 @@ impl AtaDisk {
     /// Wait for the drive to be ready (not busy)
     fn wait_not_busy(&mut self) -> Result<(), BlockError> {
         let mut status_port: Port<u8> = Port::new(self.io_base + ATA_STATUS);
-        
+
         // Wait for BSY to clear (with timeout)
         for _ in 0..1000 {
             // SAFETY: Reading from ATA status port
@@ -63,14 +63,14 @@ impl AtaDisk {
                 core::hint::spin_loop();
             }
         }
-        
+
         Err(BlockError::NotReady)
     }
 
     /// Wait for data request ready
     fn wait_drq(&mut self) -> Result<(), BlockError> {
         let mut status_port: Port<u8> = Port::new(self.io_base + ATA_STATUS);
-        
+
         // Wait for DRQ to be set
         for _ in 0..1000 {
             // SAFETY: Reading from ATA status port
@@ -86,14 +86,18 @@ impl AtaDisk {
                 core::hint::spin_loop();
             }
         }
-        
+
         Err(BlockError::NotReady)
     }
 }
 
 #[cfg(feature = "hardware")]
 impl BlockDevice for AtaDisk {
-    fn read_sector(&mut self, sector: u64, buffer: &mut [u8; SECTOR_SIZE]) -> Result<(), BlockError> {
+    fn read_sector(
+        &mut self,
+        sector: u64,
+        buffer: &mut [u8; SECTOR_SIZE],
+    ) -> Result<(), BlockError> {
         // Only support 28-bit LBA
         if sector >= (1 << 28) {
             return Err(BlockError::InvalidSector);
@@ -117,7 +121,7 @@ impl BlockDevice for AtaDisk {
         let mut lba_low: Port<u8> = Port::new(self.io_base + ATA_LBA_LOW);
         let mut lba_mid: Port<u8> = Port::new(self.io_base + ATA_LBA_MID);
         let mut lba_high: Port<u8> = Port::new(self.io_base + ATA_LBA_HIGH);
-        
+
         // SAFETY: Writing LBA address to ATA ports
         unsafe {
             lba_low.write((sector & 0xFF) as u8);

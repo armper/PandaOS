@@ -77,11 +77,11 @@ impl InodeType {
 #[repr(C, packed)]
 #[derive(Clone, Copy, Debug)]
 struct Inode {
-    inode_num: u32,          // 4 bytes
-    file_type: u32,          // 4 bytes
-    size: u64,               // 8 bytes
+    inode_num: u32,           // 4 bytes
+    file_type: u32,           // 4 bytes
+    size: u64,                // 8 bytes
     direct_blocks: [u32; 10], // 40 bytes (reduced from 12 to fit)
-    padding: [u8; 8],        // 8 bytes padding = 64 total
+    padding: [u8; 8],         // 8 bytes padding = 64 total
 }
 
 /// Directory entry structure
@@ -162,8 +162,8 @@ impl<D: BlockDevice> DiskFs<D> {
 
         let inode = unsafe { &*(sector.as_ptr().add(inode_offset) as *const Inode) };
 
-        let file_type = InodeType::from_u32(inode.file_type)
-            .ok_or(DiskFsError::InvalidInodeType)?;
+        let file_type =
+            InodeType::from_u32(inode.file_type).ok_or(DiskFsError::InvalidInodeType)?;
 
         let mut blocks = Vec::new();
         // Copy direct_blocks to avoid unaligned reference
@@ -174,18 +174,13 @@ impl<D: BlockDevice> DiskFs<D> {
             }
         }
 
-        Ok(DiskFile {
-            inode: inode.inode_num,
-            file_type,
-            size: inode.size,
-            blocks,
-        })
+        Ok(DiskFile { inode: inode.inode_num, file_type, size: inode.size, blocks })
     }
 
     /// Read directory entries from a directory inode
     pub fn read_dir(&mut self, inode_num: u32) -> Result<Vec<DiskDirEntry>, DiskFsError> {
         let file = self.read_inode(inode_num)?;
-        
+
         if file.file_type != InodeType::Directory {
             return Err(DiskFsError::NotADirectory);
         }
@@ -196,7 +191,8 @@ impl<D: BlockDevice> DiskFs<D> {
         // Read all data blocks for this directory
         for &block_num in &file.blocks {
             let mut sector = [0u8; SECTOR_SIZE];
-            self.device.read_sector(block_num as u64, &mut sector)
+            self.device
+                .read_sector(block_num as u64, &mut sector)
                 .map_err(|_| DiskFsError::IoError)?;
             buffer.extend_from_slice(&sector);
         }
@@ -209,7 +205,7 @@ impl<D: BlockDevice> DiskFs<D> {
             }
 
             let entry = unsafe { &*(buffer.as_ptr().add(offset) as *const DirEntry) };
-            
+
             if entry.inode_num == 0 {
                 break; // End of entries
             }
@@ -224,11 +220,8 @@ impl<D: BlockDevice> DiskFs<D> {
 
             let name_bytes = &buffer[offset..offset + name_len];
             let name = String::from_utf8_lossy(name_bytes).into_owned();
-            
-            entries.push(DiskDirEntry {
-                inode: entry.inode_num,
-                name,
-            });
+
+            entries.push(DiskDirEntry { inode: entry.inode_num, name });
 
             offset += name_len;
             // Align to 4-byte boundary
@@ -241,7 +234,7 @@ impl<D: BlockDevice> DiskFs<D> {
     /// Lookup a file by name in a directory
     pub fn lookup(&mut self, dir_inode: u32, name: &str) -> Result<u32, DiskFsError> {
         let entries = self.read_dir(dir_inode)?;
-        
+
         for entry in entries {
             if entry.name == name {
                 return Ok(entry.inode);
@@ -272,9 +265,14 @@ impl<D: BlockDevice> DiskFs<D> {
     }
 
     /// Read file data
-    pub fn read_file(&mut self, inode_num: u32, offset: usize, buffer: &mut [u8]) -> Result<usize, DiskFsError> {
+    pub fn read_file(
+        &mut self,
+        inode_num: u32,
+        offset: usize,
+        buffer: &mut [u8],
+    ) -> Result<usize, DiskFsError> {
         let file = self.read_inode(inode_num)?;
-        
+
         if file.file_type != InodeType::File {
             return Err(DiskFsError::NotAFile);
         }
@@ -296,7 +294,8 @@ impl<D: BlockDevice> DiskFs<D> {
             }
 
             let mut sector = [0u8; SECTOR_SIZE];
-            self.device.read_sector(block_num as u64, &mut sector)
+            self.device
+                .read_sector(block_num as u64, &mut sector)
                 .map_err(|_| DiskFsError::IoError)?;
 
             let block_offset = if i == start_block_idx { start_block_offset } else { 0 };
@@ -347,14 +346,16 @@ mod tests {
 
     impl MockDevice {
         fn new(num_sectors: usize) -> Self {
-            Self {
-                sectors: vec![[0u8; SECTOR_SIZE]; num_sectors],
-            }
+            Self { sectors: vec![[0u8; SECTOR_SIZE]; num_sectors] }
         }
     }
 
     impl BlockDevice for MockDevice {
-        fn read_sector(&mut self, sector: u64, buffer: &mut [u8; SECTOR_SIZE]) -> Result<(), BlockError> {
+        fn read_sector(
+            &mut self,
+            sector: u64,
+            buffer: &mut [u8; SECTOR_SIZE],
+        ) -> Result<(), BlockError> {
             if sector as usize >= self.sectors.len() {
                 return Err(BlockError::InvalidSector);
             }
