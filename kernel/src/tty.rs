@@ -97,7 +97,7 @@ impl Tty {
             // Normal printable characters
             _ => {
                 // Only accept printable ASCII
-                if byte >= 0x20 && byte <= 0x7E {
+                if (0x20..=0x7E).contains(&byte) {
                     if self.current_line.len() < MAX_LINE_LEN {
                         self.current_line.push(byte);
                         // Echo character

@@ -377,8 +377,7 @@ const SCRIPTED_INPUT: &[u8] = b"ls\ncat /etc/version\ncd bin\nls\nexit\n";
 #[cfg(feature = "redir-smoke")]
 const SCRIPTED_INPUT: &[u8] = b"echo hello > /tmp/x\ncat < /tmp/x\nls /tmp\nexit\n";
 
-#[cfg(feature = "elf-exec-smoke",
-        feature = "tty-smoke")]
+#[cfg(feature = "elf-exec-smoke")]
 const SCRIPTED_INPUT: &[u8] = b"/mnt/bin/ls\n/mnt/bin/cat /mnt/version\nexit\n";
 
 #[cfg(feature = "tty-smoke")]
@@ -397,7 +396,6 @@ const SCRIPTED_INPUT: &[u8] = b"echo hello\n\x03ls\nexit\n";
         feature = "path-smoke",
         feature = "redir-smoke",
         feature = "elf-exec-smoke",
-        feature = "tty-smoke",
         feature = "tty-smoke"
     )
 ))]
@@ -421,7 +419,7 @@ compile_error!(
     )
 ))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, and elf-exec-smoke, and tty-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, elf-exec-smoke, and tty-smoke are mutually exclusive"
 );
 
 #[cfg(all(
@@ -439,7 +437,7 @@ compile_error!(
     )
 ))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, and elf-exec-smoke, and tty-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, elf-exec-smoke, and tty-smoke are mutually exclusive"
 );
 
 #[cfg(all(
@@ -456,7 +454,7 @@ compile_error!(
     )
 ))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, and elf-exec-smoke, and tty-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, elf-exec-smoke, and tty-smoke are mutually exclusive"
 );
 
 #[cfg(all(
@@ -472,7 +470,7 @@ compile_error!(
     )
 ))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, and elf-exec-smoke, and tty-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, elf-exec-smoke, and tty-smoke are mutually exclusive"
 );
 
 #[cfg(all(
@@ -487,7 +485,7 @@ compile_error!(
     )
 ))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, and elf-exec-smoke, and tty-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, elf-exec-smoke, and tty-smoke are mutually exclusive"
 );
 
 #[cfg(all(
@@ -501,28 +499,36 @@ compile_error!(
     )
 ))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, and elf-exec-smoke, and tty-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, elf-exec-smoke, and tty-smoke are mutually exclusive"
 );
 
 #[cfg(all(
     feature = "cd-smoke",
-    any(feature = "path-smoke", feature = "redir-smoke", feature = "elf-exec-smoke",
-        feature = "tty-smoke")
+    any(
+        feature = "path-smoke",
+        feature = "redir-smoke",
+        feature = "elf-exec-smoke",
+        feature = "tty-smoke"
+    )
 ))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, and elf-exec-smoke, and tty-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, elf-exec-smoke, and tty-smoke are mutually exclusive"
 );
 
-#[cfg(all(feature = "path-smoke", any(feature = "redir-smoke", feature = "elf-exec-smoke",
-        feature = "tty-smoke")))]
+#[cfg(all(
+    feature = "path-smoke",
+    any(feature = "redir-smoke", feature = "elf-exec-smoke", feature = "tty-smoke")
+))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, and elf-exec-smoke, and tty-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, elf-exec-smoke, and tty-smoke are mutually exclusive"
 );
 
-#[cfg(all(feature = "redir-smoke", feature = "elf-exec-smoke",
-        feature = "tty-smoke"))]
+#[cfg(all(
+    feature = "redir-smoke",
+    any(feature = "elf-exec-smoke", feature = "tty-smoke")
+))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, and elf-exec-smoke, and tty-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, elf-exec-smoke, and tty-smoke are mutually exclusive"
 );
 
 #[cfg(any(
@@ -537,7 +543,7 @@ compile_error!(
     feature = "path-smoke",
     feature = "redir-smoke",
     feature = "elf-exec-smoke",
-        feature = "tty-smoke"
+    feature = "tty-smoke"
 ))]
 static SCRIPTED_POS: AtomicUsize = AtomicUsize::new(0);
 
