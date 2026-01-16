@@ -29,7 +29,8 @@
     feature = "cd-smoke",
     feature = "path-smoke",
     feature = "redir-smoke",
-    feature = "elf-exec-smoke"
+    feature = "elf-exec-smoke",
+        feature = "tty-smoke"
 ))]
 use core::sync::atomic::{AtomicUsize, Ordering};
 use panda_hal::serial_println;
@@ -376,8 +377,12 @@ const SCRIPTED_INPUT: &[u8] = b"ls\ncat /etc/version\ncd bin\nls\nexit\n";
 #[cfg(feature = "redir-smoke")]
 const SCRIPTED_INPUT: &[u8] = b"echo hello > /tmp/x\ncat < /tmp/x\nls /tmp\nexit\n";
 
-#[cfg(feature = "elf-exec-smoke")]
+#[cfg(feature = "elf-exec-smoke",
+        feature = "tty-smoke")]
 const SCRIPTED_INPUT: &[u8] = b"/mnt/bin/ls\n/mnt/bin/cat /mnt/version\nexit\n";
+
+#[cfg(feature = "tty-smoke")]
+const SCRIPTED_INPUT: &[u8] = b"echo hello\n\x03ls\nexit\n";
 
 #[cfg(all(
     feature = "shell-smoke",
@@ -391,11 +396,13 @@ const SCRIPTED_INPUT: &[u8] = b"/mnt/bin/ls\n/mnt/bin/cat /mnt/version\nexit\n";
         feature = "cd-smoke",
         feature = "path-smoke",
         feature = "redir-smoke",
-        feature = "elf-exec-smoke"
+        feature = "elf-exec-smoke",
+        feature = "tty-smoke",
+        feature = "tty-smoke"
     )
 ))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, and elf-exec-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, elf-exec-smoke, and tty-smoke are mutually exclusive"
 );
 
 #[cfg(all(
@@ -409,11 +416,12 @@ compile_error!(
         feature = "cd-smoke",
         feature = "path-smoke",
         feature = "redir-smoke",
-        feature = "elf-exec-smoke"
+        feature = "elf-exec-smoke",
+        feature = "tty-smoke"
     )
 ))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, and elf-exec-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, and elf-exec-smoke, and tty-smoke are mutually exclusive"
 );
 
 #[cfg(all(
@@ -426,11 +434,12 @@ compile_error!(
         feature = "cd-smoke",
         feature = "path-smoke",
         feature = "redir-smoke",
-        feature = "elf-exec-smoke"
+        feature = "elf-exec-smoke",
+        feature = "tty-smoke"
     )
 ))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, and elf-exec-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, and elf-exec-smoke, and tty-smoke are mutually exclusive"
 );
 
 #[cfg(all(
@@ -442,11 +451,12 @@ compile_error!(
         feature = "cd-smoke",
         feature = "path-smoke",
         feature = "redir-smoke",
-        feature = "elf-exec-smoke"
+        feature = "elf-exec-smoke",
+        feature = "tty-smoke"
     )
 ))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, and elf-exec-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, and elf-exec-smoke, and tty-smoke are mutually exclusive"
 );
 
 #[cfg(all(
@@ -457,11 +467,12 @@ compile_error!(
         feature = "cd-smoke",
         feature = "path-smoke",
         feature = "redir-smoke",
-        feature = "elf-exec-smoke"
+        feature = "elf-exec-smoke",
+        feature = "tty-smoke"
     )
 ))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, and elf-exec-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, and elf-exec-smoke, and tty-smoke are mutually exclusive"
 );
 
 #[cfg(all(
@@ -471,11 +482,12 @@ compile_error!(
         feature = "cd-smoke",
         feature = "path-smoke",
         feature = "redir-smoke",
-        feature = "elf-exec-smoke"
+        feature = "elf-exec-smoke",
+        feature = "tty-smoke"
     )
 ))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, and elf-exec-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, and elf-exec-smoke, and tty-smoke are mutually exclusive"
 );
 
 #[cfg(all(
@@ -484,29 +496,33 @@ compile_error!(
         feature = "cd-smoke",
         feature = "path-smoke",
         feature = "redir-smoke",
-        feature = "elf-exec-smoke"
+        feature = "elf-exec-smoke",
+        feature = "tty-smoke"
     )
 ))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, and elf-exec-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, and elf-exec-smoke, and tty-smoke are mutually exclusive"
 );
 
 #[cfg(all(
     feature = "cd-smoke",
-    any(feature = "path-smoke", feature = "redir-smoke", feature = "elf-exec-smoke")
+    any(feature = "path-smoke", feature = "redir-smoke", feature = "elf-exec-smoke",
+        feature = "tty-smoke")
 ))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, and elf-exec-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, and elf-exec-smoke, and tty-smoke are mutually exclusive"
 );
 
-#[cfg(all(feature = "path-smoke", any(feature = "redir-smoke", feature = "elf-exec-smoke")))]
+#[cfg(all(feature = "path-smoke", any(feature = "redir-smoke", feature = "elf-exec-smoke",
+        feature = "tty-smoke")))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, and elf-exec-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, and elf-exec-smoke, and tty-smoke are mutually exclusive"
 );
 
-#[cfg(all(feature = "redir-smoke", feature = "elf-exec-smoke"))]
+#[cfg(all(feature = "redir-smoke", feature = "elf-exec-smoke",
+        feature = "tty-smoke"))]
 compile_error!(
-    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, and elf-exec-smoke are mutually exclusive"
+    "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, and elf-exec-smoke, and tty-smoke are mutually exclusive"
 );
 
 #[cfg(any(
@@ -520,7 +536,8 @@ compile_error!(
     feature = "cd-smoke",
     feature = "path-smoke",
     feature = "redir-smoke",
-    feature = "elf-exec-smoke"
+    feature = "elf-exec-smoke",
+        feature = "tty-smoke"
 ))]
 static SCRIPTED_POS: AtomicUsize = AtomicUsize::new(0);
 
@@ -536,7 +553,8 @@ fn read_byte() -> Option<u8> {
         feature = "cd-smoke",
         feature = "path-smoke",
         feature = "redir-smoke",
-        feature = "elf-exec-smoke"
+        feature = "elf-exec-smoke",
+        feature = "tty-smoke"
     ))]
     {
         let pos = SCRIPTED_POS.fetch_add(1, Ordering::Relaxed);
@@ -554,7 +572,8 @@ fn read_byte() -> Option<u8> {
         feature = "cd-smoke",
         feature = "path-smoke",
         feature = "redir-smoke",
-        feature = "elf-exec-smoke"
+        feature = "elf-exec-smoke",
+        feature = "tty-smoke"
     )))]
     {
         return panda_hal::serial::serial_read_byte();
@@ -578,40 +597,56 @@ fn sys_read(fd: i32, buf: u64, count: u64) -> SyscallResult {
             match read_fn(fd, buf, count) {
                 Ok(n) => return Ok(n),
                 Err(ErrorCode::EBADF) => {
-                    // Not a pipe, fall through to serial input
+                    // Not a pipe, fall through to TTY input
                 }
                 Err(e) => return Err(e),
             }
         }
 
-        // Default stdin behavior: read from serial
+        // Default stdin behavior: read from TTY
         let count = usize::try_from(count).map_err(|_| ErrorCode::EINVAL)?;
         if count > 4096 {
             return Err(ErrorCode::EINVAL);
         }
 
-        let mut read = 0usize;
+        // Allocate kernel buffer for TTY read
+        let mut kernel_buf = [0u8; 4096];
+        let buf_slice = &mut kernel_buf[..count];
+
+        // Block until TTY has data, processing serial input
         loop {
-            match read_byte() {
-                Some(byte) => {
-                    let tmp = [byte];
-                    let dst = buf.checked_add(read as u64).ok_or(ErrorCode::EFAULT)?;
-                    crate::usermode::copy_to_user_bytes(dst, &tmp)?;
-                    read += 1;
-                    if read == count {
-                        break;
+            // Try to read from TTY
+            if let Some(n) = crate::tty::tty_read(buf_slice) {
+                // Copy to user space
+                crate::usermode::copy_to_user_bytes(buf, &buf_slice[..n])?;
+                return Ok(n as u64);
+            }
+
+            // No data available, poll serial and feed to TTY
+            if let Some(byte) = read_byte() {
+                let action = crate::tty::tty_input_byte(byte);
+
+                // Handle TTY actions
+                match action {
+                    crate::tty::TtyAction::SendSignal => {
+                        // Ctrl+C pressed - send SIGINT to foreground process group
+                        if let Some(signal_fn) = SIGNAL_HANDLER.get() {
+                            signal_fn();
+                        }
+                        // Continue waiting for input (shell will get SIGINT)
+                    }
+                    crate::tty::TtyAction::LineReady => {
+                        // Line is ready, loop will read it on next iteration
+                    }
+                    crate::tty::TtyAction::None => {
+                        // Continue waiting
                     }
                 }
-                None => {
-                    if read > 0 {
-                        break;
-                    }
-                    core::hint::spin_loop();
-                }
+            } else {
+                // No serial data, yield CPU
+                core::hint::spin_loop();
             }
         }
-
-        return Ok(read as u64);
     }
 
     if fd == 1 || fd == 2 {
@@ -822,6 +857,7 @@ static WAITPID_HANDLER: Once<fn(i64, u64, i32) -> SyscallResult> = Once::new();
 static PIPE_HANDLER: Once<fn(u64) -> SyscallResult> = Once::new();
 static DUP2_HANDLER: Once<fn(i32, i32) -> SyscallResult> = Once::new();
 static KILL_HANDLER: Once<fn(i32, i32) -> SyscallResult> = Once::new();
+static SIGNAL_HANDLER: Once<fn()> = Once::new();
 static SETPGID_HANDLER: Once<fn(i32, i32) -> SyscallResult> = Once::new();
 static GETDENTS64_HANDLER: Once<fn(i32, u64, u64) -> SyscallResult> = Once::new();
 static GETCWD_HANDLER: Once<fn(u64, u64) -> SyscallResult> = Once::new();
@@ -934,6 +970,14 @@ pub fn set_stat_handler(handler: fn(u64, u64) -> SyscallResult) {
 /// Set the fstat handler for syscall fstat
 pub fn set_fstat_handler(handler: fn(i32, u64) -> SyscallResult) {
     FSTAT_HANDLER.call_once(|| handler);
+}
+
+/// Set the signal handler for TTY Ctrl+C
+///
+/// This handler is called when Ctrl+C is pressed in the TTY.
+/// It should send SIGINT to the foreground process group.
+pub fn set_signal_handler(handler: fn()) {
+    SIGNAL_HANDLER.call_once(|| handler);
 }
 
 #[cfg(test)]

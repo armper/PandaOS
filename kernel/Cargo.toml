@@ -32,6 +32,7 @@ path-smoke = []
 redir-smoke = []
 disk-fs-smoke = []
 elf-exec-smoke = []
+tty-smoke = []
 build-userland = []
 
 [package.metadata.bootimage]
