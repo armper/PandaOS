@@ -2,16 +2,41 @@
 
 ## Overview
 
-PandaOS provides a tiny read-only virtual filesystem backed by an in-memory table of static
-file nodes. It supports absolute and relative path lookup, per-process file descriptors, 
+PandaOS provides a virtual filesystem with support for multiple backends:
+1. **In-memory filesystem** - Static files compiled into the kernel
+2. **Disk filesystem** - Read-only files from block devices
+
+The VFS supports absolute and relative path lookup, per-process file descriptors, 
 per-process current working directory, sequential reads with per-fd offsets, directory 
 listing via `getdents64`, and file metadata queries via `stat`/`fstat`.
+
+## Filesystem Backends
+
+### In-Memory Filesystem
+- Static file nodes compiled into the kernel binary
+- Writable /tmp directory for dynamic file creation
+- Always mounted at root (/)
+- Files embedded as static byte slices
+
+### Disk Filesystem
+- Read-only custom filesystem format
+- Backed by ATA/IDE block device
+- Mounted at /mnt by default
+- Custom on-disk layout: superblock, inode table, data blocks
+
+### Mount Point System
+
+The VFS uses a global mount table to track mounted filesystems:
+- Path resolution checks mount points first
+- Mount boundaries are traversed transparently
+- `/mnt` prefix routes to disk filesystem
+- All other paths use in-memory filesystem
 
 ## Invariants
 
 - Paths are matched by exact string equality after normalization.
-- The filesystem is read-only; no write, create, or delete operations exist.
-- File data is embedded as static byte slices.
+- The in-memory filesystem is mostly read-only (except /tmp).
+- The disk filesystem is completely read-only.
 - Directories are represented as FileNodes with type Directory.
 - Each process owns a fixed-size FD table (16 entries).
 - Each process has a current working directory (cwd), initialized to `/`.
@@ -21,6 +46,7 @@ listing via `getdents64`, and file metadata queries via `stat`/`fstat`.
 - read() advances the per-fd offset and returns 0 on EOF.
 - read() on directories returns EISDIR (use getdents64 instead).
 - stat()/fstat() return FileMetadata with file type and size.
+- Write operations on disk files return EROFS (read-only filesystem).
 
 ## File Metadata
 
@@ -232,3 +258,63 @@ string into user memory at a fixed address before transferring control to the ne
 - The string is NUL-terminated.
 
 User programs (e.g., `/bin/cat`) read the argument from that fixed address.
+
+## Disk Filesystem Format
+
+The disk filesystem uses a simple custom format optimized for read-only access:
+
+### On-Disk Layout
+
+**Sector 0: Superblock (512 bytes)**
+- Magic number: `0x50414E44` ("PAND")
+- Version: 1
+- Root inode number
+- Total inode count
+- First data block number
+
+**Sectors 1-N: Inode Table**
+- 8 inodes per sector (64 bytes each)
+- Inode structure:
+  - Inode number (4 bytes)
+  - File type (4 bytes): 1=file, 2=directory
+  - Size in bytes (8 bytes)
+  - Direct block pointers (40 bytes): up to 10 blocks
+  - Padding (8 bytes)
+
+**Sectors N+1...: Data Blocks**
+- File data blocks: raw file contents
+- Directory data blocks: array of directory entries
+  - Entry structure:
+    - Inode number (4 bytes)
+    - Name length (1 byte)
+    - Name (variable, null-terminated)
+    - Padding to 4-byte alignment
+
+### Block Device Interface
+
+The disk filesystem accesses storage through a `BlockDevice` trait:
+- Sector size: 512 bytes
+- Read-only operations
+- ATA/IDE driver implementation for QEMU
+
+### Creating Disk Images
+
+Use `scripts/mkdiskimg.py` to generate disk images:
+```bash
+python3 scripts/mkdiskimg.py
+```
+
+This creates `fs.img` with test files:
+- `/hello.txt` - Test file with sample content
+- `/README` - Filesystem documentation
+- `/test.txt` - Additional test file
+- `/bin/` - Directory with placeholder binaries
+
+### QEMU Configuration
+
+The disk image is attached to QEMU via the kernel's `Cargo.toml`:
+```toml
+run-args = ["-drive", "file=fs.img,format=raw,if=ide"]
+```
+
+The ATA driver reads from the primary master disk (IDE port 0x1F0).
