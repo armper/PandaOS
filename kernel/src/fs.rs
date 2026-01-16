@@ -201,7 +201,11 @@ impl FdTable {
         let metadata = stat_path(node.path)?;
 
         // Check access mode
+        // O_RDONLY=0, O_WRONLY=1, O_RDWR=2
+        // Writable if O_WRONLY or O_RDWR is set
         let writable = (flags & O_WRONLY) != 0 || (flags & O_RDWR) != 0;
+        // Readable if not O_WRONLY (covers O_RDONLY and O_RDWR)
+        // We need both conditions because O_RDWR (2) & O_WRONLY (1) == 0
         let readable = (flags & O_WRONLY) == 0 || (flags & O_RDWR) != 0;
 
         // Check permissions
@@ -676,7 +680,9 @@ pub fn open_path_with_flags(table: &mut FdTable, path: &str, flags: u64) -> Resu
                 let metadata = crate::mount::diskfs_stat(inode)?;
 
                 // Check access mode and permissions
+                // O_RDONLY=0, O_WRONLY=1, O_RDWR=2
                 let writable = (flags & O_WRONLY) != 0 || (flags & O_RDWR) != 0;
+                // Readable if not O_WRONLY (covers O_RDONLY and O_RDWR)
                 let readable = (flags & O_WRONLY) == 0 || (flags & O_RDWR) != 0;
 
                 // Check permissions
@@ -749,7 +755,9 @@ pub fn open_path_with_flags(table: &mut FdTable, path: &str, flags: u64) -> Resu
                 let metadata = crate::mount::tmpfs_stat(inode)?;
 
                 // Check access mode and permissions
+                // O_RDONLY=0, O_WRONLY=1, O_RDWR=2
                 let writable = (flags & O_WRONLY) != 0 || (flags & O_RDWR) != 0;
+                // Readable if not O_WRONLY (covers O_RDONLY and O_RDWR)
                 let readable = (flags & O_WRONLY) == 0 || (flags & O_RDWR) != 0;
 
                 // Check permissions
