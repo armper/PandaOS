@@ -1465,6 +1465,8 @@ fn exit_handler(status: i32) -> ! {
         serial_println!("TEST PASS ls_smoke");
         #[cfg(feature = "ls-stat-smoke")]
         serial_println!("TEST PASS ls_stat_smoke");
+        #[cfg(feature = "ls-long-smoke")]
+        serial_println!("TEST PASS ls_long_smoke");
         #[cfg(feature = "cd-smoke")]
         serial_println!("TEST PASS cd_smoke");
         #[cfg(feature = "path-smoke")]
@@ -1483,6 +1485,7 @@ fn exit_handler(status: i32) -> ! {
             feature = "ctrlc-smoke",
             feature = "ls-smoke",
             feature = "ls-stat-smoke",
+            feature = "ls-long-smoke",
             feature = "cd-smoke",
             feature = "path-smoke",
             feature = "redir-smoke",

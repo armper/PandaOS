@@ -71,6 +71,12 @@ if [ "${LS_STAT_SMOKE:-0}" -eq 1 ]; then
     FEATURES+=(--features ls-stat-smoke)
     EXPECTED_MARKER="TEST PASS ls_stat_smoke"
 fi
+if [ "${LS_LONG_SMOKE:-0}" -eq 1 ]; then
+    FEATURE_COUNT=$((FEATURE_COUNT + 1))
+    TEST_NAME="ls_long_smoke"
+    FEATURES+=(--features ls-long-smoke)
+    EXPECTED_MARKER="TEST PASS ls_long_smoke"
+fi
 if [ "${CD_SMOKE:-0}" -eq 1 ]; then
     FEATURE_COUNT=$((FEATURE_COUNT + 1))
     TEST_NAME="cd_smoke"

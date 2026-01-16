@@ -26,6 +26,8 @@
     feature = "ctrlc-smoke",
     feature = "ls-smoke",
     feature = "ls-stat-smoke",
+        feature = "ls-long-smoke",
+    feature = "ls-long-smoke",
     feature = "cd-smoke",
     feature = "path-smoke",
     feature = "redir-smoke",
@@ -368,6 +370,9 @@ const SCRIPTED_INPUT: &[u8] = b"ls\nexit\n";
 #[cfg(feature = "ls-stat-smoke")]
 const SCRIPTED_INPUT: &[u8] = b"ls\nexit\n";
 
+#[cfg(feature = "ls-long-smoke")]
+const SCRIPTED_INPUT: &[u8] = b"ls -l\ncd etc\nls -l\nexit\n";
+
 #[cfg(feature = "cd-smoke")]
 const SCRIPTED_INPUT: &[u8] = b"ls\ncd bin\nls\ncd ..\nls\nexit\n";
 
@@ -392,6 +397,7 @@ const SCRIPTED_INPUT: &[u8] = b"echo hello\n\x03ls\nexit\n";
         feature = "ctrlc-smoke",
         feature = "ls-smoke",
         feature = "ls-stat-smoke",
+        feature = "ls-long-smoke",
         feature = "cd-smoke",
         feature = "path-smoke",
         feature = "redir-smoke",
@@ -411,6 +417,7 @@ compile_error!(
         feature = "ctrlc-smoke",
         feature = "ls-smoke",
         feature = "ls-stat-smoke",
+        feature = "ls-long-smoke",
         feature = "cd-smoke",
         feature = "path-smoke",
         feature = "redir-smoke",
@@ -429,6 +436,7 @@ compile_error!(
         feature = "ctrlc-smoke",
         feature = "ls-smoke",
         feature = "ls-stat-smoke",
+        feature = "ls-long-smoke",
         feature = "cd-smoke",
         feature = "path-smoke",
         feature = "redir-smoke",
@@ -446,6 +454,7 @@ compile_error!(
         feature = "ctrlc-smoke",
         feature = "ls-smoke",
         feature = "ls-stat-smoke",
+        feature = "ls-long-smoke",
         feature = "cd-smoke",
         feature = "path-smoke",
         feature = "redir-smoke",
@@ -462,6 +471,7 @@ compile_error!(
     any(
         feature = "ls-smoke",
         feature = "ls-stat-smoke",
+        feature = "ls-long-smoke",
         feature = "cd-smoke",
         feature = "path-smoke",
         feature = "redir-smoke",
@@ -477,6 +487,7 @@ compile_error!(
     feature = "ls-smoke",
     any(
         feature = "ls-stat-smoke",
+        feature = "ls-long-smoke",
         feature = "cd-smoke",
         feature = "path-smoke",
         feature = "redir-smoke",
@@ -490,6 +501,7 @@ compile_error!(
 
 #[cfg(all(
     feature = "ls-stat-smoke",
+        feature = "ls-long-smoke",
     any(
         feature = "cd-smoke",
         feature = "path-smoke",
@@ -536,6 +548,7 @@ compile_error!(
     feature = "ctrlc-smoke",
     feature = "ls-smoke",
     feature = "ls-stat-smoke",
+        feature = "ls-long-smoke",
     feature = "cd-smoke",
     feature = "path-smoke",
     feature = "redir-smoke",
@@ -553,6 +566,7 @@ fn read_byte() -> Option<u8> {
         feature = "ctrlc-smoke",
         feature = "ls-smoke",
         feature = "ls-stat-smoke",
+        feature = "ls-long-smoke",
         feature = "cd-smoke",
         feature = "path-smoke",
         feature = "redir-smoke",
@@ -572,6 +586,7 @@ fn read_byte() -> Option<u8> {
         feature = "ctrlc-smoke",
         feature = "ls-smoke",
         feature = "ls-stat-smoke",
+        feature = "ls-long-smoke",
         feature = "cd-smoke",
         feature = "path-smoke",
         feature = "redir-smoke",
