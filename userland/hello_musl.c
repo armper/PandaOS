@@ -30,7 +30,10 @@ static long syscall3(long number, long arg1, long arg2, long arg3) {
 
 void _start(void) {
     const char *msg = "Hello from musl libc!\n";
-    long len = 22;
+    long len = 0;
+    
+    /* Calculate string length */
+    while (msg[len]) len++;
     
     /* write(1, msg, len) */
     syscall3(SYS_write, 1, (long)msg, len);

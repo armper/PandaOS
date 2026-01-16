@@ -36,6 +36,12 @@ pub enum AuxvType {
 /// # Safety
 ///
 /// Caller must ensure argv_ptr points to valid user memory
+///
+/// # TODO
+///
+/// Add bounds checking for user memory access. Currently assumes identity mapping
+/// and doesn't validate that argv_ptr + i * 8 is within valid user memory.
+/// Should use proper page table walking or trap page faults.
 pub unsafe fn parse_argv(argv_ptr: u64) -> Result<Vec<Vec<u8>>, ErrorCode> {
     if argv_ptr == 0 {
         return Ok(Vec::new());
@@ -71,6 +77,12 @@ pub unsafe fn parse_argv(argv_ptr: u64) -> Result<Vec<Vec<u8>>, ErrorCode> {
 /// # Safety
 ///
 /// Caller must ensure envp_ptr points to valid user memory
+///
+/// # TODO
+///
+/// Add bounds checking for user memory access. Currently assumes identity mapping
+/// and doesn't validate that envp_ptr + i * 8 is within valid user memory.
+/// Should use proper page table walking or trap page faults.
 pub unsafe fn parse_envp(envp_ptr: u64) -> Result<Vec<Vec<u8>>, ErrorCode> {
     if envp_ptr == 0 {
         return Ok(Vec::new());
@@ -106,6 +118,12 @@ pub unsafe fn parse_envp(envp_ptr: u64) -> Result<Vec<Vec<u8>>, ErrorCode> {
 /// # Safety
 ///
 /// Caller must ensure ptr points to valid user memory
+///
+/// # TODO
+///
+/// Add proper user memory validation. Currently doesn't validate memory
+/// mappings or handle page faults. Should use safe user memory access
+/// functions that trap faults and validate against page tables.
 unsafe fn read_user_string(ptr: u64, max_len: usize) -> Result<Vec<u8>, ErrorCode> {
     if ptr == 0 {
         return Err(ErrorCode::EFAULT);
