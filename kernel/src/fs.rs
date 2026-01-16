@@ -16,6 +16,7 @@ pub const O_WRONLY: u64 = 0x0001;
 pub const O_RDWR: u64 = 0x0002;
 pub const O_CREAT: u64 = 0x0040;
 pub const O_TRUNC: u64 = 0x0200;
+pub const O_APPEND: u64 = 0x0400;
 
 /// Global storage for writable files in /tmp
 /// Maps node_index to file contents
@@ -174,6 +175,7 @@ pub struct FileNode {
 pub struct OpenFile {
     pub node_index: usize,
     pub offset: usize,
+    pub flags: u64,
 }
 
 /// Open disk file descriptor
@@ -181,6 +183,7 @@ pub struct OpenFile {
 pub struct OpenDiskFile {
     pub inode: u32,
     pub offset: usize,
+    pub flags: u64,
 }
 
 /// Open tmpfs file descriptor
@@ -188,6 +191,7 @@ pub struct OpenDiskFile {
 pub struct OpenTmpfsFile {
     pub inode: u32,
     pub offset: usize,
+    pub flags: u64,
 }
 
 /// File descriptor kinds
@@ -279,13 +283,13 @@ impl FdTable {
                     store.insert(node_index, Vec::new());
                 }
 
-                self.entries[fd] = Some(FdKind::File(OpenFile { node_index, offset: 0 }, writable));
+                self.entries[fd] = Some(FdKind::File(OpenFile { node_index, offset: 0, flags }, writable));
             }
             FileType::Directory => {
                 if writable {
                     return Err(ErrorCode::EISDIR);
                 }
-                self.entries[fd] = Some(FdKind::Directory(OpenFile { node_index, offset: 0 }));
+                self.entries[fd] = Some(FdKind::Directory(OpenFile { node_index, offset: 0, flags }));
             }
         }
         Ok(fd as i32)
@@ -381,7 +385,7 @@ impl FdTable {
                         // Update offset
                         drop(files);
                         self.entries[fd as usize] = Some(FdKind::File(
-                            OpenFile { node_index: open.node_index, offset: end },
+                            OpenFile { node_index: open.node_index, offset: end, flags: open.flags },
                             _writable,
                         ));
 
@@ -404,7 +408,7 @@ impl FdTable {
                 buffer[..to_read].copy_from_slice(&node.data[start..end]);
 
                 self.entries[fd as usize] = Some(FdKind::File(
-                    OpenFile { node_index: open.node_index, offset: end },
+                    OpenFile { node_index: open.node_index, offset: end, flags: open.flags },
                     _writable,
                 ));
                 Ok(to_read)
@@ -421,7 +425,7 @@ impl FdTable {
                 // Update offset
                 let new_offset = open.offset + bytes_read;
                 self.entries[fd as usize] =
-                    Some(FdKind::DiskFile(OpenDiskFile { inode: open.inode, offset: new_offset }));
+                    Some(FdKind::DiskFile(OpenDiskFile { inode: open.inode, offset: new_offset, flags: open.flags }));
 
                 Ok(bytes_read)
             }
@@ -441,6 +445,7 @@ impl FdTable {
                 self.entries[fd as usize] = Some(FdKind::TmpfsFile(OpenTmpfsFile {
                     inode: open.inode,
                     offset: new_offset,
+                    flags: open.flags,
                 }));
 
                 Ok(bytes_read)
@@ -472,33 +477,48 @@ impl FdTable {
                     return Err(ErrorCode::EBADF);
                 }
 
+                // Check if O_APPEND is set
+                let write_offset = if (open.flags & O_APPEND) != 0 {
+                    // Get current file size for append
+                    let files = WRITABLE_FILES.lock();
+                    let current_size = if let Some(ref store) = *files {
+                        store.get(&open.node_index).map(|v| v.len()).unwrap_or(0)
+                    } else {
+                        0
+                    };
+                    drop(files);
+                    current_size
+                } else {
+                    open.offset
+                };
+
                 // Write to writable file storage
                 let mut files = WRITABLE_FILES.lock();
                 let store = files.get_or_insert_with(BTreeMap::new);
                 let file_data = store.entry(open.node_index).or_insert_with(Vec::new);
 
                 // Ensure file is large enough for the write at current offset
-                if open.offset > file_data.len() {
-                    file_data.resize(open.offset, 0);
+                if write_offset > file_data.len() {
+                    file_data.resize(write_offset, 0);
                 }
 
                 // Write or overwrite data at offset
-                if open.offset == file_data.len() {
+                if write_offset == file_data.len() {
                     // Append
                     file_data.extend_from_slice(data);
                 } else {
                     // Overwrite - extend file if needed
-                    let end_pos = open.offset + data.len();
+                    let end_pos = write_offset + data.len();
                     if end_pos > file_data.len() {
                         file_data.resize(end_pos, 0);
                     }
-                    file_data[open.offset..end_pos].copy_from_slice(data);
+                    file_data[write_offset..end_pos].copy_from_slice(data);
                 }
 
                 // Update offset
-                let new_offset = open.offset + data.len();
+                let new_offset = write_offset + data.len();
                 self.entries[fd as usize] = Some(FdKind::File(
-                    OpenFile { node_index: open.node_index, offset: new_offset },
+                    OpenFile { node_index: open.node_index, offset: new_offset, flags: open.flags },
                     writable,
                 ));
 
@@ -507,14 +527,24 @@ impl FdTable {
             FdKind::Directory(_) => Err(ErrorCode::EBADF),
             FdKind::DiskFile(_) | FdKind::DiskDirectory(_) => Err(ErrorCode::EROFS),
             FdKind::TmpfsFile(open) => {
+                // Check if O_APPEND is set
+                let write_offset = if (open.flags & O_APPEND) != 0 {
+                    // Get current file size for append
+                    let metadata = crate::mount::tmpfs_stat(open.inode)?;
+                    metadata.size as usize
+                } else {
+                    open.offset
+                };
+
                 // Write to tmpfs file
-                let bytes_written = crate::mount::tmpfs_write(open.inode, open.offset, data)?;
+                let bytes_written = crate::mount::tmpfs_write(open.inode, write_offset, data)?;
 
                 // Update offset
-                let new_offset = open.offset + bytes_written;
+                let new_offset = write_offset + bytes_written;
                 self.entries[fd as usize] = Some(FdKind::TmpfsFile(OpenTmpfsFile {
                     inode: open.inode,
                     offset: new_offset,
+                    flags: open.flags,
                 }));
 
                 Ok(bytes_written)
@@ -542,6 +572,7 @@ impl FdTable {
                 self.entries[fd as usize] = Some(FdKind::Directory(OpenFile {
                     node_index: open.node_index,
                     offset: new_offset,
+                    flags: open.flags,
                 }));
                 Ok(())
             }
@@ -549,6 +580,7 @@ impl FdTable {
                 self.entries[fd as usize] = Some(FdKind::DiskDirectory(OpenDiskFile {
                     inode: open.inode,
                     offset: new_offset,
+                    flags: open.flags,
                 }));
                 Ok(())
             }
@@ -556,6 +588,7 @@ impl FdTable {
                 self.entries[fd as usize] = Some(FdKind::TmpfsDirectory(OpenTmpfsFile {
                     inode: open.inode,
                     offset: new_offset,
+                    flags: open.flags,
                 }));
                 Ok(())
             }
@@ -685,7 +718,7 @@ impl FdTable {
             FdKind::File(open, writable) => {
                 let new_offset = new_offset as usize;
                 self.entries[fd as usize] = Some(FdKind::File(
-                    OpenFile { node_index: open.node_index, offset: new_offset },
+                    OpenFile { node_index: open.node_index, offset: new_offset, flags: open.flags },
                     writable,
                 ));
                 Ok(new_offset as i64)
@@ -693,7 +726,7 @@ impl FdTable {
             FdKind::DiskFile(open) => {
                 let new_offset = new_offset as usize;
                 self.entries[fd as usize] =
-                    Some(FdKind::DiskFile(OpenDiskFile { inode: open.inode, offset: new_offset }));
+                    Some(FdKind::DiskFile(OpenDiskFile { inode: open.inode, offset: new_offset, flags: open.flags }));
                 Ok(new_offset as i64)
             }
             FdKind::TmpfsFile(open) => {
@@ -701,6 +734,7 @@ impl FdTable {
                 self.entries[fd as usize] = Some(FdKind::TmpfsFile(OpenTmpfsFile {
                     inode: open.inode,
                     offset: new_offset,
+                    flags: open.flags,
                 }));
                 Ok(new_offset as i64)
             }
@@ -911,11 +945,11 @@ pub fn open_path_with_flags(
                 match metadata.file_type {
                     FileType::File => {
                         table.entries[fd] =
-                            Some(FdKind::DiskFile(OpenDiskFile { inode, offset: 0 }));
+                            Some(FdKind::DiskFile(OpenDiskFile { inode, offset: 0, flags }));
                     }
                     FileType::Directory => {
                         table.entries[fd] =
-                            Some(FdKind::DiskDirectory(OpenDiskFile { inode, offset: 0 }));
+                            Some(FdKind::DiskDirectory(OpenDiskFile { inode, offset: 0, flags }));
                     }
                 }
 
@@ -985,11 +1019,11 @@ pub fn open_path_with_flags(
                 match metadata.file_type {
                     FileType::File => {
                         table.entries[fd] =
-                            Some(FdKind::TmpfsFile(OpenTmpfsFile { inode, offset: 0 }));
+                            Some(FdKind::TmpfsFile(OpenTmpfsFile { inode, offset: 0, flags }));
                     }
                     FileType::Directory => {
                         table.entries[fd] =
-                            Some(FdKind::TmpfsDirectory(OpenTmpfsFile { inode, offset: 0 }));
+                            Some(FdKind::TmpfsDirectory(OpenTmpfsFile { inode, offset: 0, flags }));
                     }
                 }
 
@@ -1559,6 +1593,75 @@ mod tests {
 
         let n = table.read(fd, &mut buf[..4]).expect("read should succeed");
         assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn test_write_with_append_flag() {
+        let mut table = FdTable::new();
+        
+        // Create a writable file with O_CREAT | O_WRONLY
+        let fd = open_path_with_flags(&mut table, "/tmp/appendtest", O_CREAT | O_WRONLY, 0, 0)
+            .expect("create should succeed");
+        
+        // Write some initial data
+        let n = table.write(fd, b"Hello").expect("write should succeed");
+        assert_eq!(n, 5);
+        
+        // Close and reopen with O_APPEND
+        table.close(fd).expect("close should succeed");
+        
+        let fd = open_path_with_flags(&mut table, "/tmp/appendtest", O_WRONLY | O_APPEND, 0, 0)
+            .expect("open with append should succeed");
+        
+        // Write more data - should append regardless of offset
+        let n = table.write(fd, b" World").expect("write should succeed");
+        assert_eq!(n, 6);
+        
+        // Close and reopen for reading
+        table.close(fd).expect("close should succeed");
+        
+        let fd = open_path_with_flags(&mut table, "/tmp/appendtest", O_RDONLY, 0, 0)
+            .expect("open for read should succeed");
+        
+        // Read and verify the entire content
+        let mut buf = [0u8; 64];
+        let n = table.read(fd, &mut buf).expect("read should succeed");
+        assert_eq!(n, 11);
+        assert_eq!(&buf[..n], b"Hello World");
+        
+        table.close(fd).expect("close should succeed");
+    }
+
+    #[test]
+    fn test_append_ignores_seek() {
+        let mut table = FdTable::new();
+        
+        // Create file with initial content
+        let fd = open_path_with_flags(&mut table, "/tmp/seektest", O_CREAT | O_WRONLY, 0, 0)
+            .expect("create should succeed");
+        table.write(fd, b"ABCD").expect("write should succeed");
+        table.close(fd).expect("close should succeed");
+        
+        // Open with O_APPEND
+        let fd = open_path_with_flags(&mut table, "/tmp/seektest", O_WRONLY | O_APPEND, 0, 0)
+            .expect("open with append should succeed");
+        
+        // Seek to beginning
+        table.set_offset(fd, 0).expect("seek should succeed");
+        
+        // Write should still append at end, not at offset 0
+        table.write(fd, b"XY").expect("write should succeed");
+        
+        table.close(fd).expect("close should succeed");
+        
+        // Read and verify - should be "ABCDXY", not "XYCD"
+        let fd = open_path_with_flags(&mut table, "/tmp/seektest", O_RDONLY, 0, 0)
+            .expect("open for read should succeed");
+        let mut buf = [0u8; 64];
+        let n = table.read(fd, &mut buf).expect("read should succeed");
+        assert_eq!(&buf[..n], b"ABCDXY");
+        
+        table.close(fd).expect("close should succeed");
     }
 
     #[test]
