@@ -299,12 +299,22 @@ unsafe fn init_scheduler_and_start() -> ! {
     // Create PID allocator
     let pid_allocator = PidAllocator::new(1);
 
-    // Load init program from in-memory FS
-    let init_data = fs::lookup("/init").expect("init not found in in-memory FS");
-    println!("Loading init program ({} bytes)...", init_data.len());
-    let init_elf = elf::parse_elf(init_data).expect("Failed to parse init ELF");
+    // Load init program from filesystem
+    // First try /mnt/bin/init (disk), then fall back to /init (in-memory if present)
+    let init_path = if fs::stat_path("/mnt/bin/init").is_ok() {
+        "/mnt/bin/init"
+    } else if fs::stat_path("/init").is_ok() {
+        "/init"
+    } else {
+        panic!("init program not found in /mnt/bin/init or /init");
+    };
+    
+    println!("Loading init from {}...", init_path);
+    let init_data_vec = fs::read_file_to_vec(init_path).expect("Failed to read init");
+    println!("Loaded init program ({} bytes)...", init_data_vec.len());
+    let init_elf = elf::parse_elf(&init_data_vec).expect("Failed to parse init ELF");
     let init_process = unsafe {
-        process::Process::new(&init_elf, init_data, &pid_allocator)
+        process::Process::new(&init_elf, &init_data_vec, &pid_allocator)
             .expect("Failed to create init process")
     };
     println!("Created process PID {}", init_process.pid.as_u64());
@@ -443,14 +453,13 @@ fn exec_handler(path: &str, arg: Option<&str>) -> Result<(), syscall::ErrorCode>
     let current = scheduler.current_process_mut().ok_or(syscall::ErrorCode::ESRCH)?;
 
     // Resolve path: if it contains '/', use as-is; otherwise search PATH
-    let elf_data = if path.contains('/') {
+    let resolved_path = if path.contains('/') {
         // Absolute or relative path - resolve normally
-        let resolved_path = fs::resolve_path(&current.cwd, path)?;
-        fs::lookup(&resolved_path).ok_or(syscall::ErrorCode::ENOENT)?
+        fs::resolve_path(&current.cwd, path)?
     } else {
         // No '/' in path - search PATH directories
         let path_env = &current.path_env;
-        let mut found_data = None;
+        let mut found_path = None;
 
         // Split PATH by ':' and try each directory
         for dir in path_env.split(':') {
@@ -469,21 +478,24 @@ fn exec_handler(path: &str, arg: Option<&str>) -> Result<(), syscall::ErrorCode>
             }
             full_path.push_str(path);
 
-            // Try to look up this path
-            if let Some(data) = fs::lookup(&full_path) {
-                found_data = Some(data);
+            // Try to stat this path to see if it exists
+            if fs::stat_path(&full_path).is_ok() {
+                found_path = Some(full_path);
                 break;
             }
         }
 
-        found_data.ok_or(syscall::ErrorCode::ENOENT)?
+        found_path.ok_or(syscall::ErrorCode::ENOENT)?
     };
 
-    let elf_info = elf::parse_elf(elf_data).map_err(|_| syscall::ErrorCode::EINVAL)?;
+    // Load ELF file from filesystem (disk, tmpfs, or in-memory)
+    let elf_data = fs::read_file_to_vec(&resolved_path)?;
+
+    let elf_info = elf::parse_elf(&elf_data).map_err(|_| syscall::ErrorCode::EINVAL)?;
 
     // SAFETY: Frame allocator and GDT are initialized.
     unsafe {
-        current.replace_image(&elf_info, elf_data).map_err(|_| syscall::ErrorCode::ENOMEM)?;
+        current.replace_image(&elf_info, &elf_data).map_err(|_| syscall::ErrorCode::ENOMEM)?;
     }
 
     // Switch to the new page table so user memory copies target the new image.

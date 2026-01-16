@@ -508,7 +508,7 @@ impl FdTable {
 pub static FILES: &[FileNode] = &[
     // Root directory
     FileNode { path: "/", data: b"", file_type: FileType::Directory },
-    // /bin directory
+    // /bin directory (now empty - programs loaded from disk/tmpfs)
     FileNode { path: "/bin", data: b"", file_type: FileType::Directory },
     // /etc directory
     FileNode { path: "/etc", data: b"", file_type: FileType::Directory },
@@ -516,42 +516,7 @@ pub static FILES: &[FileNode] = &[
     FileNode { path: "/tmp", data: b"", file_type: FileType::Directory },
     // /mnt directory (mount point for disk filesystem)
     FileNode { path: "/mnt", data: b"", file_type: FileType::Directory },
-    // Regular files
-    FileNode {
-        path: "/init",
-        data: include_bytes!("../../userland/bin/init"),
-        file_type: FileType::File,
-    },
-    FileNode {
-        path: "/bin/sh",
-        data: include_bytes!("../../userland/bin/sh"),
-        file_type: FileType::File,
-    },
-    FileNode {
-        path: "/bin/cat",
-        data: include_bytes!("../../userland/bin/cat"),
-        file_type: FileType::File,
-    },
-    FileNode {
-        path: "/bin/true",
-        data: include_bytes!("../../userland/bin/true"),
-        file_type: FileType::File,
-    },
-    FileNode {
-        path: "/bin/echo",
-        data: include_bytes!("../../userland/bin/echo"),
-        file_type: FileType::File,
-    },
-    FileNode {
-        path: "/bin/wc",
-        data: include_bytes!("../../userland/bin/wc"),
-        file_type: FileType::File,
-    },
-    FileNode {
-        path: "/bin/ls",
-        data: include_bytes!("../../userland/bin/ls"),
-        file_type: FileType::File,
-    },
+    // Configuration files
     FileNode {
         path: "/etc/motd",
         data: b"Welcome to PandaOS.\r\nType 'help' for commands.\r\n",
@@ -1013,6 +978,65 @@ pub fn fstat_fd(table: &FdTable, fd: i32) -> Result<FileMetadata, ErrorCode> {
             Err(ErrorCode::EBADF)
         }
     }
+}
+
+/// Read an entire file into a Vec
+///
+/// This function reads a complete file from any VFS backend (in-memory, disk, or tmpfs)
+/// and returns it as a Vec<u8>. This is useful for loading ELF binaries for exec().
+///
+/// # Arguments
+///
+/// * `path` - Absolute path to the file
+///
+/// # Returns
+///
+/// The complete file contents as a Vec<u8>, or an error code
+pub fn read_file_to_vec(path: &str) -> Result<alloc::vec::Vec<u8>, ErrorCode> {
+    use alloc::vec::Vec;
+
+    // First get the file size
+    let metadata = stat_path(path)?;
+    
+    if metadata.file_type != FileType::File {
+        return Err(ErrorCode::EISDIR);
+    }
+
+    let file_size = metadata.size as usize;
+    if file_size == 0 {
+        return Ok(Vec::new());
+    }
+
+    // Allocate buffer for the entire file
+    let mut buffer = Vec::with_capacity(file_size);
+    buffer.resize(file_size, 0);
+
+    // Check if path is on a mounted filesystem
+    if let Some((_mount, rel_path, fs_type)) = crate::mount::resolve_mount_path(path) {
+        match fs_type {
+            crate::mount::FsType::Disk => {
+                // Read from disk filesystem
+                let inode = crate::mount::diskfs_lookup(&rel_path)?;
+                let bytes_read = crate::mount::diskfs_read(inode, 0, &mut buffer)?;
+                buffer.truncate(bytes_read);
+                return Ok(buffer);
+            }
+            crate::mount::FsType::Tmpfs => {
+                // Read from tmpfs
+                let inode = crate::mount::tmpfs_lookup(&rel_path)?;
+                let bytes_read = crate::mount::tmpfs_read(inode, 0, &mut buffer)?;
+                buffer.truncate(bytes_read);
+                return Ok(buffer);
+            }
+        }
+    }
+
+    // Read from in-memory filesystem
+    let data = lookup(path).ok_or(ErrorCode::ENOENT)?;
+    buffer.clear();
+    buffer.extend_from_slice(data);
+    
+    Ok(buffer)
 }
 
 #[cfg(test)]
