@@ -149,11 +149,7 @@ impl TmpFs {
         let new_inode = self.allocate_inode();
 
         // Create new node
-        let new_node = if is_dir {
-            TmpFsNode::new_directory()
-        } else {
-            TmpFsNode::new_file()
-        };
+        let new_node = if is_dir { TmpFsNode::new_directory() } else { TmpFsNode::new_file() };
 
         // Add to nodes
         self.nodes.insert(new_inode, new_node);
@@ -184,7 +180,7 @@ impl TmpFs {
                 TmpFsNode::Directory { entries } => entries,
                 TmpFsNode::File { .. } => return Err(ErrorCode::ENOTDIR),
             };
-            
+
             // Look up the entry
             *entries.get(name).ok_or(ErrorCode::ENOENT)?
         };
@@ -217,12 +213,7 @@ impl TmpFs {
     }
 
     /// Read from a file
-    pub fn read(
-        &self,
-        inode: Inode,
-        offset: usize,
-        buffer: &mut [u8],
-    ) -> Result<usize, ErrorCode> {
+    pub fn read(&self, inode: Inode, offset: usize, buffer: &mut [u8]) -> Result<usize, ErrorCode> {
         let node = self.nodes.get(&inode).ok_or(ErrorCode::ENOENT)?;
 
         match node {
@@ -241,12 +232,7 @@ impl TmpFs {
     }
 
     /// Write to a file
-    pub fn write(
-        &mut self,
-        inode: Inode,
-        offset: usize,
-        data: &[u8],
-    ) -> Result<usize, ErrorCode> {
+    pub fn write(&mut self, inode: Inode, offset: usize, data: &[u8]) -> Result<usize, ErrorCode> {
         let node = self.nodes.get_mut(&inode).ok_or(ErrorCode::ENOENT)?;
 
         match node {

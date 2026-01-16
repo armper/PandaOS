@@ -190,7 +190,12 @@ impl FdTable {
                 FdKind::PipeWrite(pipe_id) => {
                     crate::pipe::pipe_close_write(pipe_id)?;
                 }
-                FdKind::File(_, _) | FdKind::Directory(_) | FdKind::DiskFile(_) | FdKind::DiskDirectory(_) | FdKind::TmpfsFile(_) | FdKind::TmpfsDirectory(_) => {
+                FdKind::File(_, _)
+                | FdKind::Directory(_)
+                | FdKind::DiskFile(_)
+                | FdKind::DiskDirectory(_)
+                | FdKind::TmpfsFile(_)
+                | FdKind::TmpfsDirectory(_) => {
                     // Files and directories don't need cleanup
                 }
             }
@@ -269,14 +274,12 @@ impl FdTable {
             FdKind::DiskFile(open) => {
                 // Read from disk file
                 let bytes_read = crate::mount::diskfs_read(open.inode, open.offset, buffer)?;
-                
+
                 // Update offset
                 let new_offset = open.offset + bytes_read;
-                self.entries[fd as usize] = Some(FdKind::DiskFile(OpenDiskFile {
-                    inode: open.inode,
-                    offset: new_offset,
-                }));
-                
+                self.entries[fd as usize] =
+                    Some(FdKind::DiskFile(OpenDiskFile { inode: open.inode, offset: new_offset }));
+
                 Ok(bytes_read)
             }
             FdKind::DiskDirectory(_) => {
@@ -286,16 +289,17 @@ impl FdTable {
             FdKind::TmpfsFile(open) => {
                 // Read from tmpfs file
                 let mut buffer_vec = alloc::vec![0u8; buffer.len()];
-                let bytes_read = crate::mount::tmpfs_read(open.inode, open.offset, &mut buffer_vec)?;
+                let bytes_read =
+                    crate::mount::tmpfs_read(open.inode, open.offset, &mut buffer_vec)?;
                 buffer[..bytes_read].copy_from_slice(&buffer_vec[..bytes_read]);
-                
+
                 // Update offset
                 let new_offset = open.offset + bytes_read;
                 self.entries[fd as usize] = Some(FdKind::TmpfsFile(OpenTmpfsFile {
                     inode: open.inode,
                     offset: new_offset,
                 }));
-                
+
                 Ok(bytes_read)
             }
             FdKind::TmpfsDirectory(_) => {
@@ -362,14 +366,14 @@ impl FdTable {
             FdKind::TmpfsFile(open) => {
                 // Write to tmpfs file
                 let bytes_written = crate::mount::tmpfs_write(open.inode, open.offset, data)?;
-                
+
                 // Update offset
                 let new_offset = open.offset + bytes_written;
                 self.entries[fd as usize] = Some(FdKind::TmpfsFile(OpenTmpfsFile {
                     inode: open.inode,
                     offset: new_offset,
                 }));
-                
+
                 Ok(bytes_written)
             }
             FdKind::TmpfsDirectory(_) => Err(ErrorCode::EBADF),
@@ -485,7 +489,12 @@ impl FdTable {
                     FdKind::PipeWrite(pipe_id) => {
                         crate::pipe::pipe_open_write_end(*pipe_id)?;
                     }
-                    FdKind::File(_, _) | FdKind::Directory(_) | FdKind::DiskFile(_) | FdKind::DiskDirectory(_) | FdKind::TmpfsFile(_) | FdKind::TmpfsDirectory(_) => {
+                    FdKind::File(_, _)
+                    | FdKind::Directory(_)
+                    | FdKind::DiskFile(_)
+                    | FdKind::DiskDirectory(_)
+                    | FdKind::TmpfsFile(_)
+                    | FdKind::TmpfsDirectory(_) => {
                         // Files and directories don't need refcounting
                     }
                 }
@@ -613,37 +622,41 @@ pub fn open_path_with_flags(table: &mut FdTable, path: &str, flags: u64) -> Resu
                 // Open file from disk filesystem
                 let inode = crate::mount::diskfs_lookup(&rel_path)?;
                 let metadata = crate::mount::diskfs_stat(inode)?;
-                
+
                 // Allocate FD
                 let fd = table.allocate_fd()?;
-                
+
                 // Check if writable (disk fs is read-only)
                 let writable = (flags & O_WRONLY) != 0 || (flags & O_RDWR) != 0;
                 if writable {
                     return Err(ErrorCode::EROFS); // Read-only filesystem
                 }
-                
+
                 // Open based on file type
                 match metadata.file_type {
                     FileType::File => {
-                        table.entries[fd] = Some(FdKind::DiskFile(OpenDiskFile { inode, offset: 0 }));
+                        table.entries[fd] =
+                            Some(FdKind::DiskFile(OpenDiskFile { inode, offset: 0 }));
                     }
                     FileType::Directory => {
-                        table.entries[fd] = Some(FdKind::DiskDirectory(OpenDiskFile { inode, offset: 0 }));
+                        table.entries[fd] =
+                            Some(FdKind::DiskDirectory(OpenDiskFile { inode, offset: 0 }));
                     }
                 }
-                
+
                 return Ok(fd as i32);
             }
             crate::mount::FsType::Tmpfs => {
                 // Try to lookup file in tmpfs
                 let inode_result = crate::mount::tmpfs_lookup(&rel_path);
-                
+
                 let inode = match inode_result {
                     Ok(inode) => {
                         // File exists
                         // If O_TRUNC is set and writable, truncate it
-                        if (flags & O_TRUNC) != 0 && ((flags & O_WRONLY) != 0 || (flags & O_RDWR) != 0) {
+                        if (flags & O_TRUNC) != 0
+                            && ((flags & O_WRONLY) != 0 || (flags & O_RDWR) != 0)
+                        {
                             crate::mount::tmpfs_truncate(inode)?;
                         }
                         inode
@@ -659,7 +672,7 @@ pub fn open_path_with_flags(table: &mut FdTable, path: &str, flags: u64) -> Resu
                             } else {
                                 ("/", rel_path.as_str())
                             };
-                            
+
                             // Create the file
                             crate::mount::tmpfs_create(parent, name, false)?
                         } else {
@@ -668,28 +681,30 @@ pub fn open_path_with_flags(table: &mut FdTable, path: &str, flags: u64) -> Resu
                     }
                     Err(e) => return Err(e),
                 };
-                
+
                 // Get metadata
                 let metadata = crate::mount::tmpfs_stat(inode)?;
-                
+
                 // Allocate FD
                 let fd = table.allocate_fd()?;
-                
+
                 // Open based on file type
                 match metadata.file_type {
                     FileType::File => {
-                        table.entries[fd] = Some(FdKind::TmpfsFile(OpenTmpfsFile { inode, offset: 0 }));
+                        table.entries[fd] =
+                            Some(FdKind::TmpfsFile(OpenTmpfsFile { inode, offset: 0 }));
                     }
                     FileType::Directory => {
-                        table.entries[fd] = Some(FdKind::TmpfsDirectory(OpenTmpfsFile { inode, offset: 0 }));
+                        table.entries[fd] =
+                            Some(FdKind::TmpfsDirectory(OpenTmpfsFile { inode, offset: 0 }));
                     }
                 }
-                
+
                 return Ok(fd as i32);
             }
         }
     }
-    
+
     // Try to look up existing file in memory filesystem
     let node_index = if let Some((idx, _node)) = lookup_node(path) {
         idx
@@ -896,7 +911,7 @@ pub fn unlink_path(path: &str) -> Result<(), ErrorCode> {
                 } else {
                     ("/", rel_path.as_str())
                 };
-                
+
                 return crate::mount::tmpfs_unlink(parent, name);
             }
         }

@@ -883,7 +883,7 @@ fn getdents64_handler(fd: i32, buf: u64, count: u64) -> syscall::SyscallResult {
 
     // Get fd kind and verify it's a directory
     let fd_kind = current.fd_table.get(fd)?;
-    
+
     // Get entries based on directory type
     let (entries, offset) = match fd_kind {
         fs::FdKind::Directory(open) => {
@@ -1441,9 +1441,9 @@ fn trivial_assertion() {
 #[cfg(feature = "disk-fs-smoke")]
 fn run_disk_fs_smoke_test() {
     use alloc::string::ToString;
-    
+
     serial_println!("Testing disk filesystem at /mnt");
-    
+
     // Test 1: Check if /mnt exists and is a directory
     match fs::stat_path("/mnt") {
         Ok(metadata) => {
@@ -1466,7 +1466,7 @@ fn run_disk_fs_smoke_test() {
             }
         }
     }
-    
+
     // Test 2: List directory entries in /mnt
     match fs::list_directory("/mnt") {
         Ok(entries) => {
@@ -1479,11 +1479,11 @@ fn run_disk_fs_smoke_test() {
                 };
                 serial_println!("    - {} ({})", name, type_str);
             }
-            
+
             // Check for expected files
             let has_hello = entries.iter().any(|(n, _)| n == "hello.txt");
             let has_readme = entries.iter().any(|(n, _)| n == "README");
-            
+
             if has_hello && has_readme {
                 serial_println!("✓ Found expected files (hello.txt, README)");
             } else {
@@ -1502,22 +1502,22 @@ fn run_disk_fs_smoke_test() {
             }
         }
     }
-    
+
     // Test 3: Read contents of /mnt/hello.txt
     let mut fd_table = fs::FdTable::new();
     match fs::open_path_with_flags(&mut fd_table, "/mnt/hello.txt", fs::O_RDONLY) {
         Ok(fd) => {
             serial_println!("✓ Opened /mnt/hello.txt (fd {})", fd);
-            
+
             let mut buffer = [0u8; 256];
             match fd_table.read(fd, &mut buffer) {
                 Ok(bytes_read) => {
                     if bytes_read > 0 {
-                        let content = core::str::from_utf8(&buffer[..bytes_read])
-                            .unwrap_or("<invalid utf8>");
+                        let content =
+                            core::str::from_utf8(&buffer[..bytes_read]).unwrap_or("<invalid utf8>");
                         serial_println!("✓ Read {} bytes from /mnt/hello.txt", bytes_read);
                         serial_println!("  Content: \"{}\"", content.trim());
-                        
+
                         if content.contains("Hello from disk") {
                             serial_println!("✓ File content matches expected");
                         } else {
@@ -1543,7 +1543,7 @@ fn run_disk_fs_smoke_test() {
                     }
                 }
             }
-            
+
             // Close file
             let _ = fd_table.close(fd);
         }
@@ -1555,17 +1555,17 @@ fn run_disk_fs_smoke_test() {
             }
         }
     }
-    
+
     serial_println!("✓ All disk filesystem tests passed");
     serial_println!("TEST PASS disk_fs_smoke");
-    
+
     // Exit QEMU
     use x86_64::instructions::port::Port;
     unsafe {
         let mut port = Port::new(0xf4);
         port.write(0x10u32); // Success exit code
     }
-    
+
     loop {
         x86_64::instructions::hlt();
     }

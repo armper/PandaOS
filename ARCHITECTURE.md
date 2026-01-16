@@ -49,14 +49,23 @@ The main kernel crate contains:
 
 ## Filesystem Architecture
 
-PandaOS supports two filesystem backends:
+PandaOS supports three filesystem backends:
 
 ### In-Memory Filesystem (RAM FS)
 - Static files compiled into the kernel binary
-- Writable /tmp directory with dynamic file creation
+- Writable /tmp directory with dynamic file creation (deprecated - use tmpfs instead)
 - Always mounted at root (/)
 - Files include kernel binaries (/bin/sh, /bin/cat, etc.)
 - Supports all VFS operations: open, read, write (in /tmp), stat, getdents64
+
+### Tmpfs Filesystem
+- Writable in-memory filesystem for temporary files
+- Mounted at /tmp by default
+- All data stored in memory and lost on reboot
+- Supports: create, read, write, unlink, stat, getdents64
+- Shared across all processes
+- Separate inode namespace from in-memory FS
+- Used for real Unix-style temporary file workflows
 
 ### Disk Filesystem
 - Read-only custom filesystem format
@@ -71,11 +80,15 @@ PandaOS supports two filesystem backends:
 - Path resolution checks mount points before in-memory FS
 - VFS operations transparently access appropriate backend
 - Mount boundaries handled automatically in path traversal
+- `/tmp` routes to tmpfs
+- `/mnt` prefix routes to disk filesystem
+- All other paths use in-memory filesystem
 
-**File descriptors** support both backends:
+**File descriptors** support all backends:
 - `FdKind::File` / `FdKind::Directory` - in-memory filesystem
+- `FdKind::TmpfsFile` / `FdKind::TmpfsDirectory` - tmpfs filesystem
 - `FdKind::DiskFile` / `FdKind::DiskDirectory` - disk filesystem
-- All syscalls (read, stat, getdents64) work transparently
+- All syscalls (read, write, stat, getdents64, unlink) work transparently
 
 ### HAL (`hal/`)
 

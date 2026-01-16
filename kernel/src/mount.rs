@@ -53,7 +53,8 @@ impl MountTable {
         let disk_fs = DiskFs::new(disk).map_err(|_| ErrorCode::EIO)?;
 
         // Add mount entry
-        self.mounts.push((String::from(mount_point), MountEntry { mount_point, fs_type: FsType::Disk }));
+        self.mounts
+            .push((String::from(mount_point), MountEntry { mount_point, fs_type: FsType::Disk }));
         self.disk_fs = Some(disk_fs);
 
         Ok(())
@@ -62,7 +63,8 @@ impl MountTable {
     /// Mount tmpfs at a mount point
     pub fn mount_tmpfs(&mut self, mount_point: &'static str) -> Result<(), ErrorCode> {
         // Add mount entry
-        self.mounts.push((String::from(mount_point), MountEntry { mount_point, fs_type: FsType::Tmpfs }));
+        self.mounts
+            .push((String::from(mount_point), MountEntry { mount_point, fs_type: FsType::Tmpfs }));
         Ok(())
     }
 
@@ -112,7 +114,7 @@ pub fn mount_disk_at_mnt() -> Result<(), ErrorCode> {
 pub fn mount_tmpfs_at_tmp() -> Result<(), ErrorCode> {
     // Initialize tmpfs first
     crate::tmpfs::init_tmpfs();
-    
+
     // Add to mount table
     let mut table = MOUNT_TABLE.lock();
     let mount_table = table.as_mut().ok_or(ErrorCode::EIO)?;
@@ -227,7 +229,7 @@ pub fn tmpfs_create(parent_path: &str, name: &str, is_dir: bool) -> Result<Tmpfs
             let rel_path = parent_path.strip_prefix('/').unwrap_or(parent_path);
             fs.lookup(root, rel_path)?
         };
-        
+
         // Create the file/dir
         fs.create(parent_inode, name, is_dir)
     })
@@ -269,9 +271,8 @@ pub fn tmpfs_unlink(parent_path: &str, name: &str) -> Result<(), ErrorCode> {
             let rel_path = parent_path.strip_prefix('/').unwrap_or(parent_path);
             fs.lookup(root, rel_path)?
         };
-        
+
         // Unlink the file
         fs.unlink(parent_inode, name)
     })
 }
-

@@ -4,7 +4,8 @@
 
 PandaOS provides a virtual filesystem with support for multiple backends:
 1. **In-memory filesystem** - Static files compiled into the kernel
-2. **Disk filesystem** - Read-only files from block devices
+2. **Tmpfs** - Writable in-memory temporary filesystem
+3. **Disk filesystem** - Read-only files from block devices
 
 The VFS supports absolute and relative path lookup, per-process file descriptors, 
 per-process current working directory, sequential reads with per-fd offsets, directory 
@@ -14,9 +15,18 @@ listing via `getdents64`, and file metadata queries via `stat`/`fstat`.
 
 ### In-Memory Filesystem
 - Static file nodes compiled into the kernel binary
-- Writable /tmp directory for dynamic file creation
 - Always mounted at root (/)
 - Files embedded as static byte slices
+- Legacy writable /tmp directory support (deprecated - use tmpfs instead)
+
+### Tmpfs
+- Writable in-memory temporary filesystem
+- Mounted at /tmp by default
+- All data stored in RAM and lost on reboot
+- Shared across all processes
+- Supports full file lifecycle: create, read, write, truncate, unlink
+- Independent inode namespace
+- No permissions, ownership, or timestamps
 
 ### Disk Filesystem
 - Read-only custom filesystem format
@@ -29,13 +39,15 @@ listing via `getdents64`, and file metadata queries via `stat`/`fstat`.
 The VFS uses a global mount table to track mounted filesystems:
 - Path resolution checks mount points first
 - Mount boundaries are traversed transparently
-- `/mnt` prefix routes to disk filesystem
-- All other paths use in-memory filesystem
+- `/tmp` prefix routes to tmpfs filesystem (writable)
+- `/mnt` prefix routes to disk filesystem (read-only)
+- All other paths use in-memory filesystem (mostly read-only)
 
 ## Invariants
 
 - Paths are matched by exact string equality after normalization.
-- The in-memory filesystem is mostly read-only (except /tmp).
+- The in-memory filesystem is mostly read-only (static files).
+- Tmpfs is writable and mounted at /tmp.
 - The disk filesystem is completely read-only.
 - Directories are represented as FileNodes with type Directory.
 - Each process owns a fixed-size FD table (16 entries).
@@ -46,7 +58,12 @@ The VFS uses a global mount table to track mounted filesystems:
 - read() advances the per-fd offset and returns 0 on EOF.
 - read() on directories returns EISDIR (use getdents64 instead).
 - stat()/fstat() return FileMetadata with file type and size.
+- Write operations on in-memory static files return EBADF.
 - Write operations on disk files return EROFS (read-only filesystem).
+- Write operations on tmpfs files succeed.
+- unlink() on tmpfs removes files or empty directories.
+- unlink() on disk filesystem returns EROFS.
+- unlink() on in-memory filesystem returns EACCES (except legacy /tmp files).
 
 ## File Metadata
 
@@ -318,3 +335,57 @@ run-args = ["-drive", "file=fs.img,format=raw,if=ide"]
 ```
 
 The ATA driver reads from the primary master disk (IDE port 0x1F0).
+
+## Tmpfs
+
+Tmpfs is a writable in-memory temporary filesystem mounted at `/tmp`.
+
+### Features
+
+- **Writable**: Full read/write support for files
+- **Volatile**: All data lost on reboot
+- **Shared**: Visible to all processes
+- **No Permissions**: No uid/gid, permissions, or timestamps
+- **Simple**: Files and directories only
+
+### Operations
+
+- `open(path, O_CREAT)` - Create new file
+- `open(path, O_TRUNC)` - Truncate existing file to zero
+- `read(fd, buf, count)` - Read from file
+- `write(fd, buf, count)` - Write to file
+- `unlink(path)` - Delete file or empty directory
+- `stat(path)` / `fstat(fd)` - Get file metadata
+- `getdents64(fd)` - List directory entries
+
+### File Lifecycle
+
+1. **Create**: `open("/tmp/file.txt", O_CREAT|O_WRONLY)`
+2. **Write**: `write(fd, data, len)`
+3. **Read**: Open with `O_RDONLY` and `read(fd, buf, len)`
+4. **Delete**: `unlink("/tmp/file.txt")`
+
+### Limitations
+
+- No rename operation (may be added later)
+- No hard/symbolic links
+- No permissions or ownership
+- No mmap support
+- Empty directories must be deleted explicitly
+- Root directory `/tmp` cannot be deleted
+
+### Use Cases
+
+- Build artifacts during compilation
+- Temporary files for shell pipelines
+- Inter-process communication via files
+- Testing and development workflows
+
+### Implementation
+
+The tmpfs implementation:
+- Stores all data in kernel heap memory
+- Uses BTreeMap for directory entries
+- Manages inodes independently from other filesystems
+- Integrated with VFS mount table at `/tmp`
+- See `kernel/src/tmpfs.rs` and `kernel/src/mount.rs`

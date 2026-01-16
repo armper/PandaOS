@@ -16,7 +16,11 @@ pub trait BlockDevice {
     ///
     /// # Errors
     /// Returns an error if the read fails
-    fn read_sector(&mut self, sector: u64, buffer: &mut [u8; SECTOR_SIZE]) -> Result<(), BlockError>;
+    fn read_sector(
+        &mut self,
+        sector: u64,
+        buffer: &mut [u8; SECTOR_SIZE],
+    ) -> Result<(), BlockError>;
 
     /// Read multiple contiguous sectors
     ///
@@ -27,7 +31,12 @@ pub trait BlockDevice {
     ///
     /// # Errors
     /// Returns an error if the read fails or buffer is too small
-    fn read_sectors(&mut self, start_sector: u64, count: usize, buffer: &mut [u8]) -> Result<(), BlockError> {
+    fn read_sectors(
+        &mut self,
+        start_sector: u64,
+        count: usize,
+        buffer: &mut [u8],
+    ) -> Result<(), BlockError> {
         if buffer.len() < count * SECTOR_SIZE {
             return Err(BlockError::BufferTooSmall);
         }
