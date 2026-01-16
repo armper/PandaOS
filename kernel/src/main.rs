@@ -123,6 +123,16 @@ pub extern "C" fn _start(boot_info: &'static bootloader::BootInfo) -> ! {
         println!("Heap test passed: {:?}", test_vec);
     }
 
+    // Initialize mount table
+    mount::init_mount_table();
+    println!("Mount table initialized");
+
+    // Mount disk filesystem at /mnt
+    match mount::mount_disk_at_mnt() {
+        Ok(()) => println!("Disk filesystem mounted at /mnt"),
+        Err(e) => println!("Warning: Failed to mount disk at /mnt: {:?}", e),
+    }
+
     // Finalize boot
     let _state = state.finalize();
     println!("Kernel initialization complete!");
@@ -132,6 +142,13 @@ pub extern "C" fn _start(boot_info: &'static bootloader::BootInfo) -> ! {
 
     #[cfg(not(test))]
     {
+        // Run disk filesystem smoke test if feature is enabled
+        #[cfg(feature = "disk-fs-smoke")]
+        {
+            serial_println!("Running disk_fs_smoke test");
+            run_disk_fs_smoke_test();
+        }
+
         // Initialize scheduler and start multitasking
         unsafe {
             init_scheduler_and_start();
@@ -1370,4 +1387,138 @@ unsafe fn start_first_process() -> ! {
 #[test_case]
 fn trivial_assertion() {
     assert_eq!(1, 1);
+}
+
+/// Disk filesystem smoke test
+#[cfg(feature = "disk-fs-smoke")]
+fn run_disk_fs_smoke_test() {
+    use alloc::string::ToString;
+    
+    serial_println!("Testing disk filesystem at /mnt");
+    
+    // Test 1: Check if /mnt exists and is a directory
+    match fs::stat_path("/mnt") {
+        Ok(metadata) => {
+            serial_println!("✓ /mnt exists");
+            if metadata.file_type == fs::FileType::Directory {
+                serial_println!("✓ /mnt is a directory");
+            } else {
+                serial_println!("✗ /mnt is not a directory");
+                serial_println!("TEST FAIL disk_fs_smoke");
+                loop {
+                    x86_64::instructions::hlt();
+                }
+            }
+        }
+        Err(e) => {
+            serial_println!("✗ Failed to stat /mnt: {:?}", e);
+            serial_println!("TEST FAIL disk_fs_smoke");
+            loop {
+                x86_64::instructions::hlt();
+            }
+        }
+    }
+    
+    // Test 2: List directory entries in /mnt
+    match fs::list_directory("/mnt") {
+        Ok(entries) => {
+            serial_println!("✓ Successfully listed /mnt");
+            serial_println!("  Found {} entries:", entries.len());
+            for (name, file_type) in &entries {
+                let type_str = match file_type {
+                    fs::FileType::File => "file",
+                    fs::FileType::Directory => "dir",
+                };
+                serial_println!("    - {} ({})", name, type_str);
+            }
+            
+            // Check for expected files
+            let has_hello = entries.iter().any(|(n, _)| n == "hello.txt");
+            let has_readme = entries.iter().any(|(n, _)| n == "README");
+            
+            if has_hello && has_readme {
+                serial_println!("✓ Found expected files (hello.txt, README)");
+            } else {
+                serial_println!("✗ Missing expected files");
+                serial_println!("TEST FAIL disk_fs_smoke");
+                loop {
+                    x86_64::instructions::hlt();
+                }
+            }
+        }
+        Err(e) => {
+            serial_println!("✗ Failed to list /mnt: {:?}", e);
+            serial_println!("TEST FAIL disk_fs_smoke");
+            loop {
+                x86_64::instructions::hlt();
+            }
+        }
+    }
+    
+    // Test 3: Read contents of /mnt/hello.txt
+    let mut fd_table = fs::FdTable::new();
+    match fs::open_path_with_flags(&mut fd_table, "/mnt/hello.txt", fs::O_RDONLY) {
+        Ok(fd) => {
+            serial_println!("✓ Opened /mnt/hello.txt (fd {})", fd);
+            
+            let mut buffer = [0u8; 256];
+            match fd_table.read(fd, &mut buffer) {
+                Ok(bytes_read) => {
+                    if bytes_read > 0 {
+                        let content = core::str::from_utf8(&buffer[..bytes_read])
+                            .unwrap_or("<invalid utf8>");
+                        serial_println!("✓ Read {} bytes from /mnt/hello.txt", bytes_read);
+                        serial_println!("  Content: \"{}\"", content.trim());
+                        
+                        if content.contains("Hello from disk") {
+                            serial_println!("✓ File content matches expected");
+                        } else {
+                            serial_println!("✗ File content doesn't match expected");
+                            serial_println!("TEST FAIL disk_fs_smoke");
+                            loop {
+                                x86_64::instructions::hlt();
+                            }
+                        }
+                    } else {
+                        serial_println!("✗ Read 0 bytes (unexpected EOF)");
+                        serial_println!("TEST FAIL disk_fs_smoke");
+                        loop {
+                            x86_64::instructions::hlt();
+                        }
+                    }
+                }
+                Err(e) => {
+                    serial_println!("✗ Failed to read from /mnt/hello.txt: {:?}", e);
+                    serial_println!("TEST FAIL disk_fs_smoke");
+                    loop {
+                        x86_64::instructions::hlt();
+                    }
+                }
+            }
+            
+            // Close file
+            let _ = fd_table.close(fd);
+        }
+        Err(e) => {
+            serial_println!("✗ Failed to open /mnt/hello.txt: {:?}", e);
+            serial_println!("TEST FAIL disk_fs_smoke");
+            loop {
+                x86_64::instructions::hlt();
+            }
+        }
+    }
+    
+    serial_println!("✓ All disk filesystem tests passed");
+    serial_println!("TEST PASS disk_fs_smoke");
+    
+    // Exit QEMU
+    use x86_64::instructions::port::Port;
+    unsafe {
+        let mut port = Port::new(0xf4);
+        port.write(0x10u32); // Success exit code
+    }
+    
+    loop {
+        x86_64::instructions::hlt();
+    }
 }

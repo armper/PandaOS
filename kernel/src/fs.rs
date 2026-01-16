@@ -448,6 +448,8 @@ pub static FILES: &[FileNode] = &[
     FileNode { path: "/etc", data: b"", file_type: FileType::Directory },
     // /tmp directory (writable)
     FileNode { path: "/tmp", data: b"", file_type: FileType::Directory },
+    // /mnt directory (mount point for disk filesystem)
+    FileNode { path: "/mnt", data: b"", file_type: FileType::Directory },
     // Regular files
     FileNode {
         path: "/init",
