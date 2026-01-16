@@ -197,8 +197,20 @@ impl FdTable {
         let node = FILES.get(node_index).ok_or(ErrorCode::ENOENT)?;
         let fd = self.allocate_fd()?;
 
+        // Get file metadata to check permissions
+        let metadata = stat_path(node.path)?;
+
         // Check access mode
         let writable = (flags & O_WRONLY) != 0 || (flags & O_RDWR) != 0;
+        let readable = (flags & O_RDONLY) == 0 || (flags & O_RDWR) != 0;
+
+        // Check permissions
+        if readable && !can_read(metadata.mode) {
+            return Err(ErrorCode::EACCES);
+        }
+        if writable && !can_write(metadata.mode) {
+            return Err(ErrorCode::EACCES);
+        }
 
         match node.file_type {
             FileType::File => {
@@ -663,14 +675,25 @@ pub fn open_path_with_flags(table: &mut FdTable, path: &str, flags: u64) -> Resu
                 let inode = crate::mount::diskfs_lookup(&rel_path)?;
                 let metadata = crate::mount::diskfs_stat(inode)?;
 
+                // Check access mode and permissions
+                let writable = (flags & O_WRONLY) != 0 || (flags & O_RDWR) != 0;
+                let readable = (flags & O_RDONLY) == 0 || (flags & O_RDWR) != 0;
+
+                // Check permissions
+                if readable && !can_read(metadata.mode) {
+                    return Err(ErrorCode::EACCES);
+                }
+                if writable {
+                    // Check write permission
+                    if !can_write(metadata.mode) {
+                        return Err(ErrorCode::EACCES);
+                    }
+                    // Disk fs is read-only
+                    return Err(ErrorCode::EROFS);
+                }
+
                 // Allocate FD
                 let fd = table.allocate_fd()?;
-
-                // Check if writable (disk fs is read-only)
-                let writable = (flags & O_WRONLY) != 0 || (flags & O_RDWR) != 0;
-                if writable {
-                    return Err(ErrorCode::EROFS); // Read-only filesystem
-                }
 
                 // Open based on file type
                 match metadata.file_type {
@@ -724,6 +747,18 @@ pub fn open_path_with_flags(table: &mut FdTable, path: &str, flags: u64) -> Resu
 
                 // Get metadata
                 let metadata = crate::mount::tmpfs_stat(inode)?;
+
+                // Check access mode and permissions
+                let writable = (flags & O_WRONLY) != 0 || (flags & O_RDWR) != 0;
+                let readable = (flags & O_RDONLY) == 0 || (flags & O_RDWR) != 0;
+
+                // Check permissions
+                if readable && !can_read(metadata.mode) {
+                    return Err(ErrorCode::EACCES);
+                }
+                if writable && !can_write(metadata.mode) {
+                    return Err(ErrorCode::EACCES);
+                }
 
                 // Allocate FD
                 let fd = table.allocate_fd()?;

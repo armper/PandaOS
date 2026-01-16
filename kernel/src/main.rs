@@ -490,6 +490,19 @@ fn exec_handler(path: &str, arg: Option<&str>) -> Result<(), syscall::ErrorCode>
         found_path.ok_or(syscall::ErrorCode::ENOENT)?
     };
 
+    // Check file metadata and permissions before loading
+    let metadata = fs::stat_path(&resolved_path)?;
+    
+    // Ensure it's a regular file, not a directory
+    if metadata.is_dir() {
+        return Err(syscall::ErrorCode::EISDIR);
+    }
+
+    // Check execute permission
+    if !fs::can_exec(metadata.mode) {
+        return Err(syscall::ErrorCode::EACCES);
+    }
+
     // Load ELF file from filesystem (disk, tmpfs, or in-memory)
     let elf_data = fs::read_file_to_vec(&resolved_path)?;
 
