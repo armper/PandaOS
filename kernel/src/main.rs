@@ -26,6 +26,7 @@
 extern crate alloc;
 
 use core::panic::PanicInfo;
+use alloc::vec::Vec;
 
 // Import VGA and serial macros
 #[macro_use]
@@ -36,6 +37,7 @@ pub mod context;
 pub mod context_switch;
 pub mod diskfs;
 pub mod elf;
+pub mod exec_stack;
 pub mod fs;
 pub mod gdt;
 pub mod heap;
@@ -347,7 +349,7 @@ unsafe fn init_scheduler_and_start() -> ! {
     // Set syscall handlers
     syscall::set_yield_handler(yield_handler);
     syscall::set_exit_handler(exit_handler);
-    syscall::set_exec_handler(exec_handler);
+    syscall::set_execve_handler(execve_handler);
     syscall::set_open_handler(open_handler);
     syscall::set_read_handler(read_handler);
     syscall::set_write_handler(write_handler);
@@ -449,7 +451,23 @@ fn yield_handler() {
 const EXEC_ARG_ADDR: u64 = 0x7FFF_FFFF_C000;
 const EXEC_ARG_MAX: usize = 128;
 
-fn exec_handler(path: &str, arg: Option<&str>) -> Result<(), syscall::ErrorCode> {
+fn execve_handler(
+    path: &str,
+    argv: &[Vec<u8>],
+    _envp: &[Vec<u8>],
+) -> Result<(), syscall::ErrorCode> {
+    // For now, we only support the simplified single-arg interface
+    // Convert argv to optional single arg for backward compatibility
+    let arg = if argv.is_empty() {
+        None
+    } else if argv.len() == 1 {
+        // Single argument - convert from Vec<u8> to str
+        core::str::from_utf8(&argv[0]).ok()
+    } else {
+        // Multiple arguments not yet supported
+        return Err(syscall::ErrorCode::E2BIG);
+    };
+
     // Get current process to access PATH environment variable
     // SAFETY: Called from syscall handler with interrupts disabled
     let scheduler = unsafe { get_scheduler() };
@@ -493,7 +511,7 @@ fn exec_handler(path: &str, arg: Option<&str>) -> Result<(), syscall::ErrorCode>
 
     // Check file metadata and permissions before loading
     let metadata = fs::stat_path(&resolved_path)?;
-    
+
     // Ensure it's a regular file, not a directory
     if metadata.is_dir() {
         return Err(syscall::ErrorCode::EISDIR);
@@ -507,7 +525,15 @@ fn exec_handler(path: &str, arg: Option<&str>) -> Result<(), syscall::ErrorCode>
     // Load ELF file from filesystem (disk, tmpfs, or in-memory)
     let elf_data = fs::read_file_to_vec(&resolved_path)?;
 
-    let elf_info = elf::parse_elf(&elf_data).map_err(|_| syscall::ErrorCode::EINVAL)?;
+    let elf_info = elf::parse_elf(&elf_data).map_err(|e| match e {
+        elf::ElfError::InvalidMagic
+        | elf::ElfError::InvalidClass
+        | elf::ElfError::InvalidEndian
+        | elf::ElfError::InvalidVersion
+        | elf::ElfError::NotExecutable
+        | elf::ElfError::WrongMachine => syscall::ErrorCode::ENOEXEC,
+        _ => syscall::ErrorCode::EINVAL,
+    })?;
 
     // SAFETY: Frame allocator and GDT are initialized.
     unsafe {
