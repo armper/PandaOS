@@ -1321,6 +1321,15 @@ fn brk_handler(addr: u64) -> syscall::SyscallResult {
         return Ok(current.heap.heap_end); // Return current break on invalid request
     }
 
+    // Check for collision with mmap region
+    if addr > current.mmap_base {
+        serial_println!(
+            "[BRK] Would collide with mmap region at {:#x}",
+            current.mmap_base
+        );
+        return Err(syscall::ErrorCode::ENOMEM);
+    }
+
     let old_break = current.heap.heap_end;
     let new_break = (addr + PAGE_MASK) & !PAGE_MASK; // Page-align upward
 
@@ -1472,6 +1481,16 @@ fn mmap_handler(
     // Validate address doesn't overlap kernel space
     if map_addr >= KERNEL_SPACE_START {
         return Err(syscall::ErrorCode::EINVAL);
+    }
+
+    // Check for collision with heap
+    if map_addr < current.heap.heap_end {
+        serial_println!(
+            "[MMAP] Would collide with heap at {:#x} (heap_end={:#x})",
+            map_addr,
+            current.heap.heap_end
+        );
+        return Err(syscall::ErrorCode::ENOMEM);
     }
 
     serial_println!("[MMAP] Mapping {} pages at {:#x}", num_pages, map_addr);
