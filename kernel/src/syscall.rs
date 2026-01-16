@@ -93,6 +93,16 @@ pub enum SyscallNumber {
     Unlink = 87,
     /// Change file mode (chmod)
     Chmod = 90,
+    /// Change file ownership (chown)
+    Chown = 92,
+    /// Get real user ID
+    Getuid = 102,
+    /// Get real group ID
+    Getgid = 104,
+    /// Set user ID
+    Setuid = 105,
+    /// Set group ID
+    Setgid = 106,
     /// Set process group ID
     Setpgid = 109,
     /// Get directory entries
@@ -127,6 +137,11 @@ impl SyscallNumber {
             80 => Some(Self::Chdir),
             87 => Some(Self::Unlink),
             90 => Some(Self::Chmod),
+            92 => Some(Self::Chown),
+            102 => Some(Self::Getuid),
+            104 => Some(Self::Getgid),
+            105 => Some(Self::Setuid),
+            106 => Some(Self::Setgid),
             109 => Some(Self::Setpgid),
             217 => Some(Self::Getdents64),
             63 => Some(Self::Getenv),
@@ -164,6 +179,11 @@ impl SyscallNumber {
             Self::Getdents64 => "getdents64",
             Self::Getenv => "getenv",
             Self::Chmod => "chmod",
+            Self::Chown => "chown",
+            Self::Getuid => "getuid",
+            Self::Getgid => "getgid",
+            Self::Setuid => "setuid",
+            Self::Setgid => "setgid",
         }
     }
 }
@@ -274,6 +294,11 @@ pub fn handle_syscall(
         SyscallNumber::Unlink => sys_unlink(arg1),
         SyscallNumber::Getenv => sys_getenv(arg1, arg2, arg3),
         SyscallNumber::Chmod => sys_chmod(arg1, arg2 as u16),
+        SyscallNumber::Chown => sys_chown(arg1, arg2 as u32, arg3 as u32),
+        SyscallNumber::Getuid => sys_getuid(),
+        SyscallNumber::Getgid => sys_getgid(),
+        SyscallNumber::Setuid => sys_setuid(arg1 as u32),
+        SyscallNumber::Setgid => sys_setgid(arg1 as u32),
         // All other syscalls return ENOSYS for now
         _ => Err(ErrorCode::ENOSYS),
     };
@@ -936,6 +961,72 @@ fn sys_chmod(path_ptr: u64, mode: u16) -> SyscallResult {
     }
 }
 
+/// sys_chown - Change file ownership
+///
+/// Linux-compatible chown syscall:
+/// - path_ptr: pointer to file path string in user space
+/// - uid: new owner user ID (u32::MAX or -1 to leave unchanged)
+/// - gid: new owner group ID (u32::MAX or -1 to leave unchanged)
+///
+/// Returns 0 on success, or -errno on failure.
+fn sys_chown(path_ptr: u64, uid: u32, gid: u32) -> SyscallResult {
+    if let Some(chown_fn) = CHOWN_HANDLER.get() {
+        chown_fn(path_ptr, uid, gid)
+    } else {
+        Err(ErrorCode::ENOSYS)
+    }
+}
+
+/// sys_getuid - Get real user ID
+///
+/// Returns the real user ID of the calling process.
+fn sys_getuid() -> SyscallResult {
+    if let Some(getuid_fn) = GETUID_HANDLER.get() {
+        getuid_fn()
+    } else {
+        Err(ErrorCode::ENOSYS)
+    }
+}
+
+/// sys_getgid - Get real group ID
+///
+/// Returns the real group ID of the calling process.
+fn sys_getgid() -> SyscallResult {
+    if let Some(getgid_fn) = GETGID_HANDLER.get() {
+        getgid_fn()
+    } else {
+        Err(ErrorCode::ENOSYS)
+    }
+}
+
+/// sys_setuid - Set user ID
+///
+/// Linux-compatible setuid syscall:
+/// - uid: new user ID
+///
+/// Returns 0 on success, or -EPERM if not privileged.
+fn sys_setuid(uid: u32) -> SyscallResult {
+    if let Some(setuid_fn) = SETUID_HANDLER.get() {
+        setuid_fn(uid)
+    } else {
+        Err(ErrorCode::ENOSYS)
+    }
+}
+
+/// sys_setgid - Set group ID
+///
+/// Linux-compatible setgid syscall:
+/// - gid: new group ID
+///
+/// Returns 0 on success, or -EPERM if not privileged.
+fn sys_setgid(gid: u32) -> SyscallResult {
+    if let Some(setgid_fn) = SETGID_HANDLER.get() {
+        setgid_fn(gid)
+    } else {
+        Err(ErrorCode::ENOSYS)
+    }
+}
+
 /// sys_brk - Change the program break (heap management)
 ///
 /// Linux-compatible brk syscall:
@@ -994,6 +1085,11 @@ static GETENV_HANDLER: Once<fn(u64, u64, u64) -> SyscallResult> = Once::new();
 static STAT_HANDLER: Once<fn(u64, u64) -> SyscallResult> = Once::new();
 static FSTAT_HANDLER: Once<fn(i32, u64) -> SyscallResult> = Once::new();
 static CHMOD_HANDLER: Once<fn(u64, u16) -> SyscallResult> = Once::new();
+static CHOWN_HANDLER: Once<fn(u64, u32, u32) -> SyscallResult> = Once::new();
+static GETUID_HANDLER: Once<fn() -> SyscallResult> = Once::new();
+static GETGID_HANDLER: Once<fn() -> SyscallResult> = Once::new();
+static SETUID_HANDLER: Once<fn(u32) -> SyscallResult> = Once::new();
+static SETGID_HANDLER: Once<fn(u32) -> SyscallResult> = Once::new();
 static BRK_HANDLER: Once<fn(u64) -> SyscallResult> = Once::new();
 static MMAP_HANDLER: Once<fn(u64, u64, i32, i32, i32, u64) -> SyscallResult> = Once::new();
 
@@ -1105,6 +1201,31 @@ pub fn set_fstat_handler(handler: fn(i32, u64) -> SyscallResult) {
 /// Set the chmod handler for syscall chmod
 pub fn set_chmod_handler(handler: fn(u64, u16) -> SyscallResult) {
     CHMOD_HANDLER.call_once(|| handler);
+}
+
+/// Set the chown handler for syscall chown
+pub fn set_chown_handler(handler: fn(u64, u32, u32) -> SyscallResult) {
+    CHOWN_HANDLER.call_once(|| handler);
+}
+
+/// Set the getuid handler for syscall getuid
+pub fn set_getuid_handler(handler: fn() -> SyscallResult) {
+    GETUID_HANDLER.call_once(|| handler);
+}
+
+/// Set the getgid handler for syscall getgid
+pub fn set_getgid_handler(handler: fn() -> SyscallResult) {
+    GETGID_HANDLER.call_once(|| handler);
+}
+
+/// Set the setuid handler for syscall setuid
+pub fn set_setuid_handler(handler: fn(u32) -> SyscallResult) {
+    SETUID_HANDLER.call_once(|| handler);
+}
+
+/// Set the setgid handler for syscall setgid
+pub fn set_setgid_handler(handler: fn(u32) -> SyscallResult) {
+    SETGID_HANDLER.call_once(|| handler);
 }
 
 /// Set the brk handler for syscall brk
