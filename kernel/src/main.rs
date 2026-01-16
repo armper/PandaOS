@@ -520,7 +520,7 @@ fn execve_handler(
     }
 
     // Check execute permission
-    if !fs::can_exec(metadata.mode) {
+    if !fs::can_exec(current.uid, current.gid, metadata.uid, metadata.gid, metadata.mode) {
         return Err(syscall::ErrorCode::EACCES);
     }
 
@@ -581,7 +581,7 @@ fn open_handler(path: &str, flags: u64) -> syscall::SyscallResult {
     // Resolve path relative to cwd
     let resolved_path = fs::resolve_path(&current.cwd, path)?;
 
-    let fd = fs::open_path_with_flags(&mut current.fd_table, &resolved_path, flags)?;
+    let fd = fs::open_path_with_flags(&mut current.fd_table, &resolved_path, flags, current.uid, current.gid)?;
     Ok(fd as u64)
 }
 
@@ -1925,7 +1925,7 @@ fn run_disk_fs_smoke_test() {
 
     // Test 3: Read contents of /mnt/hello.txt
     let mut fd_table = fs::FdTable::new();
-    match fs::open_path_with_flags(&mut fd_table, "/mnt/hello.txt", fs::O_RDONLY) {
+    match fs::open_path_with_flags(&mut fd_table, "/mnt/hello.txt", fs::O_RDONLY, 0, 0) {
         Ok(fd) => {
             serial_println!("✓ Opened /mnt/hello.txt (fd {})", fd);
 
