@@ -24,9 +24,10 @@ listing via `getdents64`, and file metadata queries via `stat`/`fstat`.
 - Mounted at /tmp by default
 - All data stored in RAM and lost on reboot
 - Shared across all processes
-- Supports full file lifecycle: create, read, write, truncate, unlink
+- Supports full file lifecycle: create, read, write, truncate, unlink, rename, mkdir, rmdir
 - Independent inode namespace
-- No permissions, ownership, or timestamps
+- Basic permissions via mode bits (checked against uid/gid)
+- Supports lseek, O_APPEND, O_CREAT, O_TRUNC flags
 
 ### Disk Filesystem
 - Read-only custom filesystem format
@@ -528,3 +529,161 @@ gcc -o /tmp/bin/hello hello.c
 - No shebangs or script interpretation
 - No execute permission checking
 - Binary must be valid ELF64 static executable
+
+## File Operation Syscalls
+
+### open() - Open File
+
+```c
+int open(const char *pathname, int flags, mode_t mode);
+```
+
+- **Syscall number**: 2
+- **Flags**:
+  - `O_RDONLY` (0x0000): Read-only
+  - `O_WRONLY` (0x0001): Write-only
+  - `O_RDWR` (0x0002): Read-write
+  - `O_CREAT` (0x0040): Create if doesn't exist
+  - `O_TRUNC` (0x0200): Truncate to 0 on open
+  - `O_APPEND` (0x0400): Always write at end
+- **Returns**: File descriptor >= 3, or negative errno on error
+- **Errors**: EACCES, ENOENT, EISDIR, EROFS, EEXIST
+
+**Behavior**:
+- O_CREAT: Creates file in tmpfs if path starts with /tmp, fails otherwise
+- O_TRUNC: Requires write permission, clears file contents
+- O_APPEND: All writes occur at end regardless of lseek
+
+### lseek() - Reposition File Offset
+
+```c
+off_t lseek(int fd, off_t offset, int whence);
+```
+
+- **Syscall number**: 8
+- **Whence values**:
+  - `SEEK_SET` (0): Set to offset
+  - `SEEK_CUR` (1): Set to current + offset
+  - `SEEK_END` (2): Set to size + offset
+- **Returns**: New offset, or negative errno on error
+- **Errors**: EBADF, ESPIPE (pipes), EISDIR, EINVAL
+
+**Note**: O_APPEND files ignore lseek for writes (always append).
+
+### mkdir() - Create Directory
+
+```c
+int mkdir(const char *pathname, mode_t mode);
+```
+
+- **Syscall number**: 83
+- **Returns**: 0 on success, negative errno on error
+- **Errors**: EACCES, ENOENT, EEXIST, EROFS
+
+**Behavior**:
+- Only works in tmpfs (/tmp)
+- Parent directory must exist
+- Mode masked with 0o777
+
+### rmdir() - Remove Empty Directory
+
+```c
+int rmdir(const char *pathname);
+```
+
+- **Syscall number**: 84
+- **Returns**: 0 on success, negative errno on error
+- **Errors**: ENOTDIR, ENOTEMPTY, ENOENT, EROFS, EACCES
+
+**Behavior**:
+- Only works in tmpfs (/tmp)
+- Directory must be empty
+
+### unlink() - Delete File
+
+```c
+int unlink(const char *pathname);
+```
+
+- **Syscall number**: 87
+- **Returns**: 0 on success, negative errno on error
+- **Errors**: EISDIR, ENOENT, EROFS, EACCES
+
+**Behavior**:
+- Only works in tmpfs (/tmp)
+- Returns EISDIR if path is a directory (use rmdir instead)
+
+### rename() - Move/Rename File
+
+```c
+int rename(const char *oldpath, const char *newpath);
+```
+
+- **Syscall number**: 82
+- **Returns**: 0 on success, negative errno on error
+- **Errors**: EXDEV (cross-device), ENOENT, EEXIST, EROFS, EACCES
+
+**Behavior**:
+- Only works within tmpfs (/tmp)
+- Returns EXDEV if oldpath and newpath are on different filesystems
+- Atomic operation within same filesystem
+
+## Shell Redirection
+
+The shell supports POSIX-style I/O redirection:
+
+### Output Redirection
+
+```bash
+command > file      # Truncate and write
+command >> file     # Append
+```
+
+**Implementation**:
+- `>`: Opens file with O_WRONLY | O_CREAT | O_TRUNC
+- `>>`: Opens file with O_WRONLY | O_CREAT | O_APPEND
+- Uses dup2() to redirect stdout (fd 1) to file
+
+### Input Redirection
+
+```bash
+command < file
+```
+
+**Implementation**:
+- Opens file with O_RDONLY
+- Uses dup2() to redirect stdin (fd 0) from file
+
+### Combining with Pipes
+
+```bash
+echo hello | wc > /tmp/count
+cat file1 file2 | grep pattern >> /tmp/results
+```
+
+Redirection works correctly with pipes and other shell features.
+
+## Cross-Device Operations
+
+### Rename Across Filesystems
+
+Attempting to rename a file from one filesystem to another returns EXDEV:
+
+```bash
+mv /tmp/file /mnt/file    # Returns EXDEV
+mv /mnt/file /tmp/file    # Returns EXDEV
+mv /tmp/a /tmp/b          # OK (same filesystem)
+```
+
+**Rationale**: Cross-device rename would require copying data, which is not atomic.
+
+**Workaround**: Use cp + rm for cross-device moves:
+```bash
+cp /tmp/file /mnt/file && rm /tmp/file
+```
+
+## See Also
+
+- [TMPFS.md](TMPFS.md) - Detailed tmpfs documentation
+- [ARCHITECTURE.md](ARCHITECTURE.md) - System architecture overview
+- [TESTING_GUIDE.md](TESTING_GUIDE.md) - Testing procedures

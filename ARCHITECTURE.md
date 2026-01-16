@@ -38,8 +38,9 @@ The main kernel crate contains:
 - **interrupts.rs**: Interrupt Descriptor Table (IDT) and exception handling
 - **memory.rs**: Memory management subsystem
 - **fs.rs**: In-memory VFS with file descriptors, metadata (stat/fstat), and directory listing (see [VFS.md](VFS.md))
+- **tmpfs.rs**: Writable in-memory temporary filesystem implementation (see [TMPFS.md](TMPFS.md))
 - **diskfs.rs**: Disk-backed filesystem implementation with custom on-disk format
-- **mount.rs**: Mount point management and filesystem backend abstraction
+- **mount.rs**: Mount point management and filesystem backend abstraction with cross-device checks
 - **elf.rs**: ELF64 loader for static binaries
 - **process.rs**: Process creation, management, and exec support
 - Additional modules for process management, syscalls, etc. (future)
