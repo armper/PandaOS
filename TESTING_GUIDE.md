@@ -1112,3 +1112,89 @@ The `scripts/mkdiskimg.py` script creates `fs.img` with:
 - Invalid ELF files return EINVAL error
 - Missing files return ENOENT error
 - Disk filesystem is read-only
+
+## vm_smoke Test
+
+**Purpose**: Comprehensive test of per-process virtual memory management
+
+**Test Program**: `userland/vm_test.asm` → `vm_test` binary
+
+**What It Tests**:
+1. **brk syscall**: Heap allocation and deallocation
+2. **mmap syscall**: Anonymous memory mapping
+3. **fork isolation**: Parent and child memory independence
+4. **Data integrity**: Verify data remains unchanged after fork
+
+**Test Flow**:
+```
+1. Query current heap break with brk(0)
+2. Grow heap by 8KB with brk(heap_start + 8192)
+3. Map 8KB anonymous region with mmap(NULL, 8192, RW, PRIVATE|ANON, -1, 0)
+4. Write test pattern to heap (0xDEADBEEF)
+5. Write test pattern to mmap (0xCAFEBABE)
+6. Fork process
+   Child Process:
+   7a. Modify heap data (0x12345678)
+   8a. Modify mmap data (0x87654321)
+   9a. Verify child's modifications took effect
+   10a. Exit with status 0
+   Parent Process:
+   7b. Wait for child to exit
+   8b. Verify heap data unchanged (still 0xDEADBEEF)
+   9b. Verify mmap data unchanged (still 0xCAFEBABE)
+   10b. Print "TEST PASS vm_smoke"
+```
+
+**Expected Output**:
+```
+vm_test: starting comprehensive VM test
+vm_test: allocating heap with brk
+vm_test: allocating mmap region
+vm_test: writing parent data
+vm_test: forking
+vm_test: in child process
+vm_test: child modifying data
+vm_test: child exiting
+vm_test: in parent process
+vm_test: parent waiting for child
+vm_test: parent verifying data unchanged
+TEST PASS vm_smoke
+```
+
+**What This Validates**:
+- ✅ brk correctly allocates and manages heap
+- ✅ mmap correctly maps anonymous memory
+- ✅ Heap and mmap don't collide
+- ✅ fork creates isolated address spaces
+- ✅ Child modifications don't affect parent
+- ✅ Per-process page table isolation works
+- ✅ Eager copy (non-COW) correctly duplicates memory
+- ✅ No memory corruption between processes
+
+**Run Command**:
+```bash
+# Build and run vm_smoke test
+cargo test --test vm_smoke --no-fail-fast
+
+# Or use make
+make test-vm
+```
+
+**Success Criteria**:
+- Test program prints "TEST PASS vm_smoke"
+- No kernel panics
+- No page faults
+- Parent data verified unchanged after child modifies its copy
+
+**Failure Modes**:
+- "TEST FAIL vm_smoke" → Child write didn't work or parent data corrupted
+- Kernel panic → Memory management bug (page table, allocation, or mapping)
+- Page fault → Incorrect page permissions or missing mapping
+- Hang → Deadlock in fork or wait
+
+**Related Tests**:
+- `brk_smoke`: Tests brk syscall in isolation
+- `mmap_smoke`: Tests mmap syscall in isolation
+- `fork_exec_smoke`: Tests fork/exec without memory management focus
+- `vm_smoke`: Comprehensive integration test combining all VM features
+

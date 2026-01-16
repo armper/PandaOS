@@ -18,10 +18,13 @@
   - New page table with shared kernel mappings
   - New kernel stack
   - parent_pid set to parent's PID
+  - **Copy of heap state**: heap_start, heap_end, heap_limit
+  - **Copy of mmap state**: mmap_base and mappings Vec
 - Returns:
   - In parent: child PID
   - In child: 0
 - Single-CPU only (no SMP support)
+- **Memory isolation**: Child modifications to heap/mmap don't affect parent
 
 ## Process States
 
@@ -45,10 +48,12 @@ Blocked processes are skipped by the scheduler until they are woken.
   - Wake any parent process waiting for this child
   - Process remains in scheduler until parent calls waitpid()
   - Page tables and resources are not freed yet
+  - **Heap and mmap regions remain until reaped**
 - If process has no parent (orphan):
   - Mark process state as Exited(code)
   - Queue the process for reaping
   - Page table + kernel stack frames released after CR3 switch
+  - **All heap and mmap pages deallocated**
 - Schedule the next runnable process
 - If no runnable processes remain, print test marker and halt
 
@@ -62,6 +67,7 @@ Blocked processes are skipped by the scheduler until they are woken.
   - Return child PID
   - Write exit status to user memory (if status_ptr != 0)
   - Free child's page tables and kernel stack (reap)
+  - **Deallocate all heap and mmap pages**
 - If no zombie children but has children:
   - **Block the parent process** (WaitingForChild state)
   - Yield CPU to other processes
@@ -149,8 +155,16 @@ Via `process::replace_image()`:
   - Read-write data: PF_R | PF_W → PRESENT | USER | WRITABLE | NO_EXECUTE
   - W^X enforced: No segment can be both writable and executable
 - **Allocate stack**: Fresh 4-page (16KB) user stack at `0x7FFF_FFFF_F000`
+- **Reset heap**: New heap_start calculated after ELF segments, heap_end = heap_start
+- **Clear mmap**: All mmap mappings cleared, mmap_base reset to default
 - **Free old space**: Previous process address space freed after successful mapping
 - Returns ENOMEM if any allocation fails
+
+**Key Invariants:**
+- exec does NOT preserve heap allocations
+- exec does NOT preserve mmap regions
+- exec resets process memory to clean slate
+- Only PID, parent_pid, and file descriptors are preserved
 
 #### 4. Context Setup
 CPU context reset for new entry point:
@@ -234,6 +248,167 @@ See `kernel/src/exec_stack.rs` for Linux-compatible stack setup implementation (
 - PIE (Position Independent Executables)
 - Interpreted scripts (shebangs)
 - Non-x86-64 architectures
+
+## Dynamic Memory Management (brk/mmap)
+
+### brk Syscall (#12)
+
+**Purpose**: Manage process heap allocation
+
+**Interface**: `brk(addr: u64) -> u64`
+- If `addr == 0`: Return current heap end (program break)
+- If `addr != 0`: Set new heap end (with validation)
+- Returns new heap end on success, or current heap end on failure
+
+**Behavior**:
+1. **Query current break**: `brk(0)` returns `heap_end` without modification
+2. **Grow heap**: If `addr > heap_end`:
+   - Validates `addr <= heap_limit` (1GB max by default)
+   - Checks for collision with mmap region (`addr <= mmap_base`)
+   - Allocates and maps new pages with RW+NX+USER flags
+   - Zeros all newly mapped pages
+   - Updates `heap_end` to new address
+   - Returns new `heap_end`
+3. **Shrink heap**: If `addr < heap_end`:
+   - Unmaps whole pages between new and old break
+   - Deallocates physical frames
+   - Updates `heap_end` to new address
+   - Returns new `heap_end`
+
+**Error Conditions**:
+- Returns `ENOMEM` if would collide with mmap region
+- Returns current `heap_end` (not error) if addr out of bounds
+
+**Fork Behavior**:
+- Child inherits parent's heap state (heap_start, heap_end, heap_limit)
+- Child gets independent physical frames (eager copy)
+- Child can grow/shrink heap independently
+
+**Exec Behavior**:
+- Heap state completely reset
+- New heap_start calculated from new ELF segments
+- heap_end = heap_start (no allocated heap)
+
+### mmap Syscall (#9)
+
+**Purpose**: Allocate anonymous memory regions
+
+**Interface**: `mmap(addr, length, prot, flags, fd, offset) -> u64`
+- Only supports `MAP_PRIVATE | MAP_ANONYMOUS`
+- `fd` must be -1 for anonymous mappings
+- Returns mapped address on success, negative errno on failure
+
+**Supported Flags**:
+- `MAP_PRIVATE` (0x02): Required
+- `MAP_ANONYMOUS` (0x20): Required
+- All other flags: Rejected with `EINVAL`
+
+**Protection Flags**:
+- `PROT_READ` (0x1): Read access
+- `PROT_WRITE` (0x2): Write access
+- `PROT_EXEC` (0x4): Execute access
+- `PROT_WRITE | PROT_EXEC`: Rejected with `EINVAL` (W^X enforcement)
+
+**Behavior**:
+1. **Validate parameters**:
+   - length > 0 and <= 1GB
+   - flags = MAP_PRIVATE | MAP_ANONYMOUS
+   - fd = -1
+   - W^X: not (PROT_WRITE && PROT_EXEC)
+2. **Choose address**:
+   - If addr == 0: Allocate from mmap_base downward
+   - If addr != 0: Use specified address (must be page-aligned)
+3. **Check collision**:
+   - Validates addr < KERNEL_SPACE_START
+   - Checks addr >= heap_end (no overlap with heap)
+4. **Allocate pages**:
+   - Rounds length up to page boundary
+   - Allocates physical frames
+   - Maps pages with specified protection + USER flag
+   - Zeros all pages
+5. **Track mapping**:
+   - Adds entry to process `mappings` Vec
+   - Stores addr, length, prot, flags
+
+**Error Conditions**:
+- `EINVAL`: Bad flags, W^X violation, misaligned address
+- `ENOMEM`: Would collide with heap, or allocation failed
+
+**Fork Behavior**:
+- Child inherits parent's mmap_base
+- Child gets copy of all mappings Vec entries
+- Child gets independent physical frames (eager copy)
+- Child can mmap independently without affecting parent
+
+**Exec Behavior**:
+- All mappings cleared
+- mmap_base reset to default (0x7FFF_0000_0000_0000)
+- No mmap regions from old process retained
+
+### Memory Collision Prevention
+
+The kernel enforces strict separation between heap and mmap regions:
+
+```
+Low Address
+┌─────────────────────────┐
+│ ELF Segments            │ (Code, Data, BSS)
+├─────────────────────────┤
+│ ↓ Heap (grows down)     │ brk grows upward
+│                         │
+│     (guard region)      │ <- Collision detection here
+│                         │
+│ ↑ mmap (grows up)       │ mmap grows downward
+├─────────────────────────┤
+│ User Stack              │ (Fixed at 0x7FFF_FFFF_F000)
+└─────────────────────────┘
+High Address
+```
+
+**Invariants**:
+- `heap_end <= mmap_base` (always enforced)
+- brk validates `new_addr <= mmap_base` before growing
+- mmap validates `addr >= heap_end` before mapping
+- Both return ENOMEM on collision
+
+### Usage Examples
+
+**Simple heap allocation**:
+```c
+// Get current break
+char *heap_start = (char *)brk(0);
+
+// Grow heap by 8KB
+char *new_break = (char *)brk((uint64_t)heap_start + 8192);
+
+// Use heap
+memset(heap_start, 0, 8192);
+
+// Shrink back
+brk((uint64_t)heap_start);
+```
+
+**Anonymous mmap**:
+```c
+// Map 16KB read-write region
+void *addr = mmap(NULL, 16384, PROT_READ|PROT_WRITE,
+                  MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+if ((long)addr < 0) {
+    // Error
+}
+
+// Use memory
+memset(addr, 0, 16384);
+
+// No munmap yet - stays until process exits
+```
+
+### Integration with musl malloc
+
+musl libc's malloc uses both brk and mmap:
+- **Small allocations** (<128KB): Use brk to grow heap
+- **Large allocations** (>=128KB): Use mmap for dedicated regions
+- This hybrid strategy is fully supported by PandaOS
 - Big-endian binaries
 
 ### Example: Exec Flow for `/mnt/bin/cat /etc/motd`
