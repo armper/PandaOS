@@ -137,6 +137,8 @@ None yet - hardware access is direct. Future refactoring will add:
 - `write(fd, buf, count)` - syscall #1 (stdout/stderr to serial; pipe write)
 - `open(path, flags, mode)` - syscall #2 (read-only, absolute paths)
 - `close(fd)` - syscall #3 (closes file descriptors >= 3, handles pipe refcounting)
+- `stat(path, buf)` - syscall #4 (get file metadata by path)
+- `fstat(fd, buf)` - syscall #5 (get file metadata by file descriptor)
 - `pipe(pipefd)` - syscall #22 (creates pipe, returns read/write fds)
 - `dup2(oldfd, newfd)` - syscall #33 (duplicates file descriptor)
 - `kill(pid, sig)` - syscall #37 (sends signal to process or process group)
@@ -150,6 +152,84 @@ None yet - hardware access is direct. Future refactoring will add:
 - `chdir(path)` - syscall #80 (changes current working directory)
 - `setpgid(pid, pgid)` - syscall #109 (sets process group ID)
 - `getdents64(fd, buf, count)` - syscall #217 (gets directory entries)
+
+## File Metadata
+
+**Status:** ✅ **IMPLEMENTED** - Minimal stat support for file type and size queries.
+
+### Overview
+
+PandaOS provides basic file metadata queries to distinguish files from directories and
+report file sizes. This enables userland programs like `ls` to display meaningful output.
+
+### Metadata Model
+
+**FileMetadata Structure** (`kernel/src/fs.rs`):
+```rust
+pub struct FileMetadata {
+    pub file_type: FileType,  // File or Directory
+    pub size: u64,             // Size in bytes (0 for directories)
+}
+
+pub enum FileType {
+    File = 0,       // Regular file
+    Directory = 1,  // Directory
+}
+```
+
+**Storage:**
+- Metadata is stored in `FileNode` structures in the VFS
+- Each node has a `file_type` field (File or Directory)
+- File size is computed from static data for read-only files
+- Writable files in `/tmp` use dynamic size from `WRITABLE_FILES` storage
+
+### Syscalls
+
+**stat(path, buf)** - Get metadata by path:
+- Resolves path relative to current working directory
+- Returns `FileMetadata` structure to userspace
+- Errors: `ENOENT` (file not found), `EINVAL` (invalid path)
+
+**fstat(fd, buf)** - Get metadata by file descriptor:
+- Queries open file descriptor for metadata
+- Works for files and directories
+- Errors: `EBADF` (invalid fd), `ENOENT` (node not found)
+
+**Metadata Format:**
+Returned as 16-byte structure:
+- Byte 0: `file_type` (0 = File, 1 = Directory)
+- Bytes 1-7: Padding
+- Bytes 8-15: `size` (little-endian u64, 0 for directories)
+
+### Usage Example
+
+Enhanced `/bin/ls` uses stat to distinguish directories:
+```asm
+; Build path: "/" + name
+lea rdi, [rel path_buf]
+mov byte [rdi], '/'
+; ... copy name ...
+
+; Call stat
+mov rax, SYS_STAT      ; syscall #4
+lea rdi, [rel path_buf]
+lea rsi, [rel stat_buf]
+syscall
+
+; Check if directory
+mov al, byte [rel stat_buf]
+cmp al, 1              ; FILE_TYPE_DIR
+je print_slash_suffix
+```
+
+**Limitations:**
+- No permissions (mode bits)
+- No timestamps (ctime, mtime, atime)
+- No inode numbers
+- No link counts
+- No owner/group information
+
+See [VFS.md](VFS.md) for detailed VFS and metadata semantics.
 
 ## Environment Variables
 
