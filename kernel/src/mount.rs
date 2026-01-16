@@ -160,13 +160,16 @@ pub fn diskfs_stat(inode: u32) -> Result<FileMetadata, ErrorCode> {
 
     let file = disk_fs.stat(inode).map_err(diskfs_error_to_errno)?;
 
-    Ok(FileMetadata {
-        file_type: match file.file_type {
-            InodeType::File => FileType::File,
-            InodeType::Directory => FileType::Directory,
-        },
-        size: file.size,
-    })
+    let file_type = match file.file_type {
+        InodeType::File => FileType::File,
+        InodeType::Directory => FileType::Directory,
+    };
+    let mode = match file_type {
+        FileType::Directory => crate::fs::DEFAULT_DIR_MODE,
+        FileType::File => crate::fs::DEFAULT_FILE_MODE,
+    };
+
+    Ok(FileMetadata { file_type, size: file.size, mode })
 }
 
 /// List directory on disk filesystem

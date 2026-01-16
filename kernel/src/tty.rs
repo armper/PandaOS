@@ -43,11 +43,7 @@ pub struct Tty {
 impl Tty {
     /// Create a new TTY with echo enabled
     pub const fn new() -> Self {
-        Self {
-            current_line: Vec::new(),
-            completed_lines: VecDeque::new(),
-            echo: true,
-        }
+        Self { current_line: Vec::new(), completed_lines: VecDeque::new(), echo: true }
     }
 
     /// Process a single input byte from the device
