@@ -1117,6 +1117,47 @@ pub fn chmod_path(path: &str, new_mode: u16) -> Result<(), ErrorCode> {
     Ok(())
 }
 
+/// Change file ownership (chown)
+pub fn chown_path(path: &str, uid: u32, gid: u32) -> Result<(), ErrorCode> {
+    // Check if path is on a mounted filesystem
+    if let Some((_mount, _rel_path, fs_type)) = crate::mount::resolve_mount_path(path) {
+        match fs_type {
+            crate::mount::FsType::Disk => {
+                // Disk filesystem is read-only
+                return Err(ErrorCode::EROFS);
+            }
+            crate::mount::FsType::Tmpfs => {
+                // Tmpfs doesn't support ownership yet - would need to add
+                return Err(ErrorCode::ENOSYS);
+            }
+        }
+    }
+
+    // For in-memory filesystem, store ownership in FILE_OWNERSHIP
+    let (node_index, node) = lookup_node(path).ok_or(ErrorCode::ENOENT)?;
+
+    // Get current ownership
+    let current_ownership = {
+        let ownership = FILE_OWNERSHIP.lock();
+        if let Some(ref owner_map) = *ownership {
+            owner_map.get(&node_index).copied().unwrap_or((node.uid, node.gid))
+        } else {
+            (node.uid, node.gid)
+        }
+    };
+
+    // Apply changes (u32::MAX means "don't change")
+    let new_uid = if uid == u32::MAX { current_ownership.0 } else { uid };
+    let new_gid = if gid == u32::MAX { current_ownership.1 } else { gid };
+
+    // Store the new ownership
+    let mut ownership = FILE_OWNERSHIP.lock();
+    let owner_map = ownership.get_or_insert_with(BTreeMap::new);
+    owner_map.insert(node_index, (new_uid, new_gid));
+
+    Ok(())
+}
+
 /// Get file metadata by path
 pub fn stat_path(path: &str) -> Result<FileMetadata, ErrorCode> {
     // Check if path is on a mounted filesystem
