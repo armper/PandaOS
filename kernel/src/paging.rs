@@ -471,7 +471,28 @@ pub unsafe fn map_page(
     // SAFETY: Entry is now present
     let l1_table = unsafe { &mut *(l2_table[p2_index].addr() as *mut PageTable) };
 
-    // Map the page
+    // Check if the page is already mapped
+    // This handles cases where:
+    // 1. Bootloader pre-maps kernel pages and we try to map them again
+    // 2. ELF loading maps the same page twice (e.g., adjacent segments sharing page boundaries)
+    // 3. Kernel stack or heap initialization overlaps with existing mappings
+    if l1_table[p1_index].is_present() {
+        let existing_addr = l1_table[p1_index].addr();
+        let new_addr = phys_addr.page_align_down().as_u64();
+        
+        // If already mapped to the same frame, this is an idempotent operation - allow it
+        // This is safe and correct: we're just ensuring the mapping and potentially updating flags
+        if existing_addr == new_addr {
+            // Update flags in case they changed
+            l1_table[p1_index].set(phys_addr.as_u64(), flags);
+            return Ok(());
+        }
+        
+        // If mapped to a different frame, this is an error - we don't support remapping
+        return Err("Page already mapped to a different physical frame");
+    }
+
+    // Map the page for the first time
     l1_table[p1_index].set(phys_addr.as_u64(), flags);
 
     Ok(())
@@ -533,10 +554,8 @@ pub unsafe fn unmap_page(
 
     // Flush TLB for this address
     // SAFETY: We're unmapping a page we just verified exists
-    unsafe {
-        use x86_64::instructions::tlb;
-        tlb::flush(x86_64::VirtAddr::new(virt_addr.as_u64()));
-    }
+    use x86_64::instructions::tlb;
+    tlb::flush(x86_64::VirtAddr::new(virt_addr.as_u64()));
 
     Ok(phys_addr)
 }
