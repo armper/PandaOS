@@ -74,13 +74,43 @@ Blocked processes are skipped by the scheduler until they are woken.
 **Blocking Behavior**: Unlike the previous busy-wait implementation, waitpid now properly blocks the calling process. The scheduler will skip blocked processes, eliminating CPU spinning. When a child exits, the exit handler wakes any parent waiting for that child.
 
 ## exec(path, arg)
-- Requires an absolute path and a valid ELF in the in-memory FS
+
+Replaces the current process image with a new ELF binary loaded from the filesystem.
+
+### Path Resolution
+- If path contains '/', treat as absolute or relative path
+- Otherwise, search PATH environment variable (e.g., `/mnt/bin:/bin`)
+- Resolved via `fs::resolve_path()` against current working directory
+
+### ELF Loading Pipeline
+1. **File Read**: Complete ELF binary loaded into memory via `fs::read_file_to_vec()`
+   - Supports disk filesystem (`/mnt/bin/*`)
+   - Supports tmpfs (`/tmp/bin/*`)
+   - Falls back to in-memory filesystem if path exists there
+2. **ELF Parsing**: Binary validated and parsed via `elf::parse_elf()`
+   - Checks ELF64 magic, class, endianness
+   - Validates x86-64 static executable
+   - Extracts PT_LOAD segments and entry point
+3. **Image Replacement**: Via `process::replace_image()`
+   - Creates new user page table
+   - Maps PT_LOAD segments with correct permissions (W^X enforced)
+   - Allocates fresh 4-page user stack at `0x7FFF_FFFF_F000`
+   - Frees old address space after successful mapping
+4. **Context Setup**: CPU context reset for new entry point
+5. **Argument Passing**: Optional arg string copied to fixed user address (`0x7FFF_FFFF_C000`)
+
+### Exec Behavior
 - Destroys the current user address space and builds a new one
 - Resets the user stack and CPU context
 - Preserves the kernel stack mapping
-- Preserves PID and parent_pid
-- Does not return on success
-- Copies arg to fixed address in new address space (0x7FFF_FFFF_C000)
+- Preserves PID, parent_pid, file descriptor table, and working directory
+- Does not return on success (switches directly to new program)
+- Returns error on failure (e.g., file not found, invalid ELF, out of memory)
+
+### Supported Binary Types
+- Static ELF64 executables only
+- No dynamic linking or shared libraries
+- No PIE support
 
 ## Process Reaping
 

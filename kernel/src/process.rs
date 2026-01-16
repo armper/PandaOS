@@ -164,7 +164,7 @@ impl Process {
             fd_table: FdTable::new(),
             pending_signals: 0,
             cwd: String::from("/"),
-            path_env: String::from("/bin"),
+            path_env: String::from("/mnt/bin:/bin"),
         })
     }
 

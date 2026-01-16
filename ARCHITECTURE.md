@@ -40,6 +40,8 @@ The main kernel crate contains:
 - **fs.rs**: In-memory VFS with file descriptors, metadata (stat/fstat), and directory listing (see [VFS.md](VFS.md))
 - **diskfs.rs**: Disk-backed filesystem implementation with custom on-disk format
 - **mount.rs**: Mount point management and filesystem backend abstraction
+- **elf.rs**: ELF64 loader for static binaries
+- **process.rs**: Process creation, management, and exec support
 - Additional modules for process management, syscalls, etc. (future)
 
 **Invariants:**
@@ -47,15 +49,58 @@ The main kernel crate contains:
 - All subsystems initialized explicitly
 - No unsafe outside arch-specific code
 
+## ELF Loading Pipeline
+
+PandaOS implements a complete ELF64 loader that enables dynamic program execution from the filesystem:
+
+### ELF Loader (`elf.rs`)
+- **Parsing**: Validates ELF64 headers (magic, class, endianness, machine type)
+- **Validation**: Checks for x86-64 static executables only
+- **Segment Loading**: Iterates program headers and loads PT_LOAD segments
+- **Memory Mapping**: Maps segments into user address space with correct permissions (RX for code, RW for data)
+- **BSS Handling**: Zero-fills BSS sections automatically
+- **Entry Point**: Extracts entry point from ELF header for process startup
+
+### Exec Pipeline
+1. **Path Resolution**: Shell resolves command name via PATH environment variable
+2. **File Loading**: `fs::read_file_to_vec()` loads complete ELF binary from filesystem (disk, tmpfs, or in-memory)
+3. **ELF Parsing**: `elf::parse_elf()` validates and extracts segment information
+4. **Image Replacement**: `process::replace_image()` destroys current process address space and creates new one
+5. **Segment Mapping**: Each PT_LOAD segment is mapped with appropriate permissions (W^X enforced)
+6. **Stack Setup**: Fresh user stack allocated at top of user address space
+7. **Context Switch**: CPU context initialized with new entry point and stack pointer
+
+### No Embedded Binaries
+- Kernel no longer embeds userland programs via `include_bytes!()`
+- `/bin` directory is empty in the in-memory filesystem
+- All programs loaded dynamically from:
+  - `/mnt/bin/*` - Disk filesystem (persistent)
+  - `/tmp/bin/*` - Tmpfs (temporary)
+- `init` process loaded from `/mnt/bin/init` (or fallback to `/init` if present)
+- PATH environment variable defaults to `/mnt/bin:/bin`
+
+### Supported Features
+- Static ELF64 executables only
+- Page-aligned segment loading
+- W^X enforcement (no writable + executable pages)
+- Clean failure on malformed binaries
+- Argument passing via fixed user address
+
+### Explicit Non-Features
+- No dynamic linking or shared libraries
+- No PIE (Position Independent Executables)
+- No shebangs or script interpretation
+- No mmap for ELF loading
+
 ## Filesystem Architecture
 
 PandaOS supports three filesystem backends:
 
 ### In-Memory Filesystem (RAM FS)
-- Static files compiled into the kernel binary
-- Writable /tmp directory with dynamic file creation (deprecated - use tmpfs instead)
+- Minimal static files (configuration only, no binaries)
+- Empty /bin directory (programs loaded from disk)
 - Always mounted at root (/)
-- Files include kernel binaries (/bin/sh, /bin/cat, etc.)
+- Contains only `/etc/motd`, `/etc/version`, and directory entries
 - Supports all VFS operations: open, read, write (in /tmp), stat, getdents64
 
 ### Tmpfs Filesystem
