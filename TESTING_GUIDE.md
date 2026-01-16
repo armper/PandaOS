@@ -665,6 +665,74 @@ LS_SMOKE=1 ./scripts/qemu-test.sh
 - Directory listing is sequential with per-fd offset tracking
 - ls program uses getdents64 syscall (217) directly
 
+### ls_long_smoke Test
+
+**Purpose**: Verify file metadata (stat) and ls -l long format display.
+
+**Test Flow**:
+1. Shell starts with prompt
+2. User types "ls -l" command
+3. ls parses -l flag from argument string
+4. ls opens "/" directory
+5. ls calls getdents64 to read entries
+6. For each entry, ls calls stat() to get metadata
+7. ls prints mode, size, and name in long format
+8. User changes to /etc directory with "cd etc"
+9. User runs "ls -l" again to show /etc contents
+10. Shell exits with "exit" command
+
+**Expected Output**:
+```
+panda> ls -l
+drwxr-xr-x  0  bin
+drwxr-xr-x  0  etc
+panda> cd etc
+panda> ls -l
+-rw-r--r--  <size>  motd
+-rw-r--r--  <size>  version
+panda> exit
+TEST PASS ls_long_smoke
+```
+
+**Running the Test**:
+```bash
+LS_LONG_SMOKE=1 ./scripts/qemu-test.sh
+```
+
+**Test Input Sequence**:
+```
+"ls -l\n"   → execute ls with -l flag
+"cd etc\n"  → change to /etc directory
+"ls -l\n"   → list /etc in long format
+"exit\n"    → clean exit
+```
+
+**What's Tested**:
+- Extended stat syscall (32-byte structure)
+- Mode bits (file type + rwxrwxrwx permissions)
+- stat() syscall implementation (syscall #4)
+- Argument passing from shell to programs
+- Mode string formatting (drwxr-xr-x format)
+- File size reporting
+- Default mode assignments (040755 for dirs, 0100644 for files)
+
+**Metadata Format**:
+- `st_mode` (u16): Type bits + permission bits (e.g., 040755, 0100644)
+- `st_nlink` (u32): Always 1
+- `st_uid`, `st_gid` (u32): Always 0 (no users/groups yet)
+- `st_size` (u64): File size in bytes (0 for directories)
+- `st_ino` (u64): Fake inode number (always 0)
+
+**Permission Display**:
+- Directory: `d` + `rwxr-xr-x` → `drwxr-xr-x`
+- Regular file: `-` + `rw-r--r--` → `-rw-r--r--`
+
+**Important Notes**:
+- Permission bits are displayed but **not enforced**
+- All files are readable/writable by all processes
+- No timestamps yet (reserved for future implementation)
+- No uid/gid display (always 0)
+
 ## Working Directory / cd Command Testing
 
 ### cd_smoke Test

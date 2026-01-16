@@ -67,39 +67,68 @@ The VFS uses a global mount table to track mounted filesystems:
 
 ## File Metadata
 
-The VFS supports minimal file metadata queries:
+The VFS supports file metadata queries with POSIX-like mode bits:
 
 ### FileMetadata Structure
 ```rust
 pub struct FileMetadata {
     pub file_type: FileType,  // File or Directory
     pub size: u64,             // Size in bytes (0 for directories)
+    pub mode: u16,             // POSIX mode (file type + permission bits)
 }
 ```
+
+### Mode Bits
+- **File Type** (upper bits):
+  - `S_IFDIR` (0o040000): Directory
+  - `S_IFREG` (0o100000): Regular file
+- **Permission Bits** (lower 9 bits):
+  - User: read (0o400), write (0o200), execute (0o100)
+  - Group: read (0o40), write (0o20), execute (0o10)
+  - Other: read (0o4), write (0o2), execute (0o1)
+
+### Default Modes
+- Directories: `040755` (drwxr-xr-x)
+- Regular files: `0100644` (-rw-r--r--)
 
 ### Syscalls
 - `stat(path, buf)` - Get metadata for a file by path (resolved relative to cwd)
 - `fstat(fd, buf)` - Get metadata for an open file descriptor
 
 ### Metadata Format
-Metadata is returned as a 16-byte structure:
-- Byte 0: `file_type` (0 = File, 1 = Directory)
-- Bytes 1-7: Padding
-- Bytes 8-15: `size` (little-endian u64, 0 for directories)
+Metadata is returned as a 32-byte structure:
+- Bytes 0-1: `st_mode` (little-endian u16, file type + permissions)
+- Bytes 2-3: Padding
+- Bytes 4-7: `st_nlink` (little-endian u32, always 1)
+- Bytes 8-11: `st_uid` (little-endian u32, always 0)
+- Bytes 12-15: `st_gid` (little-endian u32, always 0)
+- Bytes 16-23: `st_size` (little-endian u64, 0 for directories)
+- Bytes 24-31: `st_ino` (little-endian u64, fake inode = 0)
+
+**Note**: Timestamps are not implemented yet (reserved for future use).
 
 ### Usage Example
 ```asm
 ; Call stat on a path
 mov rax, 4              ; SYS_STAT
 lea rdi, [path]         ; path pointer
-lea rsi, [stat_buf]     ; buffer for result
+lea rsi, [stat_buf]     ; buffer for result (32 bytes)
 syscall
 
-; Check if it's a directory
-mov al, byte [stat_buf]
-cmp al, 1
+; Check file type from st_mode
+movzx rax, word [stat_buf]  ; Load st_mode
+and rax, 0o170000           ; Mask file type bits
+cmp rax, 0o040000           ; S_IFDIR
 je is_directory
+
+; Check permissions
+movzx rax, word [stat_buf]
+and rax, 0o777              ; Mask permission bits
+; rax now contains rwxrwxrwx bits
 ```
+
+### Permission Enforcement
+**Important**: Permission bits are currently stored and reported but **not enforced**. All files are readable by all processes. Permission enforcement will be added in a future update.
 
 ## Directory Structure
 

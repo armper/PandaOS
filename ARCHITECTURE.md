@@ -135,6 +135,31 @@ PandaOS supports three filesystem backends:
 - `FdKind::DiskFile` / `FdKind::DiskDirectory` - disk filesystem
 - All syscalls (read, write, stat, getdents64, unlink) work transparently
 
+### File Metadata and Permissions
+
+PandaOS supports POSIX-like file metadata with mode bits:
+
+**Metadata Structure:**
+- `st_mode` (u16): File type + permission bits
+- `st_size` (u64): File size in bytes (0 for directories)
+- `st_nlink` (u32): Number of hard links (always 1)
+- `st_uid` (u32): User ID (always 0 - no users yet)
+- `st_gid` (u32): Group ID (always 0 - no groups yet)
+- `st_ino` (u64): Inode number (fake, always 0)
+
+**Mode Bits:**
+- File types: `S_IFREG` (0o100000) for regular files, `S_IFDIR` (0o040000) for directories
+- Permission bits: standard rwxrwxrwx (user/group/other)
+- Default modes:
+  - Directories: `040755` (drwxr-xr-x)
+  - Files: `0100644` (-rw-r--r--)
+
+**Syscalls:**
+- `stat(path, buf)` - Get metadata by path (syscall #4)
+- `fstat(fd, buf)` - Get metadata by file descriptor (syscall #5)
+
+**Important**: Permission bits are stored and reported but **not enforced** yet. All files are readable and writable by all processes. Permission enforcement is planned for a future release.
+
 ### HAL (`hal/`)
 
 Hardware Abstraction Layer provides hardware-independent interfaces:
