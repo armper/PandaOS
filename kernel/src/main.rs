@@ -489,14 +489,14 @@ fn exec_handler(path: &str, arg: Option<&str>) -> Result<(), syscall::ErrorCode>
     }
 }
 
-fn open_handler(path: &str) -> syscall::SyscallResult {
+fn open_handler(path: &str, flags: u64) -> syscall::SyscallResult {
     let scheduler = unsafe { get_scheduler() };
     let current = scheduler.current_process_mut().ok_or(syscall::ErrorCode::ESRCH)?;
 
     // Resolve path relative to cwd
     let resolved_path = fs::resolve_path(&current.cwd, path)?;
 
-    let fd = fs::open_path(&mut current.fd_table, &resolved_path)?;
+    let fd = fs::open_path_with_flags(&mut current.fd_table, &resolved_path, flags)?;
     Ok(fd as u64)
 }
 
@@ -509,7 +509,7 @@ fn read_handler(fd: i32, buf: u64, count: u64) -> syscall::SyscallResult {
     let fd_kind = current.fd_table.get(fd)?;
 
     match fd_kind {
-        fs::FdKind::File(_) => {
+        fs::FdKind::File(_open, _writable) => {
             // Read from file
             let data = current.fd_table.read(fd, count)?;
             crate::usermode::copy_to_user_bytes(buf, data)?;
@@ -558,9 +558,21 @@ fn write_handler(fd: i32, buf: u64, count: u64) -> syscall::SyscallResult {
     let fd_kind = current.fd_table.get(fd)?;
 
     match fd_kind {
-        fs::FdKind::File(_) => {
-            // Files are read-only
-            Err(syscall::ErrorCode::EBADF)
+        fs::FdKind::File(_open, writable) => {
+            if !writable {
+                return Err(syscall::ErrorCode::EBADF);
+            }
+            
+            // Write to writable file - use a temporary buffer
+            let mut temp_buf = [0u8; 4096];
+            let to_write = count.min(temp_buf.len());
+
+            // Copy from user space
+            let copied = crate::usermode::copy_user_bytes(buf, to_write, &mut temp_buf)?;
+
+            // Write to file
+            let written = current.fd_table.write(fd, &temp_buf[..copied])?;
+            Ok(written as u64)
         }
         fs::FdKind::Directory(_) => {
             // Can't write to directories

@@ -2,9 +2,27 @@
 
 use crate::pipe::PipeId;
 use crate::syscall::ErrorCode;
+use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
+use spin::Mutex;
 
 pub const MAX_FDS: usize = 16;
 pub const FIRST_NONSTD_FD: usize = 3;
+
+/// Open flags (subset of POSIX flags)
+pub const O_RDONLY: u64 = 0x0000;
+pub const O_WRONLY: u64 = 0x0001;
+pub const O_RDWR: u64 = 0x0002;
+pub const O_CREAT: u64 = 0x0040;
+pub const O_TRUNC: u64 = 0x0200;
+
+/// Global storage for writable files in /tmp
+/// Maps node_index to file contents
+static WRITABLE_FILES: Mutex<Option<BTreeMap<usize, Vec<u8>>>> = Mutex::new(None);
+
+/// Dynamic file registry for files created at runtime in /tmp
+/// Maps path to node index
+static DYNAMIC_FILES: Mutex<Option<BTreeMap<String, usize>>> = Mutex::new(None);
 
 /// File type enumeration
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,8 +58,8 @@ pub struct OpenFile {
 /// File descriptor kinds
 #[derive(Clone, Copy, Debug)]
 pub enum FdKind {
-    /// Regular file
-    File(OpenFile),
+    /// Regular file (with read/write flags)
+    File(OpenFile, bool), // (open_file, writable)
     /// Directory (opened for reading entries)
     Directory(OpenFile),
     /// Pipe read end
@@ -71,13 +89,32 @@ impl FdTable {
     }
 
     pub fn open_node(&mut self, node_index: usize) -> Result<i32, ErrorCode> {
+        self.open_node_with_flags(node_index, O_RDONLY)
+    }
+
+    pub fn open_node_with_flags(&mut self, node_index: usize, flags: u64) -> Result<i32, ErrorCode> {
         let node = FILES.get(node_index).ok_or(ErrorCode::ENOENT)?;
         let fd = self.allocate_fd()?;
+        
+        // Check access mode
+        let writable = (flags & O_WRONLY) != 0 || (flags & O_RDWR) != 0;
+        
         match node.file_type {
             FileType::File => {
-                self.entries[fd] = Some(FdKind::File(OpenFile { node_index, offset: 0 }));
+                // Handle O_TRUNC flag for writable files
+                if writable && (flags & O_TRUNC) != 0 {
+                    // Truncate file
+                    let mut files = WRITABLE_FILES.lock();
+                    let store = files.get_or_insert_with(BTreeMap::new);
+                    store.insert(node_index, Vec::new());
+                }
+                
+                self.entries[fd] = Some(FdKind::File(OpenFile { node_index, offset: 0 }, writable));
             }
             FileType::Directory => {
+                if writable {
+                    return Err(ErrorCode::EISDIR);
+                }
                 self.entries[fd] = Some(FdKind::Directory(OpenFile { node_index, offset: 0 }));
             }
         }
@@ -145,7 +182,41 @@ impl FdTable {
         }
         let kind = self.entries[fd as usize].ok_or(ErrorCode::EBADF)?;
         match kind {
-            FdKind::File(open) => {
+            FdKind::File(open, _writable) => {
+                // Check if this is a writable file with data in WRITABLE_FILES
+                let files = WRITABLE_FILES.lock();
+                if let Some(ref store) = *files {
+                    if let Some(file_data) = store.get(&open.node_index) {
+                        // Read from writable file storage
+                        if open.offset >= file_data.len() || count == 0 {
+                            return Ok(&[]);
+                        }
+                        let available = file_data.len() - open.offset;
+                        let to_read = available.min(count);
+                        let start = open.offset;
+                        let end = start + to_read;
+                        
+                        // We need to return a &'static [u8], but file_data is heap-allocated
+                        // This is a limitation - we'll need to handle this differently
+                        // For now, we'll leak the memory to get a static reference
+                        // This is not ideal but works for the minimal implementation
+                        
+                        // Create a buffer that lives long enough
+                        use alloc::boxed::Box;
+                        let slice = file_data[start..end].to_vec();
+                        let leaked: &'static [u8] = Box::leak(slice.into_boxed_slice());
+                        
+                        // Update offset
+                        drop(files);
+                        self.entries[fd as usize] =
+                            Some(FdKind::File(OpenFile { node_index: open.node_index, offset: end }, _writable));
+                        
+                        return Ok(leaked);
+                    }
+                }
+                drop(files);
+                
+                // Fall back to static file data
                 let node = FILES.get(open.node_index).ok_or(ErrorCode::ENOENT)?;
                 if open.offset >= node.data.len() || count == 0 {
                     return Ok(&[]);
@@ -155,7 +226,7 @@ impl FdTable {
                 let start = open.offset;
                 let end = start + to_read;
                 self.entries[fd as usize] =
-                    Some(FdKind::File(OpenFile { node_index: open.node_index, offset: end }));
+                    Some(FdKind::File(OpenFile { node_index: open.node_index, offset: end }, _writable));
                 Ok(&node.data[start..end])
             }
             FdKind::Directory(_) => {
@@ -163,6 +234,62 @@ impl FdTable {
                 // Use getdents64 syscall instead
                 Err(ErrorCode::EISDIR)
             }
+            FdKind::PipeRead(_) | FdKind::PipeWrite(_) => {
+                // Pipes are handled through separate syscall path
+                Err(ErrorCode::EBADF)
+            }
+        }
+    }
+
+    /// Write to a file descriptor
+    pub fn write(&mut self, fd: i32, data: &[u8]) -> Result<usize, ErrorCode> {
+        if fd < 0 || fd as usize >= MAX_FDS {
+            return Err(ErrorCode::EBADF);
+        }
+        if fd < FIRST_NONSTD_FD as i32 {
+            return Err(ErrorCode::EBADF);
+        }
+        
+        let kind = self.entries[fd as usize].ok_or(ErrorCode::EBADF)?;
+        match kind {
+            FdKind::File(open, writable) => {
+                if !writable {
+                    return Err(ErrorCode::EBADF);
+                }
+                
+                // Write to writable file storage
+                let mut files = WRITABLE_FILES.lock();
+                let store = files.get_or_insert_with(BTreeMap::new);
+                let file_data = store.entry(open.node_index).or_insert_with(Vec::new);
+                
+                // Ensure file is large enough for the write at current offset
+                if open.offset > file_data.len() {
+                    file_data.resize(open.offset, 0);
+                }
+                
+                // Write or overwrite data at offset
+                if open.offset == file_data.len() {
+                    // Append
+                    file_data.extend_from_slice(data);
+                } else {
+                    // Overwrite - extend file if needed
+                    let end_pos = open.offset + data.len();
+                    if end_pos > file_data.len() {
+                        file_data.resize(end_pos, 0);
+                    }
+                    file_data[open.offset..end_pos].copy_from_slice(data);
+                }
+                
+                // Update offset
+                let new_offset = open.offset + data.len();
+                self.entries[fd as usize] = Some(FdKind::File(
+                    OpenFile { node_index: open.node_index, offset: new_offset },
+                    writable
+                ));
+                
+                Ok(data.len())
+            }
+            FdKind::Directory(_) => Err(ErrorCode::EBADF),
             FdKind::PipeRead(_) | FdKind::PipeWrite(_) => {
                 // Pipes are handled through separate syscall path
                 Err(ErrorCode::EBADF)
@@ -214,8 +341,8 @@ impl FdTable {
 
         // Duplicate the fd kind and increment refcounts for pipes
         match old_kind {
-            FdKind::File(open) => {
-                self.entries[newfd as usize] = Some(FdKind::File(open));
+            FdKind::File(open, writable) => {
+                self.entries[newfd as usize] = Some(FdKind::File(open, writable));
             }
             FdKind::Directory(open) => {
                 self.entries[newfd as usize] = Some(FdKind::Directory(open));
@@ -266,6 +393,8 @@ pub static FILES: &[FileNode] = &[
     FileNode { path: "/bin", data: b"", file_type: FileType::Directory },
     // /etc directory
     FileNode { path: "/etc", data: b"", file_type: FileType::Directory },
+    // /tmp directory (writable)
+    FileNode { path: "/tmp", data: b"", file_type: FileType::Directory },
     // Regular files
     FileNode {
         path: "/init",
@@ -315,9 +444,69 @@ pub fn lookup(path: &str) -> Option<&'static [u8]> {
     FILES.iter().find(|entry| entry.path == path).map(|entry| entry.data)
 }
 
-/// Look up a file node by absolute path.
+/// Look up a file node by absolute path (including dynamic files)
 pub fn lookup_node(path: &str) -> Option<(usize, &'static FileNode)> {
-    FILES.iter().enumerate().find(|(_, entry)| entry.path == path)
+    // First check static FILES
+    if let Some(found) = FILES.iter().enumerate().find(|(_, entry)| entry.path == path) {
+        return Some(found);
+    }
+    
+    // Check dynamic files created in /tmp
+    let dynamic = DYNAMIC_FILES.lock();
+    if let Some(ref map) = *dynamic {
+        if let Some(&node_index) = map.get(path) {
+            // Return a synthetic node - we'll use a placeholder from FILES
+            // The actual data is in WRITABLE_FILES
+            return Some((node_index, &FILES[0])); // Placeholder
+        }
+    }
+    
+    None
+}
+
+/// Create a new dynamic file in /tmp
+fn create_dynamic_file(path: &str) -> Result<usize, ErrorCode> {
+    // Validate path is in /tmp
+    if !path.starts_with("/tmp/") {
+        return Err(ErrorCode::EACCES);
+    }
+    
+    // Check if file already exists
+    if lookup_node(path).is_some() {
+        return Err(ErrorCode::EEXIST);
+    }
+    
+    // Allocate a new node index (use high numbers to avoid conflicts)
+    // We'll use FILES.len() + dynamic file count
+    let mut dynamic = DYNAMIC_FILES.lock();
+    let map = dynamic.get_or_insert_with(BTreeMap::new);
+    
+    let node_index = FILES.len() + map.len();
+    map.insert(String::from(path), node_index);
+    
+    // Initialize empty file in writable storage
+    let mut files = WRITABLE_FILES.lock();
+    let store = files.get_or_insert_with(BTreeMap::new);
+    store.insert(node_index, Vec::new());
+    
+    Ok(node_index)
+}
+
+/// Open a file by path into a file descriptor table with flags.
+pub fn open_path_with_flags(table: &mut FdTable, path: &str, flags: u64) -> Result<i32, ErrorCode> {
+    // Try to look up existing file
+    let node_index = if let Some((idx, _node)) = lookup_node(path) {
+        idx
+    } else {
+        // File doesn't exist - check if O_CREAT is set
+        if (flags & O_CREAT) != 0 {
+            create_dynamic_file(path)?
+        } else {
+            return Err(ErrorCode::ENOENT);
+        }
+    };
+    
+    table.open_node_with_flags(node_index, flags)
 }
 
 /// Open a file by path into a file descriptor table.
@@ -344,7 +533,8 @@ pub struct DirEntry {
 /// Returns a list of (name, file_type) tuples
 pub fn list_directory(
     dir_path: &str,
-) -> Result<alloc::vec::Vec<(&'static str, FileType)>, ErrorCode> {
+) -> Result<alloc::vec::Vec<(alloc::string::String, FileType)>, ErrorCode> {
+    use alloc::string::String;
     use alloc::vec::Vec;
 
     // Verify the path is a directory
@@ -370,7 +560,7 @@ pub fn list_directory(
             if file.path.starts_with('/') && file.path[1..].find('/').is_none() {
                 let name = &file.path[1..]; // Strip leading '/'
                 if !name.is_empty() {
-                    entries.push((name, file.file_type));
+                    entries.push((String::from(name), file.file_type));
                 }
             }
         } else {
@@ -380,7 +570,23 @@ pub fn list_directory(
                 let remainder = &file.path[prefix_with_slash.len()..];
                 // Check if it's a direct child (no more '/' in remainder)
                 if !remainder.contains('/') {
-                    entries.push((remainder, file.file_type));
+                    entries.push((String::from(remainder), file.file_type));
+                }
+            }
+        }
+    }
+    
+    // Add dynamic files in /tmp if listing /tmp
+    if dir_path == "/tmp" {
+        let dynamic = DYNAMIC_FILES.lock();
+        if let Some(ref map) = *dynamic {
+            for path in map.keys() {
+                if path.starts_with("/tmp/") {
+                    let name = &path[5..]; // Strip "/tmp/"
+                    if !name.contains('/') {
+                        // Direct child of /tmp
+                        entries.push((String::from(name), FileType::File));
+                    }
                 }
             }
         }
@@ -462,7 +668,20 @@ pub fn validate_directory(path: &str) -> Result<(), ErrorCode> {
 
 /// Get file metadata by path
 pub fn stat_path(path: &str) -> Result<FileMetadata, ErrorCode> {
-    let (_, node) = lookup_node(path).ok_or(ErrorCode::ENOENT)?;
+    let (node_index, node) = lookup_node(path).ok_or(ErrorCode::ENOENT)?;
+    
+    // Check if this is a dynamic file with data in WRITABLE_FILES
+    let files = WRITABLE_FILES.lock();
+    if let Some(ref store) = *files {
+        if let Some(file_data) = store.get(&node_index) {
+            return Ok(FileMetadata {
+                file_type: FileType::File,
+                size: file_data.len() as u64,
+            });
+        }
+    }
+    
+    // Fall back to static node data
     Ok(FileMetadata {
         file_type: node.file_type,
         size: if node.file_type == FileType::Directory {
@@ -477,7 +696,19 @@ pub fn stat_path(path: &str) -> Result<FileMetadata, ErrorCode> {
 pub fn fstat_fd(table: &FdTable, fd: i32) -> Result<FileMetadata, ErrorCode> {
     let kind = table.get(fd)?;
     match kind {
-        FdKind::File(open) | FdKind::Directory(open) => {
+        FdKind::File(open, _) | FdKind::Directory(open) => {
+            // Check if this is a dynamic file with data in WRITABLE_FILES
+            let files = WRITABLE_FILES.lock();
+            if let Some(ref store) = *files {
+                if let Some(file_data) = store.get(&open.node_index) {
+                    return Ok(FileMetadata {
+                        file_type: FileType::File,
+                        size: file_data.len() as u64,
+                    });
+                }
+            }
+            
+            // Fall back to static node
             let node = FILES.get(open.node_index).ok_or(ErrorCode::ENOENT)?;
             Ok(FileMetadata {
                 file_type: node.file_type,
