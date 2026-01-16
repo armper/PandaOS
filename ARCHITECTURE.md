@@ -223,7 +223,7 @@ None yet - hardware access is direct. Future refactoring will add:
 - **rcx, r11**: Preserved by hardware (store user RIP and RFLAGS)
 
 **Implemented Syscalls:**
-- `read(fd, buf, count)` - syscall #0 (stdin from serial; file fds read-only; pipe read)
+- `read(fd, buf, count)` - syscall #0 (stdin from TTY line buffer; file fds read-only; pipe read)
 - `write(fd, buf, count)` - syscall #1 (stdout/stderr to serial; pipe write)
 - `open(path, flags, mode)` - syscall #2 (read-only, absolute paths)
 - `close(fd)` - syscall #3 (closes file descriptors >= 3, handles pipe refcounting)
@@ -525,6 +525,93 @@ make future Ctrl+Z support straightforward when needed.
 - `fd >= 3` are allocated on open and track per-fd offsets
 - Supports four FD kinds: File, Directory, PipeRead, PipeWrite
 - Directories opened for reading can be queried via `getdents64`
+
+## TTY Subsystem
+
+**Status:** ✅ **IMPLEMENTED** - Minimal line discipline with canonical mode and signal support
+
+### Overview
+
+PandaOS implements a TTY (terminal) layer that sits between raw device input (serial port) and user programs, providing line buffering, echo, and special character handling. This creates a proper Unix terminal experience where input is processed at the kernel level before being delivered to applications.
+
+### Architecture
+
+```
+Serial Device → TTY Input Handler → Line Buffer → sys_read(stdin)
+                      ↓
+                  Echo Output → Serial Device
+```
+
+### Features
+
+**Line Discipline (Canonical Mode):**
+- Input characters are buffered in the TTY line buffer
+- Lines are committed on newline (`\n` or `\r`)
+- Only complete lines are delivered to `read(0, ...)`
+- Readers block until a full line is available
+
+**Echo:**
+- Characters are echoed back to the serial port as they're typed
+- Provides visual feedback to the user
+- Echo is synchronous with input processing
+
+**Special Character Handling:**
+- **Backspace** (`0x08` or `0x7F`): Erases the last character from the current line and echoes BS-Space-BS sequence
+- **Ctrl+C** (`0x03`): Clears the input buffer, echoes `^C\n`, and sends SIGINT to foreground process group
+- **Newline** (`\n` or `\r`): Commits the current line, echoes CR+LF, and makes line available to readers
+
+**Signal Integration:**
+- Ctrl+C sends SIGINT to the foreground process group (via `kill(-pgid, SIGINT)`)
+- TTY interacts with the scheduler to deliver signals
+- Signal delivery happens before returning to user mode
+
+### File Descriptor Integration
+
+- **fd 0 (stdin)**: Reads from TTY line buffer via `sys_read()`
+  - Blocks until a complete line is available
+  - Processes serial input byte-by-byte through TTY
+  - Returns line data including the trailing newline
+- **fd 1 (stdout)**: Direct write to serial port (unchanged)
+- **fd 2 (stderr)**: Direct write to serial port (unchanged)
+
+When stdin is redirected to a pipe, `sys_read()` bypasses the TTY and reads from the pipe instead.
+
+### Implementation Details
+
+**TTY Module** (`kernel/src/tty.rs`):
+- `Tty` struct maintains:
+  - Current line being edited (`current_line: Vec<u8>`)
+  - Queue of completed lines (`completed_lines: VecDeque<Vec<u8>>`)
+  - Echo flag (always enabled)
+- Global TTY instance: `GLOBAL_TTY: Mutex<Tty>`
+- Input processing: `tty_input_byte(byte: u8) -> TtyAction`
+- Read operation: `tty_read(buf: &mut [u8]) -> Option<usize>`
+
+**Syscall Integration** (`kernel/src/syscall.rs`):
+- `sys_read(0, ...)` polls serial device and feeds bytes to TTY
+- TTY actions trigger signal delivery when Ctrl+C is pressed
+- Blocking read loop continues until line data is available
+
+### Explicit Non-Features
+
+- No raw mode (character-at-a-time input)
+- No termios API
+- No Ctrl+Z (job control suspend)
+- No background jobs
+- No screen control or cursor movement codes
+- Single controlling TTY only
+
+### Testing
+
+Validated via `tty-smoke` integration test with scripted input:
+```
+echo hello
+<Ctrl+C>
+ls
+exit
+```
+
+Verifies line buffering, echo, Ctrl+C signal delivery, and prompt recovery.
 
 ## Pipe Subsystem
 

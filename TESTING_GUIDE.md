@@ -389,6 +389,61 @@ TEST PASS ls_stat_smoke
   5. Prints entry name with `/` suffix if directory
 - Metadata format: 16 bytes (1 byte file_type, 7 bytes padding, 8 bytes size)
 
+### Test 6: tty_smoke - TTY Line Discipline and Signal Handling
+
+**Run:**
+```bash
+TTY_SMOKE=1 ./scripts/qemu-test.sh
+```
+
+**Serial log:** `target/qemu/tty_smoke.log`
+
+**Scripted Input:**
+```
+echo hello
+<Ctrl+C>
+ls
+exit
+```
+
+**Expected Output (serial, excerpt):**
+```
+panda> echo hello
+hello
+panda> ^C
+panda> ls
+bin/
+etc/
+init
+panda> exit
+TEST PASS tty_smoke
+```
+
+**What it tests:**
+- **Line buffering (canonical mode)**: Characters are buffered until newline
+- **Echo**: Input characters are echoed back to the user
+- **Ctrl+C handling**: Sends SIGINT to foreground process group
+- **Signal delivery**: TTY layer generates signals before shell processes input
+- **Input buffer management**: Ctrl+C clears the current line buffer
+- **Prompt recovery**: Shell prompt returns cleanly after interrupt
+
+**Technical details:**
+- TTY subsystem (`kernel/src/tty.rs`) sits between serial device and `sys_read()`
+- Input flow: Serial → `tty_input_byte()` → Line buffer → `sys_read(fd=0)`
+- Special character handling:
+  - `\n` or `\r`: Commits line, echoes CR+LF
+  - `0x08` or `0x7F`: Backspace, erases character, echoes BS-Space-BS
+  - `0x03`: Ctrl+C, clears buffer, echoes `^C\n`, sends SIGINT
+- Signal integration: Ctrl+C calls `signal_handler()` which sends SIGINT to foreground pgid
+- Blocking read: `sys_read(0, ...)` blocks until TTY has complete line
+- Echo is synchronous with input processing
+
+**Behavior differences from raw serial input:**
+- Before TTY: Characters delivered immediately byte-by-byte to shell
+- After TTY: Characters buffered in kernel until newline, then delivered as complete line
+- Before TTY: Shell handled Ctrl+C and backspace manually
+- After TTY: Kernel TTY layer handles Ctrl+C (signal) and backspace (edit buffer)
+
 ### Debugging Smoke Tests
 
 All QEMU smoke tests write serial output to `target/qemu/<test_name>.log`:
@@ -397,6 +452,7 @@ All QEMU smoke tests write serial output to `target/qemu/<test_name>.log`:
 - `target/qemu/fork_exec_smoke.log`
 - `target/qemu/pipe_smoke.log`
 - `target/qemu/ls_stat_smoke.log`
+- `target/qemu/tty_smoke.log`
 
 The test script uses QEMU's `-serial file:` option to write serial output directly to these
 log files without buffering. This ensures reliable capture of kernel output.

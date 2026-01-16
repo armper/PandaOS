@@ -95,14 +95,20 @@ if [ "${DISK_FS_SMOKE:-0}" -eq 1 ]; then
     FEATURES+=(--features disk-fs-smoke)
     EXPECTED_MARKER="TEST PASS disk_fs_smoke"
 fi
+if [ "${TTY_SMOKE:-0}" -eq 1 ]; then
+    FEATURE_COUNT=$((FEATURE_COUNT + 1))
+    TEST_NAME="tty_smoke"
+    FEATURES+=(--features tty-smoke)
+    EXPECTED_MARKER="TEST PASS tty_smoke"
+fi
 
 if [ $FEATURE_COUNT -gt 1 ]; then
-    echo "Error: SHELL_SMOKE, VFS_CAT_SMOKE, FORK_EXEC_SMOKE, PIPE_SMOKE, CTRLC_SMOKE, LS_SMOKE, LS_STAT_SMOKE, CD_SMOKE, PATH_SMOKE, REDIR_SMOKE, and DISK_FS_SMOKE are mutually exclusive"
+    echo "Error: SHELL_SMOKE, VFS_CAT_SMOKE, FORK_EXEC_SMOKE, PIPE_SMOKE, CTRLC_SMOKE, LS_SMOKE, LS_STAT_SMOKE, CD_SMOKE, PATH_SMOKE, REDIR_SMOKE, DISK_FS_SMOKE, and TTY_SMOKE are mutually exclusive"
     exit 1
 fi
 
 if [ $FEATURE_COUNT -eq 0 ]; then
-    echo "Error: Must set one of SHELL_SMOKE, VFS_CAT_SMOKE, FORK_EXEC_SMOKE, PIPE_SMOKE, CTRLC_SMOKE, LS_SMOKE, LS_STAT_SMOKE, CD_SMOKE, PATH_SMOKE, REDIR_SMOKE, or DISK_FS_SMOKE"
+    echo "Error: Must set one of SHELL_SMOKE, VFS_CAT_SMOKE, FORK_EXEC_SMOKE, PIPE_SMOKE, CTRLC_SMOKE, LS_SMOKE, LS_STAT_SMOKE, CD_SMOKE, PATH_SMOKE, REDIR_SMOKE, DISK_FS_SMOKE, or TTY_SMOKE"
     exit 1
 fi
 

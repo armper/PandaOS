@@ -53,6 +53,7 @@ pub mod scheduler;
 pub mod syscall;
 pub mod timer;
 pub mod tmpfs;
+pub mod tty;
 pub mod usermode;
 
 /// Entry point for the kernel
@@ -365,6 +366,7 @@ unsafe fn init_scheduler_and_start() -> ! {
     syscall::set_chdir_handler(chdir_handler);
     syscall::set_unlink_handler(unlink_handler);
     syscall::set_getenv_handler(getenv_handler);
+    syscall::set_signal_handler(signal_handler);
 
     // Unmask timer interrupt (IRQ 0)
     println!("Enabling timer interrupt...");
@@ -843,6 +845,26 @@ fn kill_handler(pid: i32, sig: i32) -> syscall::SyscallResult {
     } else {
         // pid == 0: signal current process's group (not implemented yet)
         Err(syscall::ErrorCode::EINVAL)
+    }
+}
+
+/// Signal handler for TTY Ctrl+C
+///
+/// Sends SIGINT to the foreground process group
+fn signal_handler() {
+    use crate::process::Signal;
+
+    // SAFETY: Called from syscall context with interrupts disabled
+    let scheduler = unsafe { get_scheduler() };
+
+    if let Some(pgid) = scheduler.foreground_pgid() {
+        serial_println!("[TTY] Ctrl+C: sending SIGINT to foreground pgid {}", pgid.as_u64());
+        let count = scheduler.signal_process_group(pgid, Signal::SIGINT);
+        if count > 0 {
+            serial_println!("[TTY] Signaled {} processes", count);
+        }
+    } else {
+        serial_println!("[TTY] Ctrl+C: no foreground process group");
     }
 }
 
@@ -1385,6 +1407,8 @@ fn exit_handler(status: i32) -> ! {
         serial_println!("TEST PASS redir_smoke");
         #[cfg(feature = "elf-exec-smoke")]
         serial_println!("TEST PASS elf_exec_smoke");
+        #[cfg(feature = "tty-smoke")]
+        serial_println!("TEST PASS tty_smoke");
         #[cfg(not(any(
             feature = "shell-smoke",
             feature = "vfs-cat-smoke",
@@ -1396,7 +1420,8 @@ fn exit_handler(status: i32) -> ! {
             feature = "cd-smoke",
             feature = "path-smoke",
             feature = "redir-smoke",
-            feature = "elf-exec-smoke"
+            feature = "elf-exec-smoke",
+            feature = "tty-smoke"
         )))]
         serial_println!("TEST PASS exec_smoke");
         let kernel_pt = usermode::kernel_page_table_phys();
