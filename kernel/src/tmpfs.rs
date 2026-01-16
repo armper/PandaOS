@@ -160,11 +160,8 @@ impl TmpFs {
         self.nodes.insert(new_inode, new_node);
 
         // Set default mode
-        let default_mode = if is_dir {
-            crate::fs::DEFAULT_DIR_MODE
-        } else {
-            crate::fs::DEFAULT_FILE_MODE
-        };
+        let default_mode =
+            if is_dir { crate::fs::DEFAULT_DIR_MODE } else { crate::fs::DEFAULT_FILE_MODE };
         self.modes.insert(new_inode, default_mode);
 
         // Add to parent directory (now we can safely get mut again)

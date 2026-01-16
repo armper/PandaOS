@@ -613,7 +613,12 @@ pub static FILES: &[FileNode] = &[
         file_type: FileType::File,
         mode: DEFAULT_FILE_MODE,
     },
-    FileNode { path: "/etc/version", data: b"PandaOS 0.1.0\r\n", file_type: FileType::File, mode: DEFAULT_FILE_MODE },
+    FileNode {
+        path: "/etc/version",
+        data: b"PandaOS 0.1.0\r\n",
+        file_type: FileType::File,
+        mode: DEFAULT_FILE_MODE,
+    },
 ];
 
 /// Look up a file by absolute path.

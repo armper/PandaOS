@@ -34,7 +34,18 @@ disable the feature"
     // Copy ELF binaries to output directory
     let userland_bin = PathBuf::from("../userland/bin");
 
-    for program in &["hello", "hello1", "hello2", "init", "sh", "cat", "true", "brk_test", "mmap_test", "vm_test"] {
+    for program in &[
+        "hello",
+        "hello1",
+        "hello2",
+        "init",
+        "sh",
+        "cat",
+        "true",
+        "brk_test",
+        "mmap_test",
+        "vm_test",
+    ] {
         let src = userland_bin.join(program);
         let dst = out_dir.join(format!("{}_elf", program));
 
