@@ -5,6 +5,9 @@
 
 use panda_hal::block::{BlockDevice, BlockError, SECTOR_SIZE};
 
+// External allocations used in readdir
+extern crate alloc;
+
 /// Filesystem magic number: "PAND"
 const FS_MAGIC: u32 = 0x50414E44;
 
@@ -865,6 +868,248 @@ impl<D: BlockDevice> HomeFs<D> {
         self.write_inode(&inode)?;
 
         Ok(bytes_written)
+    }
+
+    /// Remove a directory entry
+    fn remove_dir_entry(&mut self, dir_inode_num: u32, name: &str) -> Result<(), HomeFsError> {
+        let dir_inode = self.read_inode(dir_inode_num)?;
+        if dir_inode.file_type != FileType::Directory as u32 {
+            return Err(HomeFsError::NotDirectory);
+        }
+
+        // Find and remove entry
+        for block_idx in 0..dir_inode.blocks_used as usize {
+            if block_idx >= MAX_DIRECT_BLOCKS {
+                break;
+            }
+
+            let block_num = dir_inode.direct_blocks[block_idx];
+            if block_num == 0 {
+                break;
+            }
+
+            let block_sector = self.superblock.first_data_block + block_num;
+
+            for entry_idx in 0..ENTRIES_PER_BLOCK {
+                let entry = self.read_dir_entry(block_sector.into(), entry_idx)?;
+                
+                if entry.inode == 0 {
+                    continue;
+                }
+
+                // Compare name
+                let entry_name = core::str::from_utf8(&entry.name[..entry.name_len as usize])
+                    .map_err(|_| HomeFsError::Corrupted)?;
+                
+                if entry_name == name {
+                    // Found it - mark as empty
+                    let empty_entry = DirEntry {
+                        inode: 0,
+                        name_len: 0,
+                        file_type: 0,
+                        padding: 0,
+                        name: [0; MAX_FILENAME_LEN],
+                    };
+                    self.write_dir_entry(block_sector.into(), entry_idx, &empty_entry)?;
+                    return Ok(());
+                }
+            }
+        }
+
+        Err(HomeFsError::NotFound)
+    }
+
+    /// Delete a file
+    pub fn unlink_file(&mut self, dir_inode_num: u32, name: &str) -> Result<(), HomeFsError> {
+        // Lookup file
+        let file_inode_num = self.lookup_in_dir(dir_inode_num, name)?;
+        let file_inode = self.read_inode(file_inode_num)?;
+
+        if file_inode.file_type == FileType::Directory as u32 {
+            return Err(HomeFsError::IsDirectory);
+        }
+
+        // Free all blocks
+        for block_idx in 0..file_inode.blocks_used as usize {
+            if block_idx >= MAX_DIRECT_BLOCKS {
+                break;
+            }
+            let block_num = file_inode.direct_blocks[block_idx];
+            if block_num > 0 {
+                self.free_block(block_num)?;
+            }
+        }
+
+        // Free inode
+        self.free_inode(file_inode_num)?;
+
+        // Remove directory entry
+        self.remove_dir_entry(dir_inode_num, name)?;
+
+        Ok(())
+    }
+
+    /// Delete an empty directory
+    pub fn rmdir(&mut self, parent_inode_num: u32, name: &str) -> Result<(), HomeFsError> {
+        // Lookup directory
+        let dir_inode_num = self.lookup_in_dir(parent_inode_num, name)?;
+        let dir_inode = self.read_inode(dir_inode_num)?;
+
+        if dir_inode.file_type != FileType::Directory as u32 {
+            return Err(HomeFsError::NotDirectory);
+        }
+
+        // Check if empty (only . and .. entries)
+        let mut entry_count = 0;
+        for block_idx in 0..dir_inode.blocks_used as usize {
+            if block_idx >= MAX_DIRECT_BLOCKS {
+                break;
+            }
+
+            let block_num = dir_inode.direct_blocks[block_idx];
+            if block_num == 0 {
+                break;
+            }
+
+            let block_sector = self.superblock.first_data_block + block_num;
+
+            for entry_idx in 0..ENTRIES_PER_BLOCK {
+                let entry = self.read_dir_entry(block_sector.into(), entry_idx)?;
+                
+                if entry.inode == 0 {
+                    continue;
+                }
+
+                entry_count += 1;
+            }
+        }
+
+        // Should only have . and .. (2 entries)
+        if entry_count > 2 {
+            return Err(HomeFsError::NotEmpty);
+        }
+
+        // Free all blocks
+        for block_idx in 0..dir_inode.blocks_used as usize {
+            if block_idx >= MAX_DIRECT_BLOCKS {
+                break;
+            }
+            let block_num = dir_inode.direct_blocks[block_idx];
+            if block_num > 0 {
+                self.free_block(block_num)?;
+            }
+        }
+
+        // Free inode
+        self.free_inode(dir_inode_num)?;
+
+        // Remove directory entry from parent
+        self.remove_dir_entry(parent_inode_num, name)?;
+
+        Ok(())
+    }
+
+    /// Rename a file or directory within the filesystem
+    pub fn rename(&mut self, old_dir: u32, old_name: &str, new_dir: u32, new_name: &str) -> Result<(), HomeFsError> {
+        // Lookup old entry
+        let inode_num = self.lookup_in_dir(old_dir, old_name)?;
+        let inode = self.read_inode(inode_num)?;
+
+        // Check if new name already exists
+        if self.lookup_in_dir(new_dir, new_name).is_ok() {
+            return Err(HomeFsError::AlreadyExists);
+        }
+
+        // Add new entry
+        let file_type = if inode.file_type == FileType::Directory as u32 {
+            FileType::Directory
+        } else {
+            FileType::File
+        };
+        self.add_dir_entry(new_dir, new_name, inode_num, file_type)?;
+
+        // Remove old entry
+        self.remove_dir_entry(old_dir, old_name)?;
+
+        Ok(())
+    }
+
+    /// List directory entries
+    pub fn readdir(&mut self, dir_inode_num: u32) -> Result<alloc::vec::Vec<(u32, alloc::string::String, FileType)>, HomeFsError> {
+        let dir_inode = self.read_inode(dir_inode_num)?;
+        if dir_inode.file_type != FileType::Directory as u32 {
+            return Err(HomeFsError::NotDirectory);
+        }
+
+        let mut entries = alloc::vec::Vec::new();
+
+        for block_idx in 0..dir_inode.blocks_used as usize {
+            if block_idx >= MAX_DIRECT_BLOCKS {
+                break;
+            }
+
+            let block_num = dir_inode.direct_blocks[block_idx];
+            if block_num == 0 {
+                break;
+            }
+
+            let block_sector = self.superblock.first_data_block + block_num;
+
+            for entry_idx in 0..ENTRIES_PER_BLOCK {
+                let entry = self.read_dir_entry(block_sector.into(), entry_idx)?;
+                
+                if entry.inode == 0 {
+                    continue;
+                }
+
+                let name = core::str::from_utf8(&entry.name[..entry.name_len as usize])
+                    .map_err(|_| HomeFsError::Corrupted)?;
+                
+                let file_type = FileType::from_u32(entry.file_type as u32)
+                    .ok_or(HomeFsError::Corrupted)?;
+
+                entries.push((entry.inode, alloc::string::String::from(name), file_type));
+            }
+        }
+
+        Ok(entries)
+    }
+
+    /// Truncate a file to zero length
+    pub fn truncate(&mut self, inode_num: u32) -> Result<(), HomeFsError> {
+        let mut inode = self.read_inode(inode_num)?;
+        
+        if inode.file_type != FileType::File as u32 {
+            return Err(HomeFsError::IsDirectory);
+        }
+
+        // Free all blocks
+        for block_idx in 0..inode.blocks_used as usize {
+            if block_idx >= MAX_DIRECT_BLOCKS {
+                break;
+            }
+            let block_num = inode.direct_blocks[block_idx];
+            if block_num > 0 {
+                self.free_block(block_num)?;
+            }
+        }
+
+        // Update inode
+        inode.size = 0;
+        inode.blocks_used = 0;
+        inode.direct_blocks = [0; MAX_DIRECT_BLOCKS];
+
+        self.write_inode(&inode)?;
+
+        Ok(())
+    }
+
+    /// Set file permissions
+    pub fn chmod(&mut self, inode_num: u32, mode: u16) -> Result<(), HomeFsError> {
+        let mut inode = self.read_inode(inode_num)?;
+        inode.mode = mode & 0o777; // Only permission bits
+        self.write_inode(&inode)?;
+        Ok(())
     }
 }
 
