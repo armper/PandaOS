@@ -169,7 +169,8 @@ pub fn diskfs_stat(inode: u32) -> Result<FileMetadata, ErrorCode> {
         FileType::File => crate::fs::DEFAULT_FILE_MODE,
     };
 
-    Ok(FileMetadata { file_type, size: file.size, mode })
+    // Default ownership: root:root
+    Ok(FileMetadata { file_type, size: file.size, mode, uid: 0, gid: 0 })
 }
 
 /// List directory on disk filesystem

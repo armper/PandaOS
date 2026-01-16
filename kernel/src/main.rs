@@ -371,6 +371,11 @@ unsafe fn init_scheduler_and_start() -> ! {
     syscall::set_unlink_handler(unlink_handler);
     syscall::set_getenv_handler(getenv_handler);
     syscall::set_chmod_handler(chmod_handler);
+    syscall::set_chown_handler(chown_handler);
+    syscall::set_getuid_handler(getuid_handler);
+    syscall::set_getgid_handler(getgid_handler);
+    syscall::set_setuid_handler(setuid_handler);
+    syscall::set_setgid_handler(setgid_handler);
     syscall::set_signal_handler(signal_handler);
 
     // Unmask timer interrupt (IRQ 0)
@@ -520,7 +525,7 @@ fn execve_handler(
     }
 
     // Check execute permission
-    if !fs::can_exec(metadata.mode) {
+    if !fs::can_exec(current.uid, current.gid, metadata.uid, metadata.gid, metadata.mode) {
         return Err(syscall::ErrorCode::EACCES);
     }
 
@@ -581,7 +586,7 @@ fn open_handler(path: &str, flags: u64) -> syscall::SyscallResult {
     // Resolve path relative to cwd
     let resolved_path = fs::resolve_path(&current.cwd, path)?;
 
-    let fd = fs::open_path_with_flags(&mut current.fd_table, &resolved_path, flags)?;
+    let fd = fs::open_path_with_flags(&mut current.fd_table, &resolved_path, flags, current.uid, current.gid)?;
     Ok(fd as u64)
 }
 
@@ -1206,9 +1211,99 @@ fn chmod_handler(path_ptr: u64, mode: u16) -> syscall::SyscallResult {
         return Err(syscall::ErrorCode::EINVAL);
     }
 
+    // Get file metadata to check ownership
+    let metadata = fs::stat_path(&resolved_path)?;
+
+    // Only owner or root can chmod
+    if current.uid != 0 && current.uid != metadata.uid {
+        return Err(syscall::ErrorCode::EPERM);
+    }
+
     // Change the file mode
     fs::chmod_path(&resolved_path, mode)?;
 
+    Ok(0)
+}
+
+/// chown handler - change file ownership
+fn chown_handler(path_ptr: u64, uid: u32, gid: u32) -> syscall::SyscallResult {
+    const MAX_PATH_LEN: usize = 64;
+    let mut path_buf = [0u8; MAX_PATH_LEN];
+
+    let path = crate::usermode::copy_user_cstr(path_ptr, &mut path_buf)?;
+
+    // SAFETY: Called from syscall handler with interrupts disabled
+    let scheduler = unsafe { get_scheduler() };
+    let current = scheduler.current_process().ok_or(syscall::ErrorCode::ESRCH)?;
+
+    // Only root can chown
+    if current.uid != 0 {
+        return Err(syscall::ErrorCode::EPERM);
+    }
+
+    // Resolve path relative to cwd
+    let resolved_path = fs::resolve_path(&current.cwd, path)?;
+
+    // Change the file ownership
+    // Linux allows -1 (u32::MAX) to mean "don't change"
+    fs::chown_path(&resolved_path, uid, gid)?;
+
+    Ok(0)
+}
+
+/// getuid handler - get real user ID
+fn getuid_handler() -> syscall::SyscallResult {
+    // SAFETY: Called from syscall handler with interrupts disabled
+    let scheduler = unsafe { get_scheduler() };
+    let current = scheduler.current_process().ok_or(syscall::ErrorCode::ESRCH)?;
+    Ok(current.uid as u64)
+}
+
+/// getgid handler - get real group ID
+fn getgid_handler() -> syscall::SyscallResult {
+    // SAFETY: Called from syscall handler with interrupts disabled
+    let scheduler = unsafe { get_scheduler() };
+    let current = scheduler.current_process().ok_or(syscall::ErrorCode::ESRCH)?;
+    Ok(current.gid as u64)
+}
+
+/// setuid handler - set user ID
+fn setuid_handler(uid: u32) -> syscall::SyscallResult {
+    // SAFETY: Called from syscall handler with interrupts disabled
+    let scheduler = unsafe { get_scheduler() };
+    let current = scheduler.current_process_mut().ok_or(syscall::ErrorCode::ESRCH)?;
+
+    // Only root can setuid
+    if current.uid != 0 {
+        return Err(syscall::ErrorCode::EPERM);
+    }
+
+    // Only allow changing to root (0) or user (1000)
+    if uid != 0 && uid != 1000 {
+        return Err(syscall::ErrorCode::EINVAL);
+    }
+
+    current.uid = uid;
+    Ok(0)
+}
+
+/// setgid handler - set group ID
+fn setgid_handler(gid: u32) -> syscall::SyscallResult {
+    // SAFETY: Called from syscall handler with interrupts disabled
+    let scheduler = unsafe { get_scheduler() };
+    let current = scheduler.current_process_mut().ok_or(syscall::ErrorCode::ESRCH)?;
+
+    // Only root can setgid
+    if current.uid != 0 {
+        return Err(syscall::ErrorCode::EPERM);
+    }
+
+    // Only allow changing to root (0) or user (1000)
+    if gid != 0 && gid != 1000 {
+        return Err(syscall::ErrorCode::EINVAL);
+    }
+
+    current.gid = gid;
     Ok(0)
 }
 
@@ -1925,7 +2020,7 @@ fn run_disk_fs_smoke_test() {
 
     // Test 3: Read contents of /mnt/hello.txt
     let mut fd_table = fs::FdTable::new();
-    match fs::open_path_with_flags(&mut fd_table, "/mnt/hello.txt", fs::O_RDONLY) {
+    match fs::open_path_with_flags(&mut fd_table, "/mnt/hello.txt", fs::O_RDONLY, 0, 0) {
         Ok(fd) => {
             serial_println!("✓ Opened /mnt/hello.txt (fd {})", fd);
 

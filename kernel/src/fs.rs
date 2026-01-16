@@ -29,6 +29,10 @@ static DYNAMIC_FILES: Mutex<Option<BTreeMap<String, usize>>> = Mutex::new(None);
 /// Maps node_index to mode bits
 static FILE_MODES: Mutex<Option<BTreeMap<usize, u16>>> = Mutex::new(None);
 
+/// Ownership storage for files (in-memory and dynamic)
+/// Maps node_index to (uid, gid) tuple
+static FILE_OWNERSHIP: Mutex<Option<BTreeMap<usize, (u32, u32)>>> = Mutex::new(None);
+
 /// File type enumeration
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -75,6 +79,10 @@ pub struct FileMetadata {
     pub size: u64,
     /// POSIX mode (file type + permission bits)
     pub mode: u16,
+    /// Owner user ID
+    pub uid: u32,
+    /// Owner group ID
+    pub gid: u32,
 }
 
 impl FileMetadata {
@@ -89,32 +97,68 @@ impl FileMetadata {
     }
 }
 
-/// Permission check helpers
-/// These check owner permissions only (uid always 0 for now)
+/// Permission check helpers following Unix owner/group/other semantics
 
-/// Check if a file/directory is readable by the owner
-pub fn can_read(mode: u16) -> bool {
-    (mode & S_IRUSR) != 0
+/// Check if a process can read a file/directory
+/// Follows Unix semantics: checks owner, then group, then other permissions
+pub fn can_read(proc_uid: u32, proc_gid: u32, file_uid: u32, file_gid: u32, mode: u16) -> bool {
+    if proc_uid == 0 {
+        // Root can read anything with any read permission
+        (mode & (S_IRUSR | S_IRGRP | S_IROTH)) != 0
+    } else if proc_uid == file_uid {
+        // Owner permissions
+        (mode & S_IRUSR) != 0
+    } else if proc_gid == file_gid {
+        // Group permissions
+        (mode & S_IRGRP) != 0
+    } else {
+        // Other permissions
+        (mode & S_IROTH) != 0
+    }
 }
 
-/// Check if a file/directory is writable by the owner
-pub fn can_write(mode: u16) -> bool {
-    (mode & S_IWUSR) != 0
+/// Check if a process can write to a file/directory
+pub fn can_write(proc_uid: u32, proc_gid: u32, file_uid: u32, file_gid: u32, mode: u16) -> bool {
+    if proc_uid == 0 {
+        // Root can write to anything with any write permission
+        (mode & (S_IWUSR | S_IWGRP | S_IWOTH)) != 0
+    } else if proc_uid == file_uid {
+        // Owner permissions
+        (mode & S_IWUSR) != 0
+    } else if proc_gid == file_gid {
+        // Group permissions
+        (mode & S_IWGRP) != 0
+    } else {
+        // Other permissions
+        (mode & S_IWOTH) != 0
+    }
 }
 
-/// Check if a file is executable by the owner
-pub fn can_exec(mode: u16) -> bool {
-    (mode & S_IXUSR) != 0
+/// Check if a file is executable by a process
+pub fn can_exec(proc_uid: u32, proc_gid: u32, file_uid: u32, file_gid: u32, mode: u16) -> bool {
+    if proc_uid == 0 {
+        // Root can exec anything with any exec permission
+        (mode & (S_IXUSR | S_IXGRP | S_IXOTH)) != 0
+    } else if proc_uid == file_uid {
+        // Owner permissions
+        (mode & S_IXUSR) != 0
+    } else if proc_gid == file_gid {
+        // Group permissions
+        (mode & S_IXGRP) != 0
+    } else {
+        // Other permissions
+        (mode & S_IXOTH) != 0
+    }
 }
 
-/// Check if a directory can be traversed (x permission) by the owner
-pub fn can_traverse(mode: u16) -> bool {
-    (mode & S_IXUSR) != 0
+/// Check if a directory can be traversed (x permission) by a process
+pub fn can_traverse(proc_uid: u32, proc_gid: u32, file_uid: u32, file_gid: u32, mode: u16) -> bool {
+    can_exec(proc_uid, proc_gid, file_uid, file_gid, mode)
 }
 
-/// Check if a directory can be listed (r permission) by the owner
-pub fn can_list(mode: u16) -> bool {
-    (mode & S_IRUSR) != 0
+/// Check if a directory can be listed (r permission) by a process
+pub fn can_list(proc_uid: u32, proc_gid: u32, file_uid: u32, file_gid: u32, mode: u16) -> bool {
+    can_read(proc_uid, proc_gid, file_uid, file_gid, mode)
 }
 
 pub struct FileNode {
@@ -122,6 +166,8 @@ pub struct FileNode {
     pub data: &'static [u8],
     pub file_type: FileType,
     pub mode: u16,
+    pub uid: u32,
+    pub gid: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -185,14 +231,16 @@ impl FdTable {
         Err(ErrorCode::EMFILE)
     }
 
-    pub fn open_node(&mut self, node_index: usize) -> Result<i32, ErrorCode> {
-        self.open_node_with_flags(node_index, O_RDONLY)
+    pub fn open_node(&mut self, node_index: usize, proc_uid: u32, proc_gid: u32) -> Result<i32, ErrorCode> {
+        self.open_node_with_flags(node_index, O_RDONLY, proc_uid, proc_gid)
     }
 
     pub fn open_node_with_flags(
         &mut self,
         node_index: usize,
         flags: u64,
+        proc_uid: u32,
+        proc_gid: u32,
     ) -> Result<i32, ErrorCode> {
         let node = FILES.get(node_index).ok_or(ErrorCode::ENOENT)?;
         let fd = self.allocate_fd()?;
@@ -209,10 +257,10 @@ impl FdTable {
         let readable = (flags & O_WRONLY) == 0 || (flags & O_RDWR) != 0;
 
         // Check permissions
-        if readable && !can_read(metadata.mode) {
+        if readable && !can_read(proc_uid, proc_gid, metadata.uid, metadata.gid, metadata.mode) {
             return Err(ErrorCode::EACCES);
         }
-        if writable && !can_write(metadata.mode) {
+        if writable && !can_write(proc_uid, proc_gid, metadata.uid, metadata.gid, metadata.mode) {
             return Err(ErrorCode::EACCES);
         }
 
@@ -597,27 +645,31 @@ impl FdTable {
 
 pub static FILES: &[FileNode] = &[
     // Root directory
-    FileNode { path: "/", data: b"", file_type: FileType::Directory, mode: DEFAULT_DIR_MODE },
+    FileNode { path: "/", data: b"", file_type: FileType::Directory, mode: DEFAULT_DIR_MODE, uid: 0, gid: 0 },
     // /bin directory (now empty - programs loaded from disk/tmpfs)
-    FileNode { path: "/bin", data: b"", file_type: FileType::Directory, mode: DEFAULT_DIR_MODE },
+    FileNode { path: "/bin", data: b"", file_type: FileType::Directory, mode: DEFAULT_DIR_MODE, uid: 0, gid: 0 },
     // /etc directory
-    FileNode { path: "/etc", data: b"", file_type: FileType::Directory, mode: DEFAULT_DIR_MODE },
+    FileNode { path: "/etc", data: b"", file_type: FileType::Directory, mode: DEFAULT_DIR_MODE, uid: 0, gid: 0 },
     // /tmp directory (writable)
-    FileNode { path: "/tmp", data: b"", file_type: FileType::Directory, mode: DEFAULT_DIR_MODE },
+    FileNode { path: "/tmp", data: b"", file_type: FileType::Directory, mode: DEFAULT_DIR_MODE, uid: 0, gid: 0 },
     // /mnt directory (mount point for disk filesystem)
-    FileNode { path: "/mnt", data: b"", file_type: FileType::Directory, mode: DEFAULT_DIR_MODE },
+    FileNode { path: "/mnt", data: b"", file_type: FileType::Directory, mode: DEFAULT_DIR_MODE, uid: 0, gid: 0 },
     // Configuration files
     FileNode {
         path: "/etc/motd",
         data: b"Welcome to PandaOS.\r\nType 'help' for commands.\r\n",
         file_type: FileType::File,
         mode: DEFAULT_FILE_MODE,
+        uid: 0,
+        gid: 0,
     },
     FileNode {
         path: "/etc/version",
         data: b"PandaOS 0.1.0\r\n",
         file_type: FileType::File,
         mode: DEFAULT_FILE_MODE,
+        uid: 0,
+        gid: 0,
     },
 ];
 
@@ -675,7 +727,13 @@ fn create_dynamic_file(path: &str) -> Result<usize, ErrorCode> {
 }
 
 /// Open a file by path into a file descriptor table with flags.
-pub fn open_path_with_flags(table: &mut FdTable, path: &str, flags: u64) -> Result<i32, ErrorCode> {
+pub fn open_path_with_flags(
+    table: &mut FdTable,
+    path: &str,
+    flags: u64,
+    proc_uid: u32,
+    proc_gid: u32,
+) -> Result<i32, ErrorCode> {
     // Check if path is on a mounted filesystem
     if let Some((_mount, rel_path, fs_type)) = crate::mount::resolve_mount_path(path) {
         match fs_type {
@@ -691,12 +749,12 @@ pub fn open_path_with_flags(table: &mut FdTable, path: &str, flags: u64) -> Resu
                 let readable = (flags & O_WRONLY) == 0 || (flags & O_RDWR) != 0;
 
                 // Check permissions
-                if readable && !can_read(metadata.mode) {
+                if readable && !can_read(proc_uid, proc_gid, metadata.uid, metadata.gid, metadata.mode) {
                     return Err(ErrorCode::EACCES);
                 }
                 if writable {
                     // Check write permission
-                    if !can_write(metadata.mode) {
+                    if !can_write(proc_uid, proc_gid, metadata.uid, metadata.gid, metadata.mode) {
                         return Err(ErrorCode::EACCES);
                     }
                     // Disk fs is read-only
@@ -766,10 +824,10 @@ pub fn open_path_with_flags(table: &mut FdTable, path: &str, flags: u64) -> Resu
                 let readable = (flags & O_WRONLY) == 0 || (flags & O_RDWR) != 0;
 
                 // Check permissions
-                if readable && !can_read(metadata.mode) {
+                if readable && !can_read(proc_uid, proc_gid, metadata.uid, metadata.gid, metadata.mode) {
                     return Err(ErrorCode::EACCES);
                 }
-                if writable && !can_write(metadata.mode) {
+                if writable && !can_write(proc_uid, proc_gid, metadata.uid, metadata.gid, metadata.mode) {
                     return Err(ErrorCode::EACCES);
                 }
 
@@ -805,13 +863,13 @@ pub fn open_path_with_flags(table: &mut FdTable, path: &str, flags: u64) -> Resu
         }
     };
 
-    table.open_node_with_flags(node_index, flags)
+    table.open_node_with_flags(node_index, flags, proc_uid, proc_gid)
 }
 
 /// Open a file by path into a file descriptor table.
-pub fn open_path(table: &mut FdTable, path: &str) -> Result<i32, ErrorCode> {
+pub fn open_path(table: &mut FdTable, path: &str, proc_uid: u32, proc_gid: u32) -> Result<i32, ErrorCode> {
     let (node_index, _node) = lookup_node(path).ok_or(ErrorCode::ENOENT)?;
-    table.open_node(node_index)
+    table.open_node(node_index, proc_uid, proc_gid)
 }
 
 /// Directory entry for getdents64 syscall
@@ -1059,6 +1117,47 @@ pub fn chmod_path(path: &str, new_mode: u16) -> Result<(), ErrorCode> {
     Ok(())
 }
 
+/// Change file ownership (chown)
+pub fn chown_path(path: &str, uid: u32, gid: u32) -> Result<(), ErrorCode> {
+    // Check if path is on a mounted filesystem
+    if let Some((_mount, _rel_path, fs_type)) = crate::mount::resolve_mount_path(path) {
+        match fs_type {
+            crate::mount::FsType::Disk => {
+                // Disk filesystem is read-only
+                return Err(ErrorCode::EROFS);
+            }
+            crate::mount::FsType::Tmpfs => {
+                // Tmpfs doesn't support ownership yet - would need to add
+                return Err(ErrorCode::ENOSYS);
+            }
+        }
+    }
+
+    // For in-memory filesystem, store ownership in FILE_OWNERSHIP
+    let (node_index, node) = lookup_node(path).ok_or(ErrorCode::ENOENT)?;
+
+    // Get current ownership
+    let current_ownership = {
+        let ownership = FILE_OWNERSHIP.lock();
+        if let Some(ref owner_map) = *ownership {
+            owner_map.get(&node_index).copied().unwrap_or((node.uid, node.gid))
+        } else {
+            (node.uid, node.gid)
+        }
+    };
+
+    // Apply changes (u32::MAX means "don't change")
+    let new_uid = if uid == u32::MAX { current_ownership.0 } else { uid };
+    let new_gid = if gid == u32::MAX { current_ownership.1 } else { gid };
+
+    // Store the new ownership
+    let mut ownership = FILE_OWNERSHIP.lock();
+    let owner_map = ownership.get_or_insert_with(BTreeMap::new);
+    owner_map.insert(node_index, (new_uid, new_gid));
+
+    Ok(())
+}
+
 /// Get file metadata by path
 pub fn stat_path(path: &str) -> Result<FileMetadata, ErrorCode> {
     // Check if path is on a mounted filesystem
@@ -1087,6 +1186,16 @@ pub fn stat_path(path: &str) -> Result<FileMetadata, ErrorCode> {
         }
     };
 
+    // Get ownership from FILE_OWNERSHIP if it exists, otherwise use node ownership
+    let (uid, gid) = {
+        let ownership = FILE_OWNERSHIP.lock();
+        if let Some(ref owner_map) = *ownership {
+            owner_map.get(&node_index).copied().unwrap_or((node.uid, node.gid))
+        } else {
+            (node.uid, node.gid)
+        }
+    };
+
     // Check if this is a dynamic file with data in WRITABLE_FILES
     let files = WRITABLE_FILES.lock();
     if let Some(ref store) = *files {
@@ -1095,6 +1204,8 @@ pub fn stat_path(path: &str) -> Result<FileMetadata, ErrorCode> {
                 file_type: FileType::File,
                 size: file_data.len() as u64,
                 mode,
+                uid,
+                gid,
             });
         }
     }
@@ -1104,6 +1215,8 @@ pub fn stat_path(path: &str) -> Result<FileMetadata, ErrorCode> {
         file_type: node.file_type,
         size: if node.file_type == FileType::Directory { 0 } else { node.data.len() as u64 },
         mode,
+        uid,
+        gid,
     })
 }
 
@@ -1123,6 +1236,16 @@ pub fn fstat_fd(table: &FdTable, fd: i32) -> Result<FileMetadata, ErrorCode> {
                 }
             };
 
+            // Get ownership from FILE_OWNERSHIP if it exists, otherwise use node ownership
+            let (uid, gid) = {
+                let ownership = FILE_OWNERSHIP.lock();
+                if let Some(ref owner_map) = *ownership {
+                    owner_map.get(&open.node_index).copied().unwrap_or((node.uid, node.gid))
+                } else {
+                    (node.uid, node.gid)
+                }
+            };
+
             // Check if this is a dynamic file with data in WRITABLE_FILES
             let files = WRITABLE_FILES.lock();
             if let Some(ref store) = *files {
@@ -1131,6 +1254,8 @@ pub fn fstat_fd(table: &FdTable, fd: i32) -> Result<FileMetadata, ErrorCode> {
                         file_type: FileType::File,
                         size: file_data.len() as u64,
                         mode,
+                        uid,
+                        gid,
                     });
                 }
             }
@@ -1144,6 +1269,8 @@ pub fn fstat_fd(table: &FdTable, fd: i32) -> Result<FileMetadata, ErrorCode> {
                     node.data.len() as u64
                 },
                 mode,
+                uid,
+                gid,
             })
         }
         FdKind::Directory(open) => {
@@ -1156,7 +1283,16 @@ pub fn fstat_fd(table: &FdTable, fd: i32) -> Result<FileMetadata, ErrorCode> {
                     node.mode
                 }
             };
-            Ok(FileMetadata { file_type: node.file_type, size: 0, mode })
+            // Get ownership from FILE_OWNERSHIP if it exists, otherwise use node ownership
+            let (uid, gid) = {
+                let ownership = FILE_OWNERSHIP.lock();
+                if let Some(ref owner_map) = *ownership {
+                    owner_map.get(&open.node_index).copied().unwrap_or((node.uid, node.gid))
+                } else {
+                    (node.uid, node.gid)
+                }
+            };
+            Ok(FileMetadata { file_type: node.file_type, size: 0, mode, uid, gid })
         }
         FdKind::DiskFile(open) | FdKind::DiskDirectory(open) => {
             crate::mount::diskfs_stat(open.inode)
@@ -1250,16 +1386,16 @@ mod tests {
     #[test]
     fn test_open_path_lookup() {
         let mut table = FdTable::new();
-        let fd = open_path(&mut table, "/etc/motd").expect("motd should exist");
+        let fd = open_path(&mut table, "/etc/motd", 0, 0).expect("motd should exist");
         assert!(fd >= 3);
-        let err = open_path(&mut table, "/nope").unwrap_err();
+        let err = open_path(&mut table, "/nope", 0, 0).unwrap_err();
         assert_eq!(err, ErrorCode::ENOENT);
     }
 
     #[test]
     fn test_read_offsets_and_eof() {
         let mut table = FdTable::new();
-        let fd = open_path(&mut table, "/etc/version").expect("version should exist");
+        let fd = open_path(&mut table, "/etc/version", 0, 0).expect("version should exist");
 
         let mut buf = [0u8; 64];
         let n = table.read(fd, &mut buf[..6]).expect("read should succeed");

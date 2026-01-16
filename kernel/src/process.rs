@@ -128,6 +128,10 @@ pub struct Process {
     pub state: ProcessState,
     /// Wait state (for blocking operations)
     pub wait_state: WaitState,
+    /// User ID (for permissions)
+    pub uid: u32,
+    /// Group ID (for permissions)
+    pub gid: u32,
     /// Entry point address
     pub entry_point: u64,
     /// User stack pointer
@@ -229,6 +233,8 @@ impl Process {
             parent_pid: None,
             state: ProcessState::Ready,
             wait_state: WaitState::NotWaiting,
+            uid: 0,  // Default to root
+            gid: 0,  // Default to root
             entry_point: elf_info.entry_point,
             user_stack_ptr: user_stack_top,
             kernel_stack_ptr,
@@ -341,6 +347,8 @@ impl Process {
             parent_pid: Some(self.pid),
             state: ProcessState::Ready,
             wait_state: WaitState::NotWaiting,
+            uid: self.uid,  // Inherit uid from parent
+            gid: self.gid,  // Inherit gid from parent
             entry_point: self.entry_point,
             user_stack_ptr: self.user_stack_ptr,
             kernel_stack_ptr: kernel_stack_top,
@@ -490,6 +498,8 @@ mod tests {
             parent_pid: None,
             state: ProcessState::Ready,
             wait_state: WaitState::NotWaiting,
+            uid: 0,
+            gid: 0,
             entry_point: 0x40_0000,
             user_stack_ptr: 0x7FFF_FFFF_F000,
             kernel_stack_ptr: 0xFFFF_FFFF_8000_0000,
@@ -526,6 +536,8 @@ mod tests {
             parent_pid: None,
             state: ProcessState::Ready,
             wait_state: WaitState::NotWaiting,
+            uid: 0,
+            gid: 0,
             entry_point: 0x40_0000,
             user_stack_ptr: 0x7FFF_FFFF_F000,
             kernel_stack_ptr: 0xFFFF_FFFF_8000_0000,
@@ -555,6 +567,8 @@ mod tests {
             parent_pid: None,
             state: ProcessState::Ready,
             wait_state: WaitState::NotWaiting,
+            uid: 0,
+            gid: 0,
             entry_point: 0x40_0000,
             user_stack_ptr: 0x7FFF_FFFF_F000,
             kernel_stack_ptr: 0xFFFF_FFFF_8000_0000,

@@ -292,7 +292,8 @@ impl TmpFs {
             FileType::Directory => crate::fs::DEFAULT_DIR_MODE,
             FileType::File => crate::fs::DEFAULT_FILE_MODE,
         });
-        Ok(FileMetadata { file_type: node.file_type(), size: node.size(), mode })
+        // Default ownership: root:root
+        Ok(FileMetadata { file_type: node.file_type(), size: node.size(), mode, uid: 0, gid: 0 })
     }
 
     /// Change file mode (chmod)
