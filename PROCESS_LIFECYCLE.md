@@ -73,44 +73,196 @@ Blocked processes are skipped by the scheduler until they are woken.
 
 **Blocking Behavior**: Unlike the previous busy-wait implementation, waitpid now properly blocks the calling process. The scheduler will skip blocked processes, eliminating CPU spinning. When a child exits, the exit handler wakes any parent waiting for that child.
 
-## exec(path, arg)
+## execve(path, argv, envp) - Deep Dive
 
 Replaces the current process image with a new ELF binary loaded from the filesystem.
 
+### Syscall Interface
+
+```c
+long execve(const char *path, char *const argv[], char *const envp[]);
+```
+
+**Current Implementation Status:**
+- ✅ Path resolution with PATH environment variable
+- ✅ ELF loading and validation
+- ✅ Permission checking (execute bit)
+- ⚠️ **Simplified argv/envp**: Currently accepts arrays but only uses first argument
+- ⚠️ **Stack layout**: Minimal implementation, not fully Linux-compatible yet
+- ❌ **Full argv parsing**: Not yet implemented
+- ❌ **Full envp parsing**: Not yet implemented
+- ❌ **auxv support**: Minimal implementation in progress
+
+See [ABI.md](ABI.md) for complete syscall documentation.
+
 ### Path Resolution
-- If path contains '/', treat as absolute or relative path
-- Otherwise, search PATH environment variable (e.g., `/mnt/bin:/bin`)
-- Resolved via `fs::resolve_path()` against current working directory
+
+1. **If path contains '/'**: Treat as absolute or relative path
+   - Absolute: `/mnt/bin/ls` → used directly
+   - Relative: `bin/cat` → resolved against current working directory
+
+2. **Otherwise**: Search PATH environment variable
+   - Default PATH: `/mnt/bin:/bin`
+   - Tries each directory in order: `dir/command`
+   - First match is used
+   - Returns ENOENT if not found in any PATH directory
+
+3. **Path resolution**: Via `fs::resolve_path(cwd, path)`
+   - Handles `.` and `..` components
+   - Resolves to canonical absolute path
+
+### Security Checks
+
+Before loading, execve validates:
+
+1. **File exists**: Returns ENOENT if path not found
+2. **Is regular file**: Returns EISDIR if path is a directory
+3. **Execute permission**: Returns EACCES if execute bit not set
+4. **Valid ELF**: Returns ENOEXEC if file is not a valid ELF64 executable
+5. **Correct architecture**: Returns ENOEXEC if not x86-64
 
 ### ELF Loading Pipeline
-1. **File Read**: Complete ELF binary loaded into memory via `fs::read_file_to_vec()`
-   - Supports disk filesystem (`/mnt/bin/*`)
-   - Supports tmpfs (`/tmp/bin/*`)
-   - Falls back to in-memory filesystem if path exists there
-2. **ELF Parsing**: Binary validated and parsed via `elf::parse_elf()`
-   - Checks ELF64 magic, class, endianness
-   - Validates x86-64 static executable
-   - Extracts PT_LOAD segments and entry point
-3. **Image Replacement**: Via `process::replace_image()`
-   - Creates new user page table
-   - Maps PT_LOAD segments with correct permissions (W^X enforced)
-   - Allocates fresh 4-page user stack at `0x7FFF_FFFF_F000`
-   - Frees old address space after successful mapping
-4. **Context Setup**: CPU context reset for new entry point
-5. **Argument Passing**: Optional arg string copied to fixed user address (`0x7FFF_FFFF_C000`)
+
+#### 1. File Read
+Complete ELF binary loaded into memory via `fs::read_file_to_vec()`:
+- Supports disk filesystem (`/mnt/bin/*`) - persistent programs
+- Supports tmpfs (`/tmp/bin/*`) - temporary programs
+- Falls back to in-memory filesystem if path exists there
+- Returns ENOENT if file not found
+- Returns EIO on read errors
+
+#### 2. ELF Parsing
+Binary validated and parsed via `elf::parse_elf()`:
+- Checks ELF64 magic (`0x7F 'E' 'L' 'F'`)
+- Validates class (64-bit), endianness (little), version
+- Verifies machine type (x86-64) and executable type
+- Extracts PT_LOAD segments with permissions
+- Extracts entry point address
+- Returns ENOEXEC for invalid or incompatible ELF files
+
+#### 3. Image Replacement
+Via `process::replace_image()`:
+- **Create new page table**: Clones kernel mappings, fresh user space
+- **Load segments**: Each PT_LOAD segment mapped with correct permissions:
+  - Read-only code: PF_R | PF_X → PRESENT | USER | NO_EXECUTE = false
+  - Read-only data: PF_R → PRESENT | USER | NO_EXECUTE
+  - Read-write data: PF_R | PF_W → PRESENT | USER | WRITABLE | NO_EXECUTE
+  - W^X enforced: No segment can be both writable and executable
+- **Allocate stack**: Fresh 4-page (16KB) user stack at `0x7FFF_FFFF_F000`
+- **Free old space**: Previous process address space freed after successful mapping
+- Returns ENOMEM if any allocation fails
+
+#### 4. Context Setup
+CPU context reset for new entry point:
+- RIP set to ELF entry point
+- RSP set to top of new user stack
+- All general-purpose registers zeroed
+- User code segment (CS) and data segment (SS) configured
+- RFLAGS set with interrupt flag enabled
+
+#### 5. Argument Passing (Current Implementation)
+**Simplified interface** - copies single string argument:
+- Optional arg string copied to fixed user address (`0x7FFF_FFFF_C000`)
+- NUL-terminated string accessible from user mode
+- Limited to 128 bytes
+
+**Planned Linux-Compatible Stack Layout:**
+```
+High Address (0x7FFFFFFFFFFF)
+├─────────────────────────────
+│ [argument strings]           // Actual string data
+│ [environment strings]         // e.g., "PATH=/bin"
+├─────────────────────────────
+│ NULL                          // auxv terminator
+│ AT_ENTRY, entry_point        // Auxiliary vector
+│ AT_PAGESZ, 4096
+│ ...
+├─────────────────────────────
+│ NULL                          // envp terminator
+│ envp[n-1]                     // Environment pointers
+│ ...
+│ envp[0]
+├─────────────────────────────
+│ NULL                          // argv terminator  
+│ argv[n-1]                     // Argument pointers
+│ ...
+│ argv[0]
+├─────────────────────────────
+│ argc                          // Argument count
+└─────────────────────────────
+Low Address (RSP points here)
+```
+
+See `kernel/src/exec_stack.rs` for Linux-compatible stack setup implementation (in progress).
 
 ### Exec Behavior
-- Destroys the current user address space and builds a new one
-- Resets the user stack and CPU context
-- Preserves the kernel stack mapping
-- Preserves PID, parent_pid, file descriptor table, and working directory
+
+**Preserved across exec:**
+- PID (process ID stays the same)
+- Parent PID
+- Process group ID (pgid)
+- File descriptor table (open files remain open)
+- Current working directory
+- PATH environment variable
+
+**Replaced by exec:**
+- User address space (all memory mappings)
+- User stack and stack pointer
+- Entry point and instruction pointer
+- All user-mode register values
+
+**Error Handling:**
 - Does not return on success (switches directly to new program)
-- Returns error on failure (e.g., file not found, invalid ELF, out of memory)
+- Returns error code on failure:
+  - ENOENT: File not found
+  - EACCES: Permission denied (no execute bit)
+  - EISDIR: Path is a directory
+  - ENOEXEC: Invalid or incompatible ELF file
+  - ENOMEM: Out of memory during loading
+  - E2BIG: Argument list too long (future)
 
 ### Supported Binary Types
-- Static ELF64 executables only
-- No dynamic linking or shared libraries
-- No PIE support
+
+✅ **Supported:**
+- Static ELF64 executables (no dynamic linker)
+- x86-64 architecture only
+- Little-endian byte order
+- ET_EXEC type (not PIE/ET_DYN)
+
+❌ **Not Supported:**
+- Dynamic linking or shared libraries
+- PIE (Position Independent Executables)
+- Interpreted scripts (shebangs)
+- Non-x86-64 architectures
+- Big-endian binaries
+
+### Example: Exec Flow for `/mnt/bin/cat /etc/motd`
+
+1. **Shell parses command**: Identifies program (`cat`) and args (`/etc/motd`)
+2. **Shell forks**: Creates child process with same PID space
+3. **Child calls execve**: `execve("/mnt/bin/cat", ["/mnt/bin/cat", "/etc/motd"], [])`
+4. **Path resolution**: `/mnt/bin/cat` contains '/', used directly
+5. **Permission check**: Verifies execute bit is set on `/mnt/bin/cat`
+6. **Load from disk**: Reads complete ELF binary from disk filesystem
+7. **Parse ELF**: Validates magic, extracts segments and entry point
+8. **Replace image**: 
+   - Destroys old user address space
+   - Creates new page table
+   - Maps code segment (RX), data segments (R or RW)
+   - Allocates fresh stack
+9. **Set up stack**: Copies arguments to user stack (simplified currently)
+10. **Context switch**: Jumps to cat's entry point
+11. **cat runs**: Opens `/etc/motd`, reads, writes to stdout, exits
+
+### Future Enhancements
+
+Planned improvements for full Linux compatibility:
+
+1. **Complete argv/envp parsing**: Parse full argument and environment arrays from user space
+2. **Linux-compatible stack layout**: Implement exact Linux stack format with argc, argv, envp, auxv
+3. **Auxiliary vector support**: Provide AT_ENTRY, AT_PHDR, AT_PAGESZ, etc.
+4. **Better error handling**: More specific errno values for edge cases
+5. **execveat support**: Execute relative to directory file descriptor
 
 ## Process Reaping
 

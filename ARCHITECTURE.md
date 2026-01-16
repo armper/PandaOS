@@ -92,6 +92,95 @@ PandaOS implements a complete ELF64 loader that enables dynamic program executio
 - No shebangs or script interpretation
 - No mmap for ELF loading
 
+## Userland Compatibility Level
+
+PandaOS implements a Linux-compatible x86_64 syscall ABI, enabling it to run real-world static binaries compiled for Linux. See [ABI.md](ABI.md) for complete syscall documentation.
+
+### What Works
+
+✅ **Static ELF64 Executables:**
+- Programs compiled with `-static` flag
+- musl libc static binaries (with limitations)
+- Hand-coded assembly programs  
+- No dynamic linker required
+
+✅ **Basic Process Management:**
+- fork() to create child processes
+- execve() to load new programs
+- wait4() to reap children
+- exit() with status codes
+- Process groups for job control
+
+✅ **File I/O:**
+- open, read, write, close
+- Standard file descriptors (stdin/stdout/stderr)
+- Pipes for inter-process communication
+- Directory listing (getdents64)
+- File metadata (stat, fstat)
+
+✅ **Simple Programs:**
+- Hello world programs
+- Shell utilities (cat, echo, true, ls, wc)
+- Programs using fork/exec model
+- Pipeline operations
+
+### What Doesn't Work
+
+❌ **Dynamic Linking:**
+- Shared libraries (.so files)
+- Position-independent executables (PIE)
+- Dynamic linker (/lib64/ld-linux-x86-64.so.2)
+
+❌ **Advanced Features:**
+- Multi-threading (clone, pthreads)
+- Advanced signal handling (beyond SIGINT)
+- Memory mapping (mmap, munmap)
+- Network sockets
+- ioctl, fcntl, poll, select
+
+❌ **Complex Programs:**
+- Most standard GNU coreutils (due to dynamic linking)
+- Programs requiring threads
+- Programs requiring mmap
+- Programs requiring advanced signals
+
+### Compatibility Testing
+
+To test if a program will run on PandaOS:
+
+```bash
+# Check if static
+file program  # Should say "statically linked"
+
+# Check architecture
+file program  # Should say "x86-64"
+
+# Check syscalls
+strace program 2>&1 | grep syscall_name
+# Verify all syscalls are implemented (see ABI.md)
+```
+
+### Building Compatible Programs
+
+```bash
+# Using musl (recommended)
+x86_64-linux-musl-gcc -static -o program program.c
+
+# Verify
+file program  # ELF 64-bit LSB executable, x86-64, statically linked
+```
+
+See `userland/MUSL_README.md` for example programs and detailed build instructions.
+
+### Syscall ABI Status
+
+See [ABI.md](ABI.md) for comprehensive documentation of:
+- Implemented syscalls (24 syscalls)
+- Error codes (errno values)
+- Known deviations from Linux
+- Stack layout for execve
+- Future compatibility roadmap
+
 ## Filesystem Architecture
 
 PandaOS supports three filesystem backends:
