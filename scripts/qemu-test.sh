@@ -95,6 +95,12 @@ if [ "${REDIR_SMOKE:-0}" -eq 1 ]; then
     FEATURES+=(--features redir-smoke)
     EXPECTED_MARKER="TEST PASS redir_smoke"
 fi
+if [ "${TMPFS_REDIR_SMOKE:-0}" -eq 1 ]; then
+    FEATURE_COUNT=$((FEATURE_COUNT + 1))
+    TEST_NAME="tmpfs_redir_smoke"
+    FEATURES+=(--features tmpfs-redir-smoke)
+    EXPECTED_MARKER="TEST PASS tmpfs_redir_smoke"
+fi
 if [ "${DISK_FS_SMOKE:-0}" -eq 1 ]; then
     FEATURE_COUNT=$((FEATURE_COUNT + 1))
     TEST_NAME="disk_fs_smoke"
@@ -109,7 +115,7 @@ if [ "${TTY_SMOKE:-0}" -eq 1 ]; then
 fi
 
 if [ $FEATURE_COUNT -gt 1 ]; then
-    echo "Error: SHELL_SMOKE, VFS_CAT_SMOKE, FORK_EXEC_SMOKE, PIPE_SMOKE, CTRLC_SMOKE, LS_SMOKE, LS_STAT_SMOKE, CD_SMOKE, PATH_SMOKE, REDIR_SMOKE, DISK_FS_SMOKE, and TTY_SMOKE are mutually exclusive"
+    echo "Error: SHELL_SMOKE, VFS_CAT_SMOKE, FORK_EXEC_SMOKE, PIPE_SMOKE, CTRLC_SMOKE, LS_SMOKE, LS_STAT_SMOKE, CD_SMOKE, PATH_SMOKE, REDIR_SMOKE, TMPFS_REDIR_SMOKE, DISK_FS_SMOKE, and TTY_SMOKE are mutually exclusive"
     exit 1
 fi
 

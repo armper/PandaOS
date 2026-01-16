@@ -2080,6 +2080,8 @@ fn exit_handler(status: i32) -> ! {
         serial_println!("TEST PASS path_smoke");
         #[cfg(feature = "redir-smoke")]
         serial_println!("TEST PASS redir_smoke");
+        #[cfg(feature = "tmpfs-redir-smoke")]
+        serial_println!("TEST PASS tmpfs_redir_smoke");
         #[cfg(feature = "elf-exec-smoke")]
         serial_println!("TEST PASS elf_exec_smoke");
         #[cfg(feature = "tty-smoke")]
@@ -2096,6 +2098,7 @@ fn exit_handler(status: i32) -> ! {
             feature = "cd-smoke",
             feature = "path-smoke",
             feature = "redir-smoke",
+            feature = "tmpfs-redir-smoke",
             feature = "elf-exec-smoke",
             feature = "tty-smoke"
         )))]
