@@ -331,6 +331,74 @@ impl TmpFs {
             TmpFsNode::File { .. } => Err(ErrorCode::ENOTDIR),
         }
     }
+
+    /// Rename/move a file or directory
+    pub fn rename(
+        &mut self,
+        old_parent_inode: Inode,
+        old_name: &str,
+        new_parent_inode: Inode,
+        new_name: &str,
+    ) -> Result<(), ErrorCode> {
+        // Validate names
+        if old_name.is_empty()
+            || old_name.contains('/')
+            || new_name.is_empty()
+            || new_name.contains('/')
+        {
+            return Err(ErrorCode::EINVAL);
+        }
+
+        // Check old parent exists and is a directory
+        let inode = {
+            let old_parent = self.nodes.get(&old_parent_inode).ok_or(ErrorCode::ENOENT)?;
+            let entries = match old_parent {
+                TmpFsNode::Directory { entries } => entries,
+                TmpFsNode::File { .. } => return Err(ErrorCode::ENOTDIR),
+            };
+
+            // Look up the old entry
+            *entries.get(old_name).ok_or(ErrorCode::ENOENT)?
+        };
+
+        // Check new parent exists and is a directory
+        {
+            let new_parent = self.nodes.get(&new_parent_inode).ok_or(ErrorCode::ENOENT)?;
+            match new_parent {
+                TmpFsNode::Directory { entries } => {
+                    // Check if new name already exists
+                    if entries.contains_key(new_name) {
+                        return Err(ErrorCode::EEXIST);
+                    }
+                }
+                TmpFsNode::File { .. } => return Err(ErrorCode::ENOTDIR),
+            }
+        }
+
+        // Remove from old parent
+        {
+            let old_parent = self.nodes.get_mut(&old_parent_inode).ok_or(ErrorCode::ENOENT)?;
+            match old_parent {
+                TmpFsNode::Directory { entries } => {
+                    entries.remove(old_name);
+                }
+                TmpFsNode::File { .. } => return Err(ErrorCode::ENOTDIR),
+            }
+        }
+
+        // Add to new parent
+        {
+            let new_parent = self.nodes.get_mut(&new_parent_inode).ok_or(ErrorCode::ENOENT)?;
+            match new_parent {
+                TmpFsNode::Directory { entries } => {
+                    entries.insert(String::from(new_name), inode);
+                }
+                TmpFsNode::File { .. } => return Err(ErrorCode::ENOTDIR),
+            }
+        }
+
+        Ok(())
+    }
 }
 
 /// Global tmpfs instance

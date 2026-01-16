@@ -285,3 +285,84 @@ pub fn tmpfs_unlink(parent_path: &str, name: &str) -> Result<(), ErrorCode> {
 pub fn tmpfs_chmod(inode: TmpfsInode, new_mode: u16) -> Result<(), ErrorCode> {
     crate::tmpfs::with_tmpfs(|fs| fs.chmod(inode, new_mode))
 }
+
+/// Create a directory in tmpfs
+///
+/// # Errors
+///
+/// Returns an error if the parent directory doesn't exist or the directory already exists
+pub fn tmpfs_mkdir(parent_path: &str, name: &str) -> Result<TmpfsInode, ErrorCode> {
+    tmpfs_create(parent_path, name, true)
+}
+
+/// Remove an empty directory from tmpfs
+///
+/// # Errors
+///
+/// Returns an error if the directory doesn't exist, is not empty, or is not a directory
+pub fn tmpfs_rmdir(parent_path: &str, name: &str) -> Result<(), ErrorCode> {
+    crate::tmpfs::with_tmpfs(|fs| {
+        let root = fs.root_inode();
+        // Lookup parent directory
+        let parent_inode = if parent_path == "/" || parent_path.is_empty() {
+            root
+        } else {
+            let rel_path = parent_path.strip_prefix('/').unwrap_or(parent_path);
+            fs.lookup(root, rel_path)?
+        };
+
+        // Look up the directory to remove
+        let dir_inode = fs.lookup(parent_inode, name)?;
+
+        // Check if it's a directory
+        let metadata = fs.stat(dir_inode)?;
+        if metadata.file_type != FileType::Directory {
+            return Err(ErrorCode::ENOTDIR);
+        }
+
+        // Check if it's empty
+        let entries = fs.read_dir(dir_inode)?;
+        if !entries.is_empty() {
+            return Err(ErrorCode::ENOTEMPTY);
+        }
+
+        // Remove the directory
+        fs.unlink(parent_inode, name)
+    })
+}
+
+/// Rename a file or directory in tmpfs
+///
+/// # Errors
+///
+/// Returns an error if the old or new parent directories don't exist,
+/// or if the new name already exists
+pub fn tmpfs_rename(
+    old_parent_path: &str,
+    old_name: &str,
+    new_parent_path: &str,
+    new_name: &str,
+) -> Result<(), ErrorCode> {
+    crate::tmpfs::with_tmpfs(|fs| {
+        let root = fs.root_inode();
+
+        // Lookup old parent directory
+        let old_parent_inode = if old_parent_path == "/" || old_parent_path.is_empty() {
+            root
+        } else {
+            let rel_path = old_parent_path.strip_prefix('/').unwrap_or(old_parent_path);
+            fs.lookup(root, rel_path)?
+        };
+
+        // Lookup new parent directory
+        let new_parent_inode = if new_parent_path == "/" || new_parent_path.is_empty() {
+            root
+        } else {
+            let rel_path = new_parent_path.strip_prefix('/').unwrap_or(new_parent_path);
+            fs.lookup(root, rel_path)?
+        };
+
+        // Perform the rename
+        fs.rename(old_parent_inode, old_name, new_parent_inode, new_name)
+    })
+}

@@ -27,6 +27,7 @@ BITS 64
 %define O_WRONLY 0x0001
 %define O_CREAT 0x0040
 %define O_TRUNC 0x0200
+%define O_APPEND 0x0400
 
 %define BUF_SIZE 128
 
@@ -152,10 +153,10 @@ line_done:
     cmp r12, 0
     je main_loop
 
-    ; Check for redirection operators ('>' or '<')
+    ; Check for redirection operators ('>', '>>', or '<')
     ; We'll support only one redirection per command
     xor rbx, rbx              ; rbx = position counter
-    mov qword [rel redir_type], 0    ; 0 = none, 1 = input (<), 2 = output (>)
+    mov qword [rel redir_type], 0    ; 0 = none, 1 = input (<), 2 = output (>), 3 = append (>>)
     
 check_redir_loop:
     cmp rbx, r12
@@ -164,12 +165,27 @@ check_redir_loop:
     cmp al, '<'
     je input_redir_found
     cmp al, '>'
-    je output_redir_found
+    je check_append_or_output
     inc rbx
     jmp check_redir_loop
 
+check_append_or_output:
+    ; Check if next char is also '>' for append
+    lea r8, [rbx + 1]
+    cmp r8, r12
+    jae output_redir_found  ; No next char, just output
+    mov al, [r13 + r8]
+    cmp al, '>'
+    je append_redir_found
+    jmp output_redir_found
+
 input_redir_found:
     mov qword [rel redir_type], 1
+    jmp process_redirection
+
+append_redir_found:
+    mov qword [rel redir_type], 3
+    inc rbx  ; Skip second '>'
     jmp process_redirection
 
 output_redir_found:
@@ -177,7 +193,7 @@ output_redir_found:
     ; jmp process_redirection (fallthrough)
 
 process_redirection:
-    ; rbx = position of redirection operator
+    ; rbx = position of last redirection operator character
     ; Null-terminate command before redirection
     mov byte [r13 + rbx], 0
     
@@ -696,11 +712,40 @@ child_process:
     cmp rax, 1
     je child_redir_input
     
+    cmp rax, 3
+    je child_redir_append
+    
     ; Output redirection (>)
     ; open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0644)
     mov rax, SYS_OPEN         ; SYS_OPEN
     ; rdi already has filename
     mov rsi, O_WRONLY | O_CREAT | O_TRUNC  ; flags
+    mov rdx, 0o644            ; mode (octal)
+    syscall
+    test rax, rax
+    js child_redir_failed
+    
+    ; dup2(fd, STDOUT)
+    mov rdi, rax
+    mov rsi, STDOUT
+    mov rax, SYS_DUP2
+    syscall
+    test rax, rax
+    js child_redir_failed
+    
+    ; Close original fd
+    mov rax, SYS_CLOSE
+    ; rdi already has the fd
+    syscall
+    
+    jmp child_exec
+    
+child_redir_append:
+    ; Append redirection (>>)
+    ; open(filename, O_WRONLY | O_CREAT | O_APPEND, 0644)
+    mov rax, SYS_OPEN         ; SYS_OPEN
+    ; rdi already has filename
+    mov rsi, O_WRONLY | O_CREAT | O_APPEND  ; flags
     mov rdx, 0o644            ; mode (octal)
     syscall
     test rax, rax

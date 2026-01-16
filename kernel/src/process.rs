@@ -233,8 +233,8 @@ impl Process {
             parent_pid: None,
             state: ProcessState::Ready,
             wait_state: WaitState::NotWaiting,
-            uid: 0,  // Default to root
-            gid: 0,  // Default to root
+            uid: 0, // Default to root
+            gid: 0, // Default to root
             entry_point: elf_info.entry_point,
             user_stack_ptr: user_stack_top,
             kernel_stack_ptr,
@@ -347,8 +347,8 @@ impl Process {
             parent_pid: Some(self.pid),
             state: ProcessState::Ready,
             wait_state: WaitState::NotWaiting,
-            uid: self.uid,  // Inherit uid from parent
-            gid: self.gid,  // Inherit gid from parent
+            uid: self.uid, // Inherit uid from parent
+            gid: self.gid, // Inherit gid from parent
             entry_point: self.entry_point,
             user_stack_ptr: self.user_stack_ptr,
             kernel_stack_ptr: kernel_stack_top,
