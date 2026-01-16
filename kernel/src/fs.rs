@@ -3,6 +3,7 @@
 use crate::pipe::PipeId;
 use crate::syscall::ErrorCode;
 use alloc::collections::BTreeMap;
+use alloc::string::String;
 use alloc::vec::Vec;
 use spin::Mutex;
 
@@ -163,7 +164,7 @@ impl FdTable {
                 FdKind::PipeWrite(pipe_id) => {
                     crate::pipe::pipe_close_write(pipe_id)?;
                 }
-                FdKind::File(_) | FdKind::Directory(_) => {
+                FdKind::File(_, _) | FdKind::Directory(_) => {
                     // Files and directories don't need cleanup
                 }
             }
@@ -375,7 +376,7 @@ impl FdTable {
                     FdKind::PipeWrite(pipe_id) => {
                         crate::pipe::pipe_open_write_end(*pipe_id)?;
                     }
-                    FdKind::File(_) | FdKind::Directory(_) => {
+                    FdKind::File(_, _) | FdKind::Directory(_) => {
                         // Files and directories don't need refcounting
                     }
                 }
@@ -580,7 +581,7 @@ pub fn list_directory(
     if dir_path == "/tmp" {
         let dynamic = DYNAMIC_FILES.lock();
         if let Some(ref map) = *dynamic {
-            for path in map.keys() {
+            for (path, _node_index) in map.iter() {
                 if path.starts_with("/tmp/") {
                     let name = &path[5..]; // Strip "/tmp/"
                     if !name.contains('/') {
@@ -696,7 +697,7 @@ pub fn stat_path(path: &str) -> Result<FileMetadata, ErrorCode> {
 pub fn fstat_fd(table: &FdTable, fd: i32) -> Result<FileMetadata, ErrorCode> {
     let kind = table.get(fd)?;
     match kind {
-        FdKind::File(open, _) | FdKind::Directory(open) => {
+        FdKind::File(open, _) => {
             // Check if this is a dynamic file with data in WRITABLE_FILES
             let files = WRITABLE_FILES.lock();
             if let Some(ref store) = *files {
@@ -717,6 +718,13 @@ pub fn fstat_fd(table: &FdTable, fd: i32) -> Result<FileMetadata, ErrorCode> {
                 } else {
                     node.data.len() as u64
                 },
+            })
+        }
+        FdKind::Directory(open) => {
+            let node = FILES.get(open.node_index).ok_or(ErrorCode::ENOENT)?;
+            Ok(FileMetadata {
+                file_type: node.file_type,
+                size: 0,
             })
         }
         FdKind::PipeRead(_) | FdKind::PipeWrite(_) => {
