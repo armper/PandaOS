@@ -29,6 +29,10 @@ static DYNAMIC_FILES: Mutex<Option<BTreeMap<String, usize>>> = Mutex::new(None);
 /// Maps node_index to mode bits
 static FILE_MODES: Mutex<Option<BTreeMap<usize, u16>>> = Mutex::new(None);
 
+/// Ownership storage for files (in-memory and dynamic)
+/// Maps node_index to (uid, gid) tuple
+static FILE_OWNERSHIP: Mutex<Option<BTreeMap<usize, (u32, u32)>>> = Mutex::new(None);
+
 /// File type enumeration
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -75,6 +79,10 @@ pub struct FileMetadata {
     pub size: u64,
     /// POSIX mode (file type + permission bits)
     pub mode: u16,
+    /// Owner user ID
+    pub uid: u32,
+    /// Owner group ID
+    pub gid: u32,
 }
 
 impl FileMetadata {
@@ -122,6 +130,8 @@ pub struct FileNode {
     pub data: &'static [u8],
     pub file_type: FileType,
     pub mode: u16,
+    pub uid: u32,
+    pub gid: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -597,27 +607,31 @@ impl FdTable {
 
 pub static FILES: &[FileNode] = &[
     // Root directory
-    FileNode { path: "/", data: b"", file_type: FileType::Directory, mode: DEFAULT_DIR_MODE },
+    FileNode { path: "/", data: b"", file_type: FileType::Directory, mode: DEFAULT_DIR_MODE, uid: 0, gid: 0 },
     // /bin directory (now empty - programs loaded from disk/tmpfs)
-    FileNode { path: "/bin", data: b"", file_type: FileType::Directory, mode: DEFAULT_DIR_MODE },
+    FileNode { path: "/bin", data: b"", file_type: FileType::Directory, mode: DEFAULT_DIR_MODE, uid: 0, gid: 0 },
     // /etc directory
-    FileNode { path: "/etc", data: b"", file_type: FileType::Directory, mode: DEFAULT_DIR_MODE },
+    FileNode { path: "/etc", data: b"", file_type: FileType::Directory, mode: DEFAULT_DIR_MODE, uid: 0, gid: 0 },
     // /tmp directory (writable)
-    FileNode { path: "/tmp", data: b"", file_type: FileType::Directory, mode: DEFAULT_DIR_MODE },
+    FileNode { path: "/tmp", data: b"", file_type: FileType::Directory, mode: DEFAULT_DIR_MODE, uid: 0, gid: 0 },
     // /mnt directory (mount point for disk filesystem)
-    FileNode { path: "/mnt", data: b"", file_type: FileType::Directory, mode: DEFAULT_DIR_MODE },
+    FileNode { path: "/mnt", data: b"", file_type: FileType::Directory, mode: DEFAULT_DIR_MODE, uid: 0, gid: 0 },
     // Configuration files
     FileNode {
         path: "/etc/motd",
         data: b"Welcome to PandaOS.\r\nType 'help' for commands.\r\n",
         file_type: FileType::File,
         mode: DEFAULT_FILE_MODE,
+        uid: 0,
+        gid: 0,
     },
     FileNode {
         path: "/etc/version",
         data: b"PandaOS 0.1.0\r\n",
         file_type: FileType::File,
         mode: DEFAULT_FILE_MODE,
+        uid: 0,
+        gid: 0,
     },
 ];
 
@@ -1087,6 +1101,16 @@ pub fn stat_path(path: &str) -> Result<FileMetadata, ErrorCode> {
         }
     };
 
+    // Get ownership from FILE_OWNERSHIP if it exists, otherwise use node ownership
+    let (uid, gid) = {
+        let ownership = FILE_OWNERSHIP.lock();
+        if let Some(ref owner_map) = *ownership {
+            owner_map.get(&node_index).copied().unwrap_or((node.uid, node.gid))
+        } else {
+            (node.uid, node.gid)
+        }
+    };
+
     // Check if this is a dynamic file with data in WRITABLE_FILES
     let files = WRITABLE_FILES.lock();
     if let Some(ref store) = *files {
@@ -1095,6 +1119,8 @@ pub fn stat_path(path: &str) -> Result<FileMetadata, ErrorCode> {
                 file_type: FileType::File,
                 size: file_data.len() as u64,
                 mode,
+                uid,
+                gid,
             });
         }
     }
@@ -1104,6 +1130,8 @@ pub fn stat_path(path: &str) -> Result<FileMetadata, ErrorCode> {
         file_type: node.file_type,
         size: if node.file_type == FileType::Directory { 0 } else { node.data.len() as u64 },
         mode,
+        uid,
+        gid,
     })
 }
 
@@ -1123,6 +1151,16 @@ pub fn fstat_fd(table: &FdTable, fd: i32) -> Result<FileMetadata, ErrorCode> {
                 }
             };
 
+            // Get ownership from FILE_OWNERSHIP if it exists, otherwise use node ownership
+            let (uid, gid) = {
+                let ownership = FILE_OWNERSHIP.lock();
+                if let Some(ref owner_map) = *ownership {
+                    owner_map.get(&open.node_index).copied().unwrap_or((node.uid, node.gid))
+                } else {
+                    (node.uid, node.gid)
+                }
+            };
+
             // Check if this is a dynamic file with data in WRITABLE_FILES
             let files = WRITABLE_FILES.lock();
             if let Some(ref store) = *files {
@@ -1131,6 +1169,8 @@ pub fn fstat_fd(table: &FdTable, fd: i32) -> Result<FileMetadata, ErrorCode> {
                         file_type: FileType::File,
                         size: file_data.len() as u64,
                         mode,
+                        uid,
+                        gid,
                     });
                 }
             }
@@ -1144,6 +1184,8 @@ pub fn fstat_fd(table: &FdTable, fd: i32) -> Result<FileMetadata, ErrorCode> {
                     node.data.len() as u64
                 },
                 mode,
+                uid,
+                gid,
             })
         }
         FdKind::Directory(open) => {
@@ -1156,7 +1198,16 @@ pub fn fstat_fd(table: &FdTable, fd: i32) -> Result<FileMetadata, ErrorCode> {
                     node.mode
                 }
             };
-            Ok(FileMetadata { file_type: node.file_type, size: 0, mode })
+            // Get ownership from FILE_OWNERSHIP if it exists, otherwise use node ownership
+            let (uid, gid) = {
+                let ownership = FILE_OWNERSHIP.lock();
+                if let Some(ref owner_map) = *ownership {
+                    owner_map.get(&open.node_index).copied().unwrap_or((node.uid, node.gid))
+                } else {
+                    (node.uid, node.gid)
+                }
+            };
+            Ok(FileMetadata { file_type: node.file_type, size: 0, mode, uid, gid })
         }
         FdKind::DiskFile(open) | FdKind::DiskDirectory(open) => {
             crate::mount::diskfs_stat(open.inode)
