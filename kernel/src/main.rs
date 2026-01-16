@@ -66,6 +66,8 @@ pub extern "C" fn _start(boot_info: &'static bootloader::BootInfo) -> ! {
     // SAFETY: This is the first initialization call during boot
     let state = unsafe { state.init_hal() };
 
+    // Explicit early boot log to confirm serial is working
+    serial_println!("[BOOT] serial ok");
     serial_println!("Serial output initialized");
     println!("PandaOS v{}", env!("CARGO_PKG_VERSION"));
     println!("Hardware abstraction layer initialized");
@@ -514,7 +516,7 @@ fn read_handler(fd: i32, buf: u64, count: u64) -> syscall::SyscallResult {
             let mut temp_buf = [0u8; 4096];
             let to_read = count.min(temp_buf.len());
             let bytes_read = current.fd_table.read(fd, &mut temp_buf[..to_read])?;
-            
+
             if bytes_read > 0 {
                 crate::usermode::copy_to_user_bytes(buf, &temp_buf[..bytes_read])?;
             }
@@ -567,7 +569,7 @@ fn write_handler(fd: i32, buf: u64, count: u64) -> syscall::SyscallResult {
             if !writable {
                 return Err(syscall::ErrorCode::EBADF);
             }
-            
+
             // Write to writable file - use a temporary buffer
             let mut temp_buf = [0u8; 4096];
             let to_write = count.min(temp_buf.len());
@@ -639,7 +641,13 @@ fn stat_handler(path_ptr: u64, stat_buf: u64) -> syscall::SyscallResult {
     // Copy metadata to user space (file_type as u8, size as u64)
     let metadata_bytes = [
         metadata.file_type as u8,
-        0, 0, 0, 0, 0, 0, 0, // padding to align size field
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0, // padding to align size field
         (metadata.size & 0xFF) as u8,
         ((metadata.size >> 8) & 0xFF) as u8,
         ((metadata.size >> 16) & 0xFF) as u8,
@@ -666,7 +674,13 @@ fn fstat_handler(fd: i32, stat_buf: u64) -> syscall::SyscallResult {
     // Copy metadata to user space (file_type as u8, size as u64)
     let metadata_bytes = [
         metadata.file_type as u8,
-        0, 0, 0, 0, 0, 0, 0, // padding to align size field
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0, // padding to align size field
         (metadata.size & 0xFF) as u8,
         ((metadata.size >> 8) & 0xFF) as u8,
         ((metadata.size >> 16) & 0xFF) as u8,
