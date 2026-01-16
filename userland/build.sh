@@ -74,7 +74,17 @@ echo "Building chmod..."
 nasm -f elf64 chmod.asm -o build/chmod.o
 $LINKER -o build/chmod build/chmod.o -static -nostdlib --entry=_start
 
-cp build/hello build/hello1 build/hello2 build/init build/sh build/cat build/true build/echo build/wc build/ls build/chmod bin/
+# Build brk_test program
+echo "Building brk_test..."
+nasm -f elf64 brk_test.asm -o build/brk_test.o
+$LINKER -o build/brk_test build/brk_test.o -static -nostdlib --entry=_start
+
+# Build mmap_test program
+echo "Building mmap_test..."
+nasm -f elf64 mmap_test.asm -o build/mmap_test.o
+$LINKER -o build/mmap_test build/mmap_test.o -static -nostdlib --entry=_start
+
+cp build/hello build/hello1 build/hello2 build/init build/sh build/cat build/true build/echo build/wc build/ls build/chmod build/brk_test build/mmap_test bin/
 
 echo "Userland programs built successfully!"
 ls -lh build/
