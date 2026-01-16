@@ -12,6 +12,7 @@
 use crate::context::CpuContext;
 use crate::elf::ElfInfo;
 use crate::fs::FdTable;
+use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 use panda_hal::pid::{Pid, PidAllocator};
@@ -150,6 +151,8 @@ pub struct Process {
     pub cwd: String,
     /// PATH environment variable for command lookup
     pub path_env: String,
+    /// Environment variables (key=value map)
+    pub environ: BTreeMap<String, String>,
     /// Heap management
     pub heap: HeapInfo,
     /// Memory mappings created by mmap
@@ -227,6 +230,12 @@ impl Process {
         // Place it below the stack, leaving room for stack growth
         let mmap_base = 0x7FFF_0000_0000u64;
 
+        // Initialize default environment
+        let mut environ = BTreeMap::new();
+        environ.insert(String::from("PATH"), String::from("/mnt/bin:/bin"));
+        environ.insert(String::from("USER"), String::from("root"));
+        environ.insert(String::from("HOME"), String::from("/root"));
+
         Ok(Self {
             pid,
             pgid: pid, // Initially, process is its own group leader
@@ -244,6 +253,7 @@ impl Process {
             pending_signals: 0,
             cwd: String::from("/"),
             path_env: String::from("/mnt/bin:/bin"),
+            environ,
             heap,
             mappings: Vec::new(),
             mmap_base,
@@ -358,6 +368,7 @@ impl Process {
             pending_signals: 0,
             cwd: self.cwd.clone(),
             path_env: self.path_env.clone(),
+            environ: self.environ.clone(), // Clone environment
             heap: self.heap.clone(),
             mappings: self.mappings.clone(),
             mmap_base: self.mmap_base,
@@ -509,6 +520,7 @@ mod tests {
             pending_signals: 0,
             cwd: String::from("/"),
             path_env: String::from("/bin"),
+            environ: BTreeMap::new(),
             heap: HeapInfo::new(0x1000000),
             mappings: Vec::new(),
             mmap_base: 0x7FFF_0000_0000,
@@ -547,6 +559,7 @@ mod tests {
             pending_signals: 0,
             cwd: String::from("/"),
             path_env: String::from("/bin"),
+            environ: BTreeMap::new(),
             heap: HeapInfo::new(0x1000000),
             mappings: Vec::new(),
             mmap_base: 0x7FFF_0000_0000,
@@ -578,6 +591,7 @@ mod tests {
             pending_signals: 0,
             cwd: String::from("/"),
             path_env: String::from("/bin"),
+            environ: BTreeMap::new(),
             heap: HeapInfo::new(0x1000000),
             mappings: Vec::new(),
             mmap_base: 0x7FFF_0000_0000,
