@@ -25,6 +25,7 @@
 
 extern crate alloc;
 
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::panic::PanicInfo;
 
@@ -459,26 +460,11 @@ fn yield_handler() {
 }
 
 /// Exec handler - called when process replaces its image
-const EXEC_ARG_ADDR: u64 = 0x7FFF_FFFF_C000;
-const EXEC_ARG_MAX: usize = 128;
-
 fn execve_handler(
     path: &str,
     argv: &[Vec<u8>],
-    _envp: &[Vec<u8>],
+    envp: &[Vec<u8>],
 ) -> Result<(), syscall::ErrorCode> {
-    // For now, we only support the simplified single-arg interface
-    // Convert argv to optional single arg for backward compatibility
-    let arg = if argv.is_empty() {
-        None
-    } else if argv.len() == 1 {
-        // Single argument - convert from Vec<u8> to str
-        core::str::from_utf8(&argv[0]).ok()
-    } else {
-        // Multiple arguments not yet supported
-        return Err(syscall::ErrorCode::E2BIG);
-    };
-
     // Get current process to access PATH environment variable
     // SAFETY: Called from syscall handler with interrupts disabled
     let scheduler = unsafe { get_scheduler() };
@@ -528,7 +514,7 @@ fn execve_handler(
         return Err(syscall::ErrorCode::EISDIR);
     }
 
-    // Check execute permission
+    // Check execute permission (requirement: enforce x bit)
     if !fs::can_exec(current.uid, current.gid, metadata.uid, metadata.gid, metadata.mode) {
         return Err(syscall::ErrorCode::EACCES);
     }
@@ -546,6 +532,10 @@ fn execve_handler(
         _ => syscall::ErrorCode::EINVAL,
     })?;
 
+    // Save process info before replacing image
+    let uid = current.uid;
+    let gid = current.gid;
+
     // SAFETY: Frame allocator and GDT are initialized.
     unsafe {
         current.replace_image(&elf_info, &elf_data).map_err(|_| syscall::ErrorCode::ENOMEM)?;
@@ -554,23 +544,39 @@ fn execve_handler(
     // Switch to the new page table so user memory copies target the new image.
     usermode::switch_page_table(current.page_table_phys);
 
-    // Seed the exec argument at a fixed user address.
-    let mut arg_buf = [0u8; EXEC_ARG_MAX];
-    let arg_len = match arg {
-        Some(value) => {
-            if value.len() + 1 > EXEC_ARG_MAX {
-                return Err(syscall::ErrorCode::EINVAL);
+    // Update environment from envp (replace old environment)
+    current.environ.clear();
+    for env in envp {
+        // Parse KEY=VALUE format
+        if let Ok(env_str) = core::str::from_utf8(env) {
+            if let Some(eq_pos) = env_str.find('=') {
+                let key = &env_str[..eq_pos];
+                let value = &env_str[eq_pos + 1..];
+                current.environ.insert(String::from(key), String::from(value));
             }
-            arg_buf[..value.len()].copy_from_slice(value.as_bytes());
-            arg_buf[value.len()] = 0;
-            value.len() + 1
         }
-        None => {
-            arg_buf[0] = 0;
-            1
-        }
+    }
+
+    // Set up Linux-compatible user stack with argc/argv/envp/auxv
+    // SAFETY: Stack memory is allocated and page table is valid after replace_image
+    let new_sp = unsafe {
+        exec_stack::setup_user_stack(
+            current.page_table_phys,
+            current.user_stack_ptr,
+            &resolved_path,
+            argv,
+            envp,
+            elf_info.entry_point,
+            elf_info.phdr_addr,
+            elf_info.phnum,
+            uid,
+            gid,
+        )?
     };
-    crate::usermode::copy_to_user_bytes(EXEC_ARG_ADDR, &arg_buf[..arg_len])?;
+
+    // Update process stack pointer and context for new program
+    current.user_stack_ptr = new_sp;
+    current.context.rsp = new_sp;
 
     // SAFETY: Scheduler is initialized and interrupts are disabled here.
     unsafe {

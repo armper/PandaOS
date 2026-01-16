@@ -103,6 +103,10 @@ pub struct ElfInfo {
     pub entry_point: u64,
     pub load_segments: [Option<LoadSegment>; 8],
     pub segment_count: usize,
+    /// Physical address of program headers (for AT_PHDR)
+    pub phdr_addr: u64,
+    /// Number of program headers (for AT_PHNUM)
+    pub phnum: u16,
 }
 
 /// A loadable segment
@@ -225,7 +229,26 @@ pub fn parse_elf(data: &[u8]) -> Result<ElfInfo, ElfError> {
         }
     }
 
-    Ok(ElfInfo { entry_point: ehdr.e_entry, load_segments: segments, segment_count })
+    // Calculate program header address if first segment starts at low address
+    // For typical ELF executables, phdrs are loaded with the first PT_LOAD segment
+    let phdr_addr = if ehdr.e_phoff < 0x1000 && segment_count > 0 {
+        // Program headers are in the first loadable segment
+        if let Some(seg) = segments[0] {
+            seg.vaddr + ehdr.e_phoff
+        } else {
+            0
+        }
+    } else {
+        0
+    };
+
+    Ok(ElfInfo {
+        entry_point: ehdr.e_entry,
+        load_segments: segments,
+        segment_count,
+        phdr_addr,
+        phnum: ehdr.e_phnum,
+    })
 }
 
 /// Load ELF segments into memory

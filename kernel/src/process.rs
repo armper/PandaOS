@@ -483,8 +483,13 @@ mod tests {
 
     #[test]
     fn test_process_creation() {
-        let elf_info =
-            ElfInfo { entry_point: 0x40_0000, load_segments: [None; 8], segment_count: 0 };
+        let elf_info = ElfInfo {
+            entry_point: 0x40_0000,
+            load_segments: [None; 8],
+            segment_count: 0,
+            phdr_addr: 0,
+            phnum: 0,
+        };
 
         let pid_allocator = PidAllocator::new(1);
 
@@ -497,8 +502,13 @@ mod tests {
 
     #[test]
     fn test_process_state_transitions() {
-        let elf_info =
-            ElfInfo { entry_point: 0x40_0000, load_segments: [None; 8], segment_count: 0 };
+        let elf_info = ElfInfo {
+            entry_point: 0x40_0000,
+            load_segments: [None; 8],
+            segment_count: 0,
+            phdr_addr: 0,
+            phnum: 0,
+        };
 
         let pid_allocator = PidAllocator::new(1);
 
