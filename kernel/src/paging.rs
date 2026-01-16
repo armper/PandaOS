@@ -478,7 +478,7 @@ pub unsafe fn map_page(
     // 3. Kernel stack or heap initialization overlaps with existing mappings
     if l1_table[p1_index].is_present() {
         let existing_addr = l1_table[p1_index].addr();
-        let new_addr = phys_addr.as_u64() & 0x000F_FFFF_FFFF_F000;
+        let new_addr = phys_addr.page_align_down().as_u64();
         
         // If already mapped to the same frame, this is an idempotent operation - allow it
         // This is safe and correct: we're just ensuring the mapping and potentially updating flags
