@@ -25,8 +25,8 @@
 
 extern crate alloc;
 
-use core::panic::PanicInfo;
 use alloc::vec::Vec;
+use core::panic::PanicInfo;
 
 // Import VGA and serial macros
 #[macro_use]
@@ -1300,7 +1300,7 @@ fn brk_handler(addr: u64) -> syscall::SyscallResult {
     // Constants for page alignment
     const PAGE_SIZE: u64 = 4096;
     const PAGE_MASK: u64 = 0xFFF;
-    
+
     // SAFETY: Called from syscall handler with interrupts disabled
     let scheduler = unsafe { get_scheduler() };
     let current = scheduler.current_process_mut().ok_or(syscall::ErrorCode::ESRCH)?;
@@ -1319,6 +1319,12 @@ fn brk_handler(addr: u64) -> syscall::SyscallResult {
             current.heap.heap_limit
         );
         return Ok(current.heap.heap_end); // Return current break on invalid request
+    }
+
+    // Check for collision with mmap region
+    if addr > current.mmap_base {
+        serial_println!("[BRK] Would collide with mmap region at {:#x}", current.mmap_base);
+        return Err(syscall::ErrorCode::ENOMEM);
     }
 
     let old_break = current.heap.heap_end;
@@ -1341,11 +1347,10 @@ fn brk_handler(addr: u64) -> syscall::SyscallResult {
 
             // Allocate physical frame
             // SAFETY: Frame allocator is initialized
-            let frame = unsafe {
-                memory::allocate_frame().ok_or(syscall::ErrorCode::ENOMEM)?
-            };
+            let frame = unsafe { memory::allocate_frame().ok_or(syscall::ErrorCode::ENOMEM)? };
 
-            let phys_addr = paging::PhysAddr::new(frame as u64 * panda_hal::memory::FRAME_SIZE as u64);
+            let phys_addr =
+                paging::PhysAddr::new(frame as u64 * panda_hal::memory::FRAME_SIZE as u64);
             let virt_addr = paging::VirtAddr::new(page_addr);
 
             // Map page with RW, NX, USER flags
@@ -1408,7 +1413,7 @@ fn mmap_handler(
     const PAGE_MASK: u64 = 0xFFF;
     const MAX_MMAP_SIZE: u64 = 0x4000_0000; // 1GB
     const KERNEL_SPACE_START: u64 = 0x8000_0000_0000;
-    
+
     serial_println!(
         "[MMAP] addr={:#x}, length={}, prot={}, flags={:#x}, fd={}",
         addr,
@@ -1474,6 +1479,16 @@ fn mmap_handler(
         return Err(syscall::ErrorCode::EINVAL);
     }
 
+    // Check for collision with heap
+    if map_addr < current.heap.heap_end {
+        serial_println!(
+            "[MMAP] Would collide with heap at {:#x} (heap_end={:#x})",
+            map_addr,
+            current.heap.heap_end
+        );
+        return Err(syscall::ErrorCode::ENOMEM);
+    }
+
     serial_println!("[MMAP] Mapping {} pages at {:#x}", num_pages, map_addr);
 
     // Map pages
@@ -1482,16 +1497,14 @@ fn mmap_handler(
 
         // Allocate physical frame
         // SAFETY: Frame allocator is initialized
-        let frame = unsafe {
-            memory::allocate_frame().ok_or(syscall::ErrorCode::ENOMEM)?
-        };
+        let frame = unsafe { memory::allocate_frame().ok_or(syscall::ErrorCode::ENOMEM)? };
 
         let phys_addr = paging::PhysAddr::new(frame as u64 * panda_hal::memory::FRAME_SIZE as u64);
         let virt_addr = paging::VirtAddr::new(page_addr);
 
         // Build page table flags
-        let mut page_flags = paging::PageTableFlags::PRESENT
-            .or(paging::PageTableFlags::USER_ACCESSIBLE);
+        let mut page_flags =
+            paging::PageTableFlags::PRESENT.or(paging::PageTableFlags::USER_ACCESSIBLE);
 
         if (prot & PROT_WRITE) != 0 {
             page_flags = page_flags.or(paging::PageTableFlags::WRITABLE);

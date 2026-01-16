@@ -479,7 +479,7 @@ pub unsafe fn map_page(
     if l1_table[p1_index].is_present() {
         let existing_addr = l1_table[p1_index].addr();
         let new_addr = phys_addr.page_align_down().as_u64();
-        
+
         // If already mapped to the same frame, this is an idempotent operation - allow it
         // This is safe and correct: we're just ensuring the mapping and potentially updating flags
         if existing_addr == new_addr {
@@ -487,7 +487,7 @@ pub unsafe fn map_page(
             l1_table[p1_index].set(phys_addr.as_u64(), flags);
             return Ok(());
         }
-        
+
         // If mapped to a different frame, this is an error - we don't support remapping
         return Err("Page already mapped to a different physical frame");
     }

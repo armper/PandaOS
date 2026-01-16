@@ -62,29 +62,64 @@ Each process has isolated 64-bit virtual address space:
 - **User stack** (0x7FFF_FFFF_F000): 16KB fixed size, grows downward, RW+NX
 - **Kernel space** (0xFFFF_8000_0000_0000+): Higher-half mapping, includes per-process kernel stack
 
+**Memory Layout Invariants:**
+- Heap grows upward from `heap_start` (page-aligned, after ELF segments)
+- mmap grows downward from `mmap_base` (0x7FFF_0000_0000_0000)
+- Heap and mmap regions never overlap (collision detection enforced)
+- Stack remains fixed at top of user space
+- All regions isolated per-process via page tables
+
 ### Dynamic Memory Management
 
 **brk/sbrk (syscall #12)**:
 - Manages heap growth and shrinkage
 - Returns current program break when called with addr=0
 - Page-aligned allocations, immediate physical frame allocation
-- Maximum 1GB heap by default
+- Maximum 1GB heap by default (configurable via `heap_limit`)
+- Validates bounds: `addr >= heap_start && addr <= heap_limit`
+- Checks for collision with mmap region before growing
 - Used by musl malloc for small allocations
+- On growth: allocates frames, maps pages with RW+NX+USER flags, zeros memory
+- On shrink: unmaps pages, deallocates frames (whole pages only)
 
 **mmap (syscall #9)**:
 - Anonymous memory mappings only (no file-backed)
-- Supports MAP_PRIVATE | MAP_ANONYMOUS
+- Supports MAP_PRIVATE | MAP_ANONYMOUS only
+- fd must be -1 for anonymous mappings
 - Enforces W^X: rejects PROT_WRITE + PROT_EXEC
+- Allocates from mmap_base growing downward
+- Validates no collision with heap region
+- Tracks all mappings in per-process `mappings` Vec
 - Used by musl malloc for large allocations
+- On allocation: maps pages with user-specified protection flags
 - No munmap yet (mappings persist until process exit)
+- Maximum 1GB total mmap space
+
+**Fork Semantics:**
+- Heap state (heap_start, heap_end, heap_limit) copied to child
+- mmap_base copied to child
+- All mappings Vec cloned to child
+- Page tables fully cloned (eager copy, no COW)
+- Child gets independent physical frames
+- Parent and child completely isolated
+
+**Exec Semantics:**
+- Old heap cleared (heap_end reset to new heap_start)
+- All mmap mappings cleared
+- mmap_base reset to default
+- New heap_start calculated from new ELF segments
+- Fresh page table created
+- No memory from old process image retained
 
 ### Memory Safety
 
 - W^X enforcement: writable pages are not executable
+- Collision detection: heap and mmap cannot overlap
 - User space isolated from kernel space via page table permissions
 - All user pointers validated before dereferencing
 - No kernel mappings in user space
 - TLB flushed on page table changes
+- Per-process isolation ensures child modifications don't affect parent
 
 ## ELF Loading Pipeline
 

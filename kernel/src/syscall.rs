@@ -18,6 +18,7 @@
 //! - Syscalls preserve all GPRs except RAX (return value) and RCX/R11 (syscall clobbers)
 
 // Import macros for logging
+use alloc::vec::Vec;
 #[cfg(any(
     feature = "shell-smoke",
     feature = "vfs-cat-smoke",
@@ -34,7 +35,6 @@
     feature = "tty-smoke"
 ))]
 use core::sync::atomic::{AtomicUsize, Ordering};
-use alloc::vec::Vec;
 use panda_hal::serial_println;
 use spin::Once;
 
@@ -827,7 +827,7 @@ fn sys_exec(path_ptr: u64, arg_ptr: u64) -> SyscallResult {
     let mut arg_buf = [0u8; MAX_ARG_LEN];
 
     let path = crate::usermode::copy_user_cstr(path_ptr, &mut path_buf)?;
-    
+
     // Convert old-style arg to new argv format
     let argv: Vec<Vec<u8>> = if arg_ptr == 0 {
         Vec::new()
@@ -962,14 +962,7 @@ fn sys_brk(addr: u64) -> SyscallResult {
 ///
 /// Returns mapped address on success, or -errno on failure.
 #[allow(clippy::too_many_arguments)]
-fn sys_mmap(
-    addr: u64,
-    length: u64,
-    prot: i32,
-    flags: i32,
-    fd: i32,
-    offset: u64,
-) -> SyscallResult {
+fn sys_mmap(addr: u64, length: u64, prot: i32, flags: i32, fd: i32, offset: u64) -> SyscallResult {
     if let Some(mmap_fn) = MMAP_HANDLER.get() {
         mmap_fn(addr, length, prot, flags, fd, offset)
     } else {
@@ -1015,9 +1008,7 @@ pub fn set_yield_handler(handler: fn()) {
 ///
 /// Must be called before any user processes run.
 /// Handler receives path, argv array, and envp array.
-pub fn set_execve_handler(
-    handler: fn(&str, &[Vec<u8>], &[Vec<u8>]) -> Result<(), ErrorCode>,
-) {
+pub fn set_execve_handler(handler: fn(&str, &[Vec<u8>], &[Vec<u8>]) -> Result<(), ErrorCode>) {
     EXECVE_HANDLER.call_once(|| handler);
 }
 

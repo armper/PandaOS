@@ -84,7 +84,12 @@ echo "Building mmap_test..."
 nasm -f elf64 mmap_test.asm -o build/mmap_test.o
 $LINKER -o build/mmap_test build/mmap_test.o -static -nostdlib --entry=_start
 
-cp build/hello build/hello1 build/hello2 build/init build/sh build/cat build/true build/echo build/wc build/ls build/chmod build/brk_test build/mmap_test bin/
+# Build vm_test program
+echo "Building vm_test..."
+nasm -f elf64 vm_test.asm -o build/vm_test.o
+$LINKER -o build/vm_test build/vm_test.o -static -nostdlib --entry=_start
+
+cp build/hello build/hello1 build/hello2 build/init build/sh build/cat build/true build/echo build/wc build/ls build/chmod build/brk_test build/mmap_test build/vm_test bin/
 
 echo "Userland programs built successfully!"
 ls -lh build/
