@@ -157,8 +157,42 @@ PandaOS supports POSIX-like file metadata with mode bits:
 **Syscalls:**
 - `stat(path, buf)` - Get metadata by path (syscall #4)
 - `fstat(fd, buf)` - Get metadata by file descriptor (syscall #5)
+- `chmod(path, mode)` - Change file mode bits (syscall #90)
 
-**Important**: Permission bits are stored and reported but **not enforced** yet. All files are readable and writable by all processes. Permission enforcement is planned for a future release.
+**Permission Enforcement:**
+
+PandaOS now enforces owner permissions (user bits only, uid always 0):
+
+1. **Read Permission (r - 0o400)**:
+   - Required for `open()` with `O_RDONLY` or `O_RDWR`
+   - Required for `read()` operations
+   - Required for directory listing with `getdents64()`
+   - Missing: returns `EACCES`
+
+2. **Write Permission (w - 0o200)**:
+   - Required for `open()` with `O_WRONLY` or `O_RDWR`
+   - Required for `write()` operations
+   - Missing: returns `EACCES`
+   - Note: Disk filesystem is read-only, writes return `EROFS`
+
+3. **Execute Permission (x - 0o100)**:
+   - Required for `execve()` to execute files
+   - Required to traverse directories during path resolution
+   - Missing: returns `EACCES`
+   - Directories: returns `EISDIR`
+
+**Mode Changes:**
+- Use `chmod(path, mode)` to change file permissions
+- Mode must be 0-0777 (octal)
+- File type bits are preserved automatically
+- Works on in-memory and tmpfs; diskfs returns `EROFS`
+
+**Current Limitations:**
+- Only owner (user) permissions enforced
+- Group and other bits stored but not checked
+- No umask support
+- No setuid/setgid/sticky bits
+- uid/gid always 0 (no multi-user support yet)
 
 ### HAL (`hal/`)
 

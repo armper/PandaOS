@@ -128,7 +128,59 @@ and rax, 0o777              ; Mask permission bits
 ```
 
 ### Permission Enforcement
-**Important**: Permission bits are currently stored and reported but **not enforced**. All files are readable by all processes. Permission enforcement will be added in a future update.
+
+**Permission bits are now enforced!** The kernel checks owner permissions (uid always 0) for all file operations:
+
+#### Read Permission (r)
+- Required for `open()` with `O_RDONLY` or `O_RDWR`
+- Required for `read()` operations
+- Required for listing directory contents with `getdents64()`
+- Missing read permission returns `EACCES`
+
+#### Write Permission (w)
+- Required for `open()` with `O_WRONLY` or `O_RDWR`
+- Required for `write()` operations
+- Missing write permission returns `EACCES`
+- Disk filesystem is read-only, write attempts return `EROFS`
+
+#### Execute Permission (x)
+- Required for `execve()` to execute a file
+- Required to traverse directories during path resolution
+- Missing execute permission returns `EACCES`
+- Attempting to execute a directory returns `EISDIR`
+
+#### chmod Syscall
+
+Change file permissions with the `chmod` syscall:
+
+```c
+int chmod(const char *path, mode_t mode);
+```
+
+- **Syscall number**: 90
+- **Arguments**: path (string), mode (octal, 0-0777)
+- **Returns**: 0 on success, negative errno on failure
+- **Errors**: 
+  - `EACCES`: Permission denied
+  - `ENOENT`: File not found
+  - `EROFS`: Read-only filesystem (diskfs)
+  - `EINVAL`: Invalid mode
+
+Example usage:
+```asm
+mov rax, 90              ; SYS_CHMOD
+lea rdi, [path]          ; path pointer
+mov rsi, 0o755           ; mode (rwxr-xr-x)
+syscall
+```
+
+Shell usage:
+```bash
+chmod 755 /tmp/myfile
+chmod 644 /mnt/data.txt
+```
+
+**Note**: Only owner permissions (user bits) are enforced. Group and other permissions are stored but not checked (uid/gid always 0).
 
 ## Directory Structure
 
