@@ -183,10 +183,10 @@ def main():
     """Generate test disk image."""
     print("Generating disk image...")
     
-    disk = DiskImage(size_sectors=2048)
+    disk = DiskImage(size_sectors=4096)  # Increased size for binaries
     
-    # Reserve space for inodes (estimate: 16 inodes = 2 sectors)
-    disk.next_data_block = 1 + 2  # Temporary, will be recalculated
+    # Reserve space for inodes (estimate: 32 inodes = 4 sectors)
+    disk.next_data_block = 1 + 4  # Temporary, will be recalculated
     
     # Create files first (to get inode numbers)
     print("  Creating files...")
@@ -194,16 +194,79 @@ def main():
     readme_inode = disk.add_file("README", "This is a test filesystem.\nMounted at /mnt\n")
     test_inode = disk.add_file("test.txt", "Test file content\n")
     
-    # Create bin directory
-    print("  Creating /bin directory...")
-    # Add some placeholder binaries (empty for now)
-    ls_inode = disk.add_file("ls", "")
-    cat_inode = disk.add_file("cat", "")
+    # Create version file
+    version_inode = disk.add_file("version", "PandaOS 0.1.0\n")
     
-    bin_inode = disk.add_directory([
-        (ls_inode, "ls"),
-        (cat_inode, "cat"),
-    ])
+    # Create bin directory with actual ELF binaries
+    print("  Creating /bin directory with ELF binaries...")
+    userland_bin = Path(__file__).parent.parent / "userland" / "bin"
+    
+    bin_entries = []
+    
+    # Add init binary
+    init_path = userland_bin / "init"
+    if init_path.exists():
+        print(f"    Adding init ({init_path.stat().st_size} bytes)")
+        with open(init_path, 'rb') as f:
+            init_data = f.read()
+        init_inode = disk.add_file("init", init_data)
+        bin_entries.append((init_inode, "init"))
+    
+    # Add shell binary
+    sh_path = userland_bin / "sh"
+    if sh_path.exists():
+        print(f"    Adding sh ({sh_path.stat().st_size} bytes)")
+        with open(sh_path, 'rb') as f:
+            sh_data = f.read()
+        sh_inode = disk.add_file("sh", sh_data)
+        bin_entries.append((sh_inode, "sh"))
+    
+    # Add ls binary
+    ls_path = userland_bin / "ls"
+    if ls_path.exists():
+        print(f"    Adding ls ({ls_path.stat().st_size} bytes)")
+        with open(ls_path, 'rb') as f:
+            ls_data = f.read()
+        ls_inode = disk.add_file("ls", ls_data)
+        bin_entries.append((ls_inode, "ls"))
+    
+    # Add cat binary
+    cat_path = userland_bin / "cat"
+    if cat_path.exists():
+        print(f"    Adding cat ({cat_path.stat().st_size} bytes)")
+        with open(cat_path, 'rb') as f:
+            cat_data = f.read()
+        cat_inode = disk.add_file("cat", cat_data)
+        bin_entries.append((cat_inode, "cat"))
+    
+    # Add echo binary
+    echo_path = userland_bin / "echo"
+    if echo_path.exists():
+        print(f"    Adding echo ({echo_path.stat().st_size} bytes)")
+        with open(echo_path, 'rb') as f:
+            echo_data = f.read()
+        echo_inode = disk.add_file("echo", echo_data)
+        bin_entries.append((echo_inode, "echo"))
+    
+    # Add wc binary
+    wc_path = userland_bin / "wc"
+    if wc_path.exists():
+        print(f"    Adding wc ({wc_path.stat().st_size} bytes)")
+        with open(wc_path, 'rb') as f:
+            wc_data = f.read()
+        wc_inode = disk.add_file("wc", wc_data)
+        bin_entries.append((wc_inode, "wc"))
+    
+    # Add true binary
+    true_path = userland_bin / "true"
+    if true_path.exists():
+        print(f"    Adding true ({true_path.stat().st_size} bytes)")
+        with open(true_path, 'rb') as f:
+            true_data = f.read()
+        true_inode = disk.add_file("true", true_data)
+        bin_entries.append((true_inode, "true"))
+    
+    bin_inode = disk.add_directory(bin_entries)
     
     # Create root directory
     print("  Creating root directory...")
@@ -211,6 +274,7 @@ def main():
         (hello_inode, "hello.txt"),
         (readme_inode, "README"),
         (test_inode, "test.txt"),
+        (version_inode, "version"),
         (bin_inode, "bin"),
     ])
     
@@ -221,8 +285,8 @@ def main():
     actual_first_data_block = 1 + inode_sectors
     
     # Shift all data block numbers if needed
-    if actual_first_data_block != (1 + 2):
-        shift = actual_first_data_block - (1 + 2)
+    if actual_first_data_block != (1 + 4):
+        shift = actual_first_data_block - (1 + 4)
         for inode in disk.inodes:
             for i in range(len(inode.direct_blocks)):
                 if inode.direct_blocks[i] != 0:
@@ -236,18 +300,21 @@ def main():
     output_file = Path(__file__).parent.parent / "fs.img"
     disk.save(output_file)
     
-    print(f"Disk image created: {output_file}")
+    print(f"\nDisk image created: {output_file}")
     print(f"  Root inode: {root_inode}")
     print(f"  Total inodes: {len(disk.inodes)}")
     print(f"  First data block: {actual_first_data_block}")
     print(f"  Image size: {len(disk.sectors)} sectors ({len(disk.sectors) * SECTOR_SIZE} bytes)")
     
     # Print file listing
-    print("\nFiles in root:")
-    print(f"  hello.txt (inode {hello_inode})")
-    print(f"  README (inode {readme_inode})")
-    print(f"  test.txt (inode {test_inode})")
-    print(f"  bin/ (inode {bin_inode})")
+    print("\nFiles in image:")
+    print(f"  /hello.txt (inode {hello_inode})")
+    print(f"  /README (inode {readme_inode})")
+    print(f"  /test.txt (inode {test_inode})")
+    print(f"  /version (inode {version_inode})")
+    print(f"  /bin/ (inode {bin_inode})")
+    for inode_num, name in bin_entries:
+        print(f"    /bin/{name} (inode {inode_num})")
 
 
 if __name__ == '__main__':
