@@ -532,7 +532,11 @@ All page table frames are tracked to ensure they're never allocated again:
 1. Bootloader loads kernel into memory at physical address ~1 MiB
 2. Bootloader switches to long mode (64-bit) and sets up basic paging
 3. Bootloader jumps to kernel `_start`
-4. Kernel initializes HAL (serial, VGA)
+4. Kernel initializes HAL (serial, VGA):
+   - Serial port (COM1 at 0x3F8) initialized FIRST
+   - Enables early debug logging via `serial_println!`
+   - VGA text mode initialized for console output
+   - Both outputs available throughout boot
 5. Kernel sets up IDT and exception handlers
 6. Kernel initializes memory management:
    - Parses bootloader memory map
@@ -558,6 +562,14 @@ All page table frames are tracked to ensure they're never allocated again:
 - Stack, GDT, and IDT pointers remain valid during paging changes
 - Page table frames are tracked before any new mappings are created
 - All critical structures (kernel, bootloader, page tables, heap) are reserved before allocations begin
+
+**Serial Output Assumptions:**
+- Serial (COM1 at 0x3F8) is initialized before any logging
+- Bootloader passes correct I/O permissions for COM1
+- Serial is ready before interrupts are enabled
+- Panic handlers always output to serial for debugging
+- `serial_println!` macro uses interrupt-safe spinlock (works before and after interrupt enable)
+- Early boot marker `[BOOT] serial ok` confirms serial initialization
 
 ## Interrupt Handling
 

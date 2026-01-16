@@ -4,6 +4,85 @@
 
 This implementation adds higher-half kernel mapping infrastructure and comprehensive page table frame tracking to PandaOS.
 
+## Serial Output & Debugging
+
+### Serial Initialization
+
+Serial output (COM1 at 0x3F8) is initialized at the **very first stage** of kernel boot:
+
+1. Bootloader hands control to `_start()`
+2. `init_hal()` immediately initializes serial port
+3. Early boot marker `[BOOT] serial ok` confirms initialization
+4. All subsequent kernel logs can use `serial_println!`
+
+**Key Properties:**
+- Serial is ready before memory, interrupts, or heap
+- Works throughout boot (before and after interrupt enable)
+- Uses interrupt-safe spinlock for thread safety
+- Panic handler outputs to both serial and VGA
+
+### Debugging Serial Issues
+
+If QEMU tests show no serial output:
+
+**Check 1: QEMU Serial Configuration**
+```bash
+# Correct: Write to file
+qemu-system-x86_64 -serial file:output.log ...
+
+# Correct: Write to stdio
+qemu-system-x86_64 -serial stdio ...
+
+# Wrong: No serial device
+qemu-system-x86_64 -display none ...  # Missing -serial!
+```
+
+**Check 2: Early Boot Marker**
+Look for `[BOOT] serial ok` at the start of the log:
+```bash
+cat target/qemu/test.log | head -5
+# Should see: [BOOT] serial ok
+```
+
+**Check 3: Bootloader Permissions**
+- Bootloader (bootloader 0.9) automatically grants I/O permissions for COM1
+- No manual I/O permission setup needed
+- Serial port is memory-mapped I/O (MMIO), accessible after HAL init
+
+**Check 4: Log File Capture**
+```bash
+# QEMU test script captures to target/qemu/<test_name>.log
+SHELL_SMOKE=1 ./scripts/qemu-test.sh
+cat target/qemu/shell_smoke.log  # Check actual output
+
+# Manual QEMU run
+qemu-system-x86_64 \
+  -drive format=raw,file=bootimage.bin \
+  -serial file:/tmp/serial.log \
+  -display none
+cat /tmp/serial.log
+```
+
+**Check 5: Test Markers**
+All QEMU smoke tests should emit:
+- `TEST PASS <test_name>` on success
+- `TEST FAIL <test_name>` on failure
+- `KERNEL PANIC: ...` on panic
+
+### Serial vs VGA Output
+
+PandaOS has two independent output channels:
+
+| Feature | `serial_println!` | `println!` |
+|---------|------------------|-----------|
+| Output | Serial port (COM1) | VGA text buffer |
+| Capture | QEMU `-serial file:` | Not captured |
+| When Available | After `init_hal()` | After `init_hal()` |
+| Test Visible | ✅ Yes | ❌ No |
+| Thread Safe | ✅ Yes (spinlock) | ✅ Yes (spinlock) |
+
+**For Tests:** Always use `serial_println!` for test output and markers.
+
 ## What Was Implemented
 
 ### 1. Linker Symbols Module (`kernel/src/linker_symbols.rs`)
@@ -64,7 +143,7 @@ cargo test --lib --workspace --target x86_64-unknown-linux-gnu
 
 **Result**: ✅ 51 tests passing
 
-### QEMU Integration Tests (Framework Ready)
+### QEMU Integration Tests
 
 #### Prerequisites
 ```bash
@@ -74,6 +153,51 @@ cargo install bootimage --version "^0.10"
 # Install QEMU
 sudo apt-get install -y qemu-system-x86
 ```
+
+#### Test 0: Serial Smoke - Minimal Serial Output Test
+
+**Purpose**: Verify serial output works at the most basic level.
+
+**Test Flow**:
+1. Boot kernel (no scheduler, no userland)
+2. Initialize serial port (COM1 at 0x3F8)
+3. Print `[BOOT] serial ok` marker
+4. Run minimal test framework (2 tests)
+5. Exit with `TEST PASS serial_smoke`
+
+**Expected Output**:
+```
+[BOOT] serial ok
+Running 2 test(s)
+Serial output is working
+Early boot marker visible
+TEST PASS serial_smoke
+```
+
+**Running the Test**:
+```bash
+# Via cargo test (when working)
+cargo test --manifest-path kernel/Cargo.toml --test serial_smoke --target x86_64-unknown-none
+
+# Manual QEMU run
+qemu-system-x86_64 \
+  -drive format=raw,file=target/x86_64-unknown-none/debug/bootimage-serial_smoke \
+  -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
+  -serial file:target/qemu/serial_smoke.log \
+  -display none
+cat target/qemu/serial_smoke.log
+```
+
+**What it tests**:
+- Serial port initialization works
+- Early boot marker is visible
+- `serial_println!` macro works
+- Test framework can emit markers
+- QEMU can capture serial output to file
+- Exit mechanism (isa-debug-exit) works
+
+**Why it's Important**:
+This is the foundation for all other QEMU tests. If serial output doesn't work, no test can report results.
 
 #### Building Kernel Bootimage
 ```bash

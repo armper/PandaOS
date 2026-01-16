@@ -66,6 +66,8 @@ pub extern "C" fn _start(boot_info: &'static bootloader::BootInfo) -> ! {
     // SAFETY: This is the first initialization call during boot
     let state = unsafe { state.init_hal() };
 
+    // Explicit early boot log to confirm serial is working
+    serial_println!("[BOOT] serial ok");
     serial_println!("Serial output initialized");
     println!("PandaOS v{}", env!("CARGO_PKG_VERSION"));
     println!("Hardware abstraction layer initialized");
