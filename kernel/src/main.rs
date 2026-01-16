@@ -309,7 +309,7 @@ unsafe fn init_scheduler_and_start() -> ! {
     } else {
         panic!("init program not found in /mnt/bin/init or /init");
     };
-    
+
     println!("Loading init from {}...", init_path);
     let init_data_vec = fs::read_file_to_vec(init_path).expect("Failed to read init");
     println!("Loaded init program ({} bytes)...", init_data_vec.len());
@@ -695,16 +695,40 @@ fn stat_handler(path_ptr: u64, stat_buf: u64) -> syscall::SyscallResult {
     // Get metadata
     let metadata = fs::stat_path(&resolved_path)?;
 
-    // Copy metadata to user space (file_type as u8, size as u64)
+    // Copy metadata to user space
+    // struct stat {
+    //     st_mode: u16,   // offset 0, 2 bytes
+    //     padding: u16,   // offset 2, 2 bytes (alignment)
+    //     st_nlink: u32,  // offset 4, 4 bytes
+    //     st_uid: u32,    // offset 8, 4 bytes
+    //     st_gid: u32,    // offset 12, 4 bytes
+    //     st_size: u64,   // offset 16, 8 bytes
+    //     st_ino: u64,    // offset 24, 8 bytes
+    // }
+    // Total: 32 bytes
     let metadata_bytes = [
-        metadata.file_type as u8,
+        // st_mode (u16, little-endian)
+        (metadata.mode & 0xFF) as u8,
+        ((metadata.mode >> 8) & 0xFF) as u8,
+        // padding (u16)
+        0,
+        0,
+        // st_nlink (u32, always 1)
+        1,
+        0,
+        0,
+        0,
+        // st_uid (u32, always 0)
         0,
         0,
         0,
         0,
+        // st_gid (u32, always 0)
         0,
         0,
-        0, // padding to align size field
+        0,
+        0,
+        // st_size (u64, little-endian)
         (metadata.size & 0xFF) as u8,
         ((metadata.size >> 8) & 0xFF) as u8,
         ((metadata.size >> 16) & 0xFF) as u8,
@@ -713,6 +737,15 @@ fn stat_handler(path_ptr: u64, stat_buf: u64) -> syscall::SyscallResult {
         ((metadata.size >> 40) & 0xFF) as u8,
         ((metadata.size >> 48) & 0xFF) as u8,
         ((metadata.size >> 56) & 0xFF) as u8,
+        // st_ino (u64, fake inode = 0)
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
     ];
     crate::usermode::copy_to_user_bytes(stat_buf, &metadata_bytes)?;
 
@@ -728,16 +761,40 @@ fn fstat_handler(fd: i32, stat_buf: u64) -> syscall::SyscallResult {
     // Get metadata
     let metadata = fs::fstat_fd(&current.fd_table, fd)?;
 
-    // Copy metadata to user space (file_type as u8, size as u64)
+    // Copy metadata to user space (same format as stat)
+    // struct stat {
+    //     st_mode: u16,   // offset 0, 2 bytes
+    //     padding: u16,   // offset 2, 2 bytes (alignment)
+    //     st_nlink: u32,  // offset 4, 4 bytes
+    //     st_uid: u32,    // offset 8, 4 bytes
+    //     st_gid: u32,    // offset 12, 4 bytes
+    //     st_size: u64,   // offset 16, 8 bytes
+    //     st_ino: u64,    // offset 24, 8 bytes
+    // }
+    // Total: 32 bytes
     let metadata_bytes = [
-        metadata.file_type as u8,
+        // st_mode (u16, little-endian)
+        (metadata.mode & 0xFF) as u8,
+        ((metadata.mode >> 8) & 0xFF) as u8,
+        // padding (u16)
+        0,
+        0,
+        // st_nlink (u32, always 1)
+        1,
+        0,
+        0,
+        0,
+        // st_uid (u32, always 0)
         0,
         0,
         0,
         0,
+        // st_gid (u32, always 0)
         0,
         0,
-        0, // padding to align size field
+        0,
+        0,
+        // st_size (u64, little-endian)
         (metadata.size & 0xFF) as u8,
         ((metadata.size >> 8) & 0xFF) as u8,
         ((metadata.size >> 16) & 0xFF) as u8,
@@ -746,6 +803,15 @@ fn fstat_handler(fd: i32, stat_buf: u64) -> syscall::SyscallResult {
         ((metadata.size >> 40) & 0xFF) as u8,
         ((metadata.size >> 48) & 0xFF) as u8,
         ((metadata.size >> 56) & 0xFF) as u8,
+        // st_ino (u64, fake inode = 0)
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
     ];
     crate::usermode::copy_to_user_bytes(stat_buf, &metadata_bytes)?;
 
@@ -1399,6 +1465,8 @@ fn exit_handler(status: i32) -> ! {
         serial_println!("TEST PASS ls_smoke");
         #[cfg(feature = "ls-stat-smoke")]
         serial_println!("TEST PASS ls_stat_smoke");
+        #[cfg(feature = "ls-long-smoke")]
+        serial_println!("TEST PASS ls_long_smoke");
         #[cfg(feature = "cd-smoke")]
         serial_println!("TEST PASS cd_smoke");
         #[cfg(feature = "path-smoke")]
@@ -1417,6 +1485,7 @@ fn exit_handler(status: i32) -> ! {
             feature = "ctrlc-smoke",
             feature = "ls-smoke",
             feature = "ls-stat-smoke",
+            feature = "ls-long-smoke",
             feature = "cd-smoke",
             feature = "path-smoke",
             feature = "redir-smoke",

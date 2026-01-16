@@ -26,11 +26,12 @@
     feature = "ctrlc-smoke",
     feature = "ls-smoke",
     feature = "ls-stat-smoke",
+    feature = "ls-long-smoke",
     feature = "cd-smoke",
     feature = "path-smoke",
     feature = "redir-smoke",
     feature = "elf-exec-smoke",
-        feature = "tty-smoke"
+    feature = "tty-smoke"
 ))]
 use core::sync::atomic::{AtomicUsize, Ordering};
 use panda_hal::serial_println;
@@ -368,6 +369,9 @@ const SCRIPTED_INPUT: &[u8] = b"ls\nexit\n";
 #[cfg(feature = "ls-stat-smoke")]
 const SCRIPTED_INPUT: &[u8] = b"ls\nexit\n";
 
+#[cfg(feature = "ls-long-smoke")]
+const SCRIPTED_INPUT: &[u8] = b"ls -l\ncd etc\nls -l\nexit\n";
+
 #[cfg(feature = "cd-smoke")]
 const SCRIPTED_INPUT: &[u8] = b"ls\ncd bin\nls\ncd ..\nls\nexit\n";
 
@@ -392,6 +396,7 @@ const SCRIPTED_INPUT: &[u8] = b"echo hello\n\x03ls\nexit\n";
         feature = "ctrlc-smoke",
         feature = "ls-smoke",
         feature = "ls-stat-smoke",
+        feature = "ls-long-smoke",
         feature = "cd-smoke",
         feature = "path-smoke",
         feature = "redir-smoke",
@@ -411,6 +416,7 @@ compile_error!(
         feature = "ctrlc-smoke",
         feature = "ls-smoke",
         feature = "ls-stat-smoke",
+        feature = "ls-long-smoke",
         feature = "cd-smoke",
         feature = "path-smoke",
         feature = "redir-smoke",
@@ -429,6 +435,7 @@ compile_error!(
         feature = "ctrlc-smoke",
         feature = "ls-smoke",
         feature = "ls-stat-smoke",
+        feature = "ls-long-smoke",
         feature = "cd-smoke",
         feature = "path-smoke",
         feature = "redir-smoke",
@@ -446,6 +453,7 @@ compile_error!(
         feature = "ctrlc-smoke",
         feature = "ls-smoke",
         feature = "ls-stat-smoke",
+        feature = "ls-long-smoke",
         feature = "cd-smoke",
         feature = "path-smoke",
         feature = "redir-smoke",
@@ -462,6 +470,7 @@ compile_error!(
     any(
         feature = "ls-smoke",
         feature = "ls-stat-smoke",
+        feature = "ls-long-smoke",
         feature = "cd-smoke",
         feature = "path-smoke",
         feature = "redir-smoke",
@@ -477,6 +486,7 @@ compile_error!(
     feature = "ls-smoke",
     any(
         feature = "ls-stat-smoke",
+        feature = "ls-long-smoke",
         feature = "cd-smoke",
         feature = "path-smoke",
         feature = "redir-smoke",
@@ -490,6 +500,7 @@ compile_error!(
 
 #[cfg(all(
     feature = "ls-stat-smoke",
+    feature = "ls-long-smoke",
     any(
         feature = "cd-smoke",
         feature = "path-smoke",
@@ -523,10 +534,7 @@ compile_error!(
     "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, elf-exec-smoke, and tty-smoke are mutually exclusive"
 );
 
-#[cfg(all(
-    feature = "redir-smoke",
-    any(feature = "elf-exec-smoke", feature = "tty-smoke")
-))]
+#[cfg(all(feature = "redir-smoke", any(feature = "elf-exec-smoke", feature = "tty-smoke")))]
 compile_error!(
     "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, elf-exec-smoke, and tty-smoke are mutually exclusive"
 );
@@ -539,6 +547,7 @@ compile_error!(
     feature = "ctrlc-smoke",
     feature = "ls-smoke",
     feature = "ls-stat-smoke",
+    feature = "ls-long-smoke",
     feature = "cd-smoke",
     feature = "path-smoke",
     feature = "redir-smoke",
@@ -556,6 +565,7 @@ fn read_byte() -> Option<u8> {
         feature = "ctrlc-smoke",
         feature = "ls-smoke",
         feature = "ls-stat-smoke",
+        feature = "ls-long-smoke",
         feature = "cd-smoke",
         feature = "path-smoke",
         feature = "redir-smoke",
@@ -575,6 +585,7 @@ fn read_byte() -> Option<u8> {
         feature = "ctrlc-smoke",
         feature = "ls-smoke",
         feature = "ls-stat-smoke",
+        feature = "ls-long-smoke",
         feature = "cd-smoke",
         feature = "path-smoke",
         feature = "redir-smoke",

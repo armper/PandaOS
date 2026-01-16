@@ -277,7 +277,11 @@ impl TmpFs {
     /// Get file metadata
     pub fn stat(&self, inode: Inode) -> Result<FileMetadata, ErrorCode> {
         let node = self.nodes.get(&inode).ok_or(ErrorCode::ENOENT)?;
-        Ok(FileMetadata { file_type: node.file_type(), size: node.size() })
+        let mode = match node.file_type() {
+            FileType::Directory => crate::fs::DEFAULT_DIR_MODE,
+            FileType::File => crate::fs::DEFAULT_FILE_MODE,
+        };
+        Ok(FileMetadata { file_type: node.file_type(), size: node.size(), mode })
     }
 
     /// List directory entries

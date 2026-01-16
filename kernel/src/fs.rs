@@ -35,6 +35,33 @@ pub enum FileType {
     Directory = 1,
 }
 
+// POSIX mode bit constants
+/// Directory type bit (octal 040000)
+pub const S_IFDIR: u16 = 0o040000;
+/// Regular file type bit (octal 0100000)
+pub const S_IFREG: u16 = 0o100000;
+/// Type mask
+pub const S_IFMT: u16 = 0o170000;
+
+/// Permission bits
+pub const S_IRWXU: u16 = 0o0700; // User rwx
+pub const S_IRUSR: u16 = 0o0400; // User read
+pub const S_IWUSR: u16 = 0o0200; // User write
+pub const S_IXUSR: u16 = 0o0100; // User execute
+pub const S_IRWXG: u16 = 0o0070; // Group rwx
+pub const S_IRGRP: u16 = 0o0040; // Group read
+pub const S_IWGRP: u16 = 0o0020; // Group write
+pub const S_IXGRP: u16 = 0o0010; // Group execute
+pub const S_IRWXO: u16 = 0o0007; // Other rwx
+pub const S_IROTH: u16 = 0o0004; // Other read
+pub const S_IWOTH: u16 = 0o0002; // Other write
+pub const S_IXOTH: u16 = 0o0001; // Other execute
+
+/// Default mode for directories: 040755 (drwxr-xr-x)
+pub const DEFAULT_DIR_MODE: u16 = S_IFDIR | 0o755;
+/// Default mode for regular files: 0100644 (-rw-r--r--)
+pub const DEFAULT_FILE_MODE: u16 = S_IFREG | 0o644;
+
 /// File metadata returned by stat/fstat
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FileMetadata {
@@ -42,6 +69,20 @@ pub struct FileMetadata {
     pub file_type: FileType,
     /// Size in bytes (0 for directories)
     pub size: u64,
+    /// POSIX mode (file type + permission bits)
+    pub mode: u16,
+}
+
+impl FileMetadata {
+    /// Check if this is a directory
+    pub fn is_dir(&self) -> bool {
+        self.file_type == FileType::Directory
+    }
+
+    /// Check if this is a regular file
+    pub fn is_file(&self) -> bool {
+        self.file_type == FileType::File
+    }
 }
 
 pub struct FileNode {
@@ -925,14 +966,23 @@ pub fn stat_path(path: &str) -> Result<FileMetadata, ErrorCode> {
     let files = WRITABLE_FILES.lock();
     if let Some(ref store) = *files {
         if let Some(file_data) = store.get(&node_index) {
-            return Ok(FileMetadata { file_type: FileType::File, size: file_data.len() as u64 });
+            return Ok(FileMetadata {
+                file_type: FileType::File,
+                size: file_data.len() as u64,
+                mode: DEFAULT_FILE_MODE,
+            });
         }
     }
 
     // Fall back to static node data
+    let mode = match node.file_type {
+        FileType::Directory => DEFAULT_DIR_MODE,
+        FileType::File => DEFAULT_FILE_MODE,
+    };
     Ok(FileMetadata {
         file_type: node.file_type,
         size: if node.file_type == FileType::Directory { 0 } else { node.data.len() as u64 },
+        mode,
     })
 }
 
@@ -948,12 +998,17 @@ pub fn fstat_fd(table: &FdTable, fd: i32) -> Result<FileMetadata, ErrorCode> {
                     return Ok(FileMetadata {
                         file_type: FileType::File,
                         size: file_data.len() as u64,
+                        mode: DEFAULT_FILE_MODE,
                     });
                 }
             }
 
             // Fall back to static node
             let node = FILES.get(open.node_index).ok_or(ErrorCode::ENOENT)?;
+            let mode = match node.file_type {
+                FileType::Directory => DEFAULT_DIR_MODE,
+                FileType::File => DEFAULT_FILE_MODE,
+            };
             Ok(FileMetadata {
                 file_type: node.file_type,
                 size: if node.file_type == FileType::Directory {
@@ -961,11 +1016,12 @@ pub fn fstat_fd(table: &FdTable, fd: i32) -> Result<FileMetadata, ErrorCode> {
                 } else {
                     node.data.len() as u64
                 },
+                mode,
             })
         }
         FdKind::Directory(open) => {
             let node = FILES.get(open.node_index).ok_or(ErrorCode::ENOENT)?;
-            Ok(FileMetadata { file_type: node.file_type, size: 0 })
+            Ok(FileMetadata { file_type: node.file_type, size: 0, mode: DEFAULT_DIR_MODE })
         }
         FdKind::DiskFile(open) | FdKind::DiskDirectory(open) => {
             crate::mount::diskfs_stat(open.inode)
@@ -997,7 +1053,7 @@ pub fn read_file_to_vec(path: &str) -> Result<alloc::vec::Vec<u8>, ErrorCode> {
 
     // First get the file size
     let metadata = stat_path(path)?;
-    
+
     if metadata.file_type != FileType::File {
         return Err(ErrorCode::EISDIR);
     }
@@ -1035,7 +1091,7 @@ pub fn read_file_to_vec(path: &str) -> Result<alloc::vec::Vec<u8>, ErrorCode> {
     let data = lookup(path).ok_or(ErrorCode::ENOENT)?;
     buffer.clear();
     buffer.extend_from_slice(data);
-    
+
     Ok(buffer)
 }
 

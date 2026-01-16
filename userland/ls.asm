@@ -1,6 +1,10 @@
 ; Minimal ls for PandaOS
 ; Lists directory entries using getdents64 syscall
-; Enhanced with stat() to show directories with / suffix
+; Supports -l flag for long format output
+;
+; Usage:
+;   ls       - simple list with / suffix for directories
+;   ls -l    - long format: drwxr-xr-x  size  name
 
 BITS 64
 
@@ -14,25 +18,47 @@ BITS 64
 %define STDOUT 1
 
 %define BUF_SIZE 1024
-%define STAT_BUF_SIZE 16
+%define STAT_BUF_SIZE 32        ; Extended stat structure
 
-; File type constants
-%define FILE_TYPE_FILE 0
-%define FILE_TYPE_DIR 1
+; Stat structure offsets
+%define STAT_MODE 0              ; u16 at offset 0
+%define STAT_NLINK 4             ; u32 at offset 4
+%define STAT_UID 8               ; u32 at offset 8
+%define STAT_GID 12              ; u32 at offset 12
+%define STAT_SIZE 16             ; u64 at offset 16
+%define STAT_INO 24              ; u64 at offset 24
 
-; Directory entry structure (getdents64)
-; struct linux_dirent64 {
-;     u64 d_ino;      // Inode number
-;     u64 d_off;      // Offset to next entry
-;     u16 d_reclen;   // Length of this entry
-;     u8  d_type;     // File type
-;     char d_name[];  // Null-terminated filename
-; }
+; Mode bits
+%define S_IFMT   0o170000        ; Type mask
+%define S_IFDIR  0o040000        ; Directory
+%define S_IFREG  0o100000        ; Regular file
+
+; EXEC_ARG_ADDR is where the kernel places the argument string
+%define EXEC_ARG_ADDR 0x7FFFFFFFC000
 
 section .text
 global _start
 
 _start:
+    ; Check for -l flag in argument
+    mov rsi, EXEC_ARG_ADDR
+    xor rcx, rcx
+    
+.check_arg:
+    mov al, [rsi + rcx]
+    test al, al
+    jz .no_arg                  ; End of string
+    cmp al, '-'
+    jne .no_arg
+    inc rcx
+    mov al, [rsi + rcx]
+    cmp al, 'l'
+    jne .no_arg
+    
+    ; Found -l flag
+    mov byte [rel long_format], 1
+    
+.no_arg:
     ; Open root directory "/"
     mov rax, SYS_OPEN
     lea rdi, [rel root_path]
@@ -77,15 +103,13 @@ process_entry:
     push rsi
     
     ; Build full path to stat: "/" + name
-    ; Copy name to path_buf
     lea rdi, [rel path_buf]
-    mov byte [rdi], '/'         ; start with '/'
+    mov byte [rdi], '/'
     inc rdi
     
-    ; Copy name
 .copy_name:
-    lodsb                       ; load byte from rsi
-    stosb                       ; store to rdi
+    lodsb
+    stosb
     test al, al
     jnz .copy_name
     
@@ -98,13 +122,18 @@ process_entry:
     ; Restore name pointer
     pop rsi
     
-    ; Print the name
+    ; Check if we're in long format mode
+    cmp byte [rel long_format], 1
+    je .print_long
+    
+    ; Simple format: name with optional / suffix
     call print_name
     
-    ; Check if it's a directory (stat_buf[0] == FILE_TYPE_DIR)
-    mov al, byte [rel stat_buf]
-    cmp al, FILE_TYPE_DIR
-    jne .not_dir
+    ; Check mode to see if it's a directory
+    movzx rax, word [rel stat_buf + STAT_MODE]
+    and rax, S_IFMT
+    cmp rax, S_IFDIR
+    jne .not_dir_simple
     
     ; Print "/" for directories
     mov rax, SYS_WRITE
@@ -113,7 +142,154 @@ process_entry:
     mov rdx, 1
     syscall
     
-.not_dir:
+.not_dir_simple:
+    ; Print newline
+    mov rax, SYS_WRITE
+    mov rdi, STDOUT
+    lea rsi, [rel newline]
+    mov rdx, 2
+    syscall
+    jmp .next_entry
+    
+.print_long:
+    ; Long format: drwxr-xr-x  size  name
+    
+    ; Get mode
+    movzx rax, word [rel stat_buf + STAT_MODE]
+    mov [rel current_mode], rax
+    
+    ; Print file type character
+    mov rax, [rel current_mode]
+    and rax, S_IFMT
+    cmp rax, S_IFDIR
+    je .type_dir
+    
+    ; Regular file
+    mov al, '-'
+    jmp .type_done
+    
+.type_dir:
+    mov al, 'd'
+    
+.type_done:
+    mov [rel mode_string], al
+    
+    ; Convert mode bits to rwxr-xr-x string
+    mov rax, [rel current_mode]
+    lea rdi, [rel mode_string]
+    inc rdi                     ; Skip type character
+    
+    ; User permissions (bits 8-6)
+    bt rax, 8                   ; User read
+    jc .u_r
+    mov byte [rdi], '-'
+    jmp .u_r_done
+.u_r:
+    mov byte [rdi], 'r'
+.u_r_done:
+    inc rdi
+    
+    bt rax, 7                   ; User write
+    jc .u_w
+    mov byte [rdi], '-'
+    jmp .u_w_done
+.u_w:
+    mov byte [rdi], 'w'
+.u_w_done:
+    inc rdi
+    
+    bt rax, 6                   ; User execute
+    jc .u_x
+    mov byte [rdi], '-'
+    jmp .u_x_done
+.u_x:
+    mov byte [rdi], 'x'
+.u_x_done:
+    inc rdi
+    
+    ; Group permissions (bits 5-3)
+    bt rax, 5                   ; Group read
+    jc .g_r
+    mov byte [rdi], '-'
+    jmp .g_r_done
+.g_r:
+    mov byte [rdi], 'r'
+.g_r_done:
+    inc rdi
+    
+    bt rax, 4                   ; Group write
+    jc .g_w
+    mov byte [rdi], '-'
+    jmp .g_w_done
+.g_w:
+    mov byte [rdi], 'w'
+.g_w_done:
+    inc rdi
+    
+    bt rax, 3                   ; Group execute
+    jc .g_x
+    mov byte [rdi], '-'
+    jmp .g_x_done
+.g_x:
+    mov byte [rdi], 'x'
+.g_x_done:
+    inc rdi
+    
+    ; Other permissions (bits 2-0)
+    bt rax, 2                   ; Other read
+    jc .o_r
+    mov byte [rdi], '-'
+    jmp .o_r_done
+.o_r:
+    mov byte [rdi], 'r'
+.o_r_done:
+    inc rdi
+    
+    bt rax, 1                   ; Other write
+    jc .o_w
+    mov byte [rdi], '-'
+    jmp .o_w_done
+.o_w:
+    mov byte [rdi], 'w'
+.o_w_done:
+    inc rdi
+    
+    bt rax, 0                   ; Other execute
+    jc .o_x
+    mov byte [rdi], '-'
+    jmp .o_x_done
+.o_x:
+    mov byte [rdi], 'x'
+.o_x_done:
+    
+    ; Print mode string (10 characters)
+    mov rax, SYS_WRITE
+    mov rdi, STDOUT
+    lea rsi, [rel mode_string]
+    mov rdx, 10
+    syscall
+    
+    ; Print two spaces
+    mov rax, SYS_WRITE
+    mov rdi, STDOUT
+    lea rsi, [rel spaces]
+    mov rdx, 2
+    syscall
+    
+    ; Print size
+    mov rax, [rel stat_buf + STAT_SIZE]
+    call print_number
+    
+    ; Print two spaces
+    mov rax, SYS_WRITE
+    mov rdi, STDOUT
+    lea rsi, [rel spaces]
+    mov rdx, 2
+    syscall
+    
+    ; Print name
+    call print_name
+    
     ; Print newline
     mov rax, SYS_WRITE
     mov rdi, STDOUT
@@ -121,6 +297,7 @@ process_entry:
     mov rdx, 2
     syscall
     
+.next_entry:
     ; Restore record length and move to next entry
     pop r15
     add r14, r15
@@ -167,7 +344,7 @@ print_name:
     cmp byte [rbx + rcx], 0
     je .print
     inc rcx
-    cmp rcx, 256            ; safety limit
+    cmp rcx, 256
     jl .count
     
 .print:
@@ -185,6 +362,69 @@ print_name:
     pop rbx
     ret
 
+; print_number: Print decimal number
+; Input: rax = number to print
+print_number:
+    push rbx
+    push rcx
+    push rdx
+    push rdi
+    
+    ; Handle zero specially
+    test rax, rax
+    jnz .not_zero
+    mov rax, SYS_WRITE
+    mov rdi, STDOUT
+    lea rsi, [rel zero_char]
+    mov rdx, 1
+    syscall
+    jmp .done
+    
+.not_zero:
+    ; Convert number to string (reverse order)
+    lea rdi, [rel num_buf]
+    add rdi, 19             ; Point to end of buffer
+    mov byte [rdi], 0       ; Null terminate
+    dec rdi
+    
+    mov rbx, 10
+    mov rcx, rax            ; Save number
+    
+.convert_loop:
+    xor rdx, rdx
+    div rbx                 ; Divide by 10
+    add dl, '0'             ; Convert remainder to ASCII
+    mov [rdi], dl
+    dec rdi
+    test rax, rax
+    jnz .convert_loop
+    
+    ; Now rdi points to one before the first digit
+    inc rdi
+    
+    ; Calculate length
+    lea rsi, [rel num_buf]
+    add rsi, 19
+    sub rsi, rdi
+    mov rdx, rsi            ; Length in rdx
+    
+    ; Print it
+    mov rax, SYS_WRITE
+    mov rsi, rdi            ; String pointer
+    mov rdi, STDOUT
+    syscall
+    
+.done:
+    pop rdi
+    pop rdx
+    pop rcx
+    pop rbx
+    ret
+
+section .data
+long_format: db 0
+current_mode: dq 0
+
 section .rodata
 root_path: db "/", 0
 open_err: db "ls: open failed", 0x0D, 0x0A
@@ -193,8 +433,12 @@ read_err: db "ls: getdents64 failed", 0x0D, 0x0A
 read_err_len equ $ - read_err
 newline: db 0x0D, 0x0A
 dir_suffix: db "/"
+spaces: db "  "
+zero_char: db "0"
 
 section .bss
 buf: resb BUF_SIZE
 stat_buf: resb STAT_BUF_SIZE
 path_buf: resb 256
+mode_string: resb 11        ; drwxr-xr-x + null
+num_buf: resb 20
