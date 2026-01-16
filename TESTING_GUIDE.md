@@ -740,3 +740,81 @@ PATH_SMOKE=1 ./scripts/qemu-test.sh
 - Directory listing is sequential with per-fd offset tracking
 - ls program uses getdents64 syscall (217) directly
 
+
+## Disk Filesystem Smoke Test
+
+**Test Name**: `disk_fs_smoke`
+
+**How to Run**:
+```bash
+# Generate disk image first
+python3 scripts/mkdiskimg.py
+
+# Run test
+DISK_FS_SMOKE=1 ./scripts/qemu-test.sh
+```
+
+**What It Tests**:
+1. Mount point existence (`/mnt` directory)
+2. Directory listing of disk filesystem (`/mnt`)
+3. File discovery (finding `hello.txt` and `README`)
+4. File opening from disk
+5. File reading from disk
+6. Content verification
+
+**Test Flow**:
+```
+1. Kernel boots and initializes mount table
+2. Disk filesystem mounted at /mnt
+3. Test checks /mnt is a directory
+4. Test lists /mnt contents
+5. Test opens /mnt/hello.txt
+6. Test reads and verifies content
+7. Output: TEST PASS disk_fs_smoke
+```
+
+**Expected Output**:
+```
+✓ /mnt exists
+✓ /mnt is a directory
+✓ Successfully listed /mnt
+  Found 4 entries:
+    - hello.txt (file)
+    - README (file)
+    - test.txt (file)
+    - bin (dir)
+✓ Found expected files (hello.txt, README)
+✓ Opened /mnt/hello.txt (fd 3)
+✓ Read 17 bytes from /mnt/hello.txt
+  Content: "Hello from disk!"
+✓ File content matches expected
+✓ All disk filesystem tests passed
+TEST PASS disk_fs_smoke
+```
+
+**What's Tested**:
+- ATA/IDE block device driver (PIO mode)
+- Disk filesystem superblock parsing
+- Inode table reading
+- Directory entry parsing
+- File data reading from disk
+- Mount point resolution
+- VFS path traversal across mount boundaries
+- File descriptor handling for disk files
+- Read-only filesystem enforcement
+
+**Implementation Notes**:
+- Disk image (`fs.img`) must exist before running test
+- QEMU attaches disk via `-drive file=fs.img,format=raw,if=ide`
+- ATA driver reads from primary master disk (0x1F0)
+- Custom filesystem format with 512-byte sectors
+- No write support (EROFS error on write attempts)
+- Mount table initialized during kernel boot
+- Test runs before scheduler starts (kernel-mode only)
+
+**Filesystem Format**:
+- Superblock: magic 0x50414E44 ("PAND"), version 1
+- Inode table: 8 inodes per sector (64 bytes each)
+- Data blocks: file contents and directory entries
+- Maximum 10 direct block pointers per inode
+- Directory entries: inode number + name length + name

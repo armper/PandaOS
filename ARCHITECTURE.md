@@ -38,12 +38,44 @@ The main kernel crate contains:
 - **interrupts.rs**: Interrupt Descriptor Table (IDT) and exception handling
 - **memory.rs**: Memory management subsystem
 - **fs.rs**: In-memory VFS with file descriptors, metadata (stat/fstat), and directory listing (see [VFS.md](VFS.md))
+- **diskfs.rs**: Disk-backed filesystem implementation with custom on-disk format
+- **mount.rs**: Mount point management and filesystem backend abstraction
 - Additional modules for process management, syscalls, etc. (future)
 
 **Invariants:**
 - No allocation before heap is initialized
 - All subsystems initialized explicitly
 - No unsafe outside arch-specific code
+
+## Filesystem Architecture
+
+PandaOS supports two filesystem backends:
+
+### In-Memory Filesystem (RAM FS)
+- Static files compiled into the kernel binary
+- Writable /tmp directory with dynamic file creation
+- Always mounted at root (/)
+- Files include kernel binaries (/bin/sh, /bin/cat, etc.)
+- Supports all VFS operations: open, read, write (in /tmp), stat, getdents64
+
+### Disk Filesystem
+- Read-only custom filesystem format
+- Backed by ATA/IDE block device (sector size: 512 bytes)
+- Mounted at /mnt by default
+- Simple on-disk layout: superblock, inode table, data blocks
+- No journaling, permissions, or timestamps
+- Supports VFS operations: open, read, stat, getdents64
+
+### Mount Point System
+- Global mount table tracks mounted filesystems
+- Path resolution checks mount points before in-memory FS
+- VFS operations transparently access appropriate backend
+- Mount boundaries handled automatically in path traversal
+
+**File descriptors** support both backends:
+- `FdKind::File` / `FdKind::Directory` - in-memory filesystem
+- `FdKind::DiskFile` / `FdKind::DiskDirectory` - disk filesystem
+- All syscalls (read, stat, getdents64) work transparently
 
 ### HAL (`hal/`)
 

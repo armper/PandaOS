@@ -34,6 +34,7 @@ extern crate panda_hal;
 pub mod boot_phases;
 pub mod context;
 pub mod context_switch;
+pub mod diskfs;
 pub mod elf;
 pub mod fs;
 pub mod gdt;
@@ -42,6 +43,7 @@ pub mod interrupts;
 pub mod invariants;
 pub mod linker_symbols;
 pub mod memory;
+pub mod mount;
 pub mod page_table_tracker;
 pub mod paging;
 pub mod pic;
@@ -121,6 +123,16 @@ pub extern "C" fn _start(boot_info: &'static bootloader::BootInfo) -> ! {
         println!("Heap test passed: {:?}", test_vec);
     }
 
+    // Initialize mount table
+    mount::init_mount_table();
+    println!("Mount table initialized");
+
+    // Mount disk filesystem at /mnt
+    match mount::mount_disk_at_mnt() {
+        Ok(()) => println!("Disk filesystem mounted at /mnt"),
+        Err(e) => println!("Warning: Failed to mount disk at /mnt: {:?}", e),
+    }
+
     // Finalize boot
     let _state = state.finalize();
     println!("Kernel initialization complete!");
@@ -130,6 +142,13 @@ pub extern "C" fn _start(boot_info: &'static bootloader::BootInfo) -> ! {
 
     #[cfg(not(test))]
     {
+        // Run disk filesystem smoke test if feature is enabled
+        #[cfg(feature = "disk-fs-smoke")]
+        {
+            serial_println!("Running disk_fs_smoke test");
+            run_disk_fs_smoke_test();
+        }
+
         // Initialize scheduler and start multitasking
         unsafe {
             init_scheduler_and_start();
@@ -511,7 +530,7 @@ fn read_handler(fd: i32, buf: u64, count: u64) -> syscall::SyscallResult {
     let fd_kind = current.fd_table.get(fd)?;
 
     match fd_kind {
-        fs::FdKind::File(_open, _writable) => {
+        fs::FdKind::File(_, _) | fs::FdKind::DiskFile(_) => {
             // Read from file using a temporary buffer
             let mut temp_buf = [0u8; 4096];
             let to_read = count.min(temp_buf.len());
@@ -522,7 +541,7 @@ fn read_handler(fd: i32, buf: u64, count: u64) -> syscall::SyscallResult {
             }
             Ok(bytes_read as u64)
         }
-        fs::FdKind::Directory(_) => {
+        fs::FdKind::Directory(_) | fs::FdKind::DiskDirectory(_) => {
             // Can't read directories with read() - use getdents64
             Err(syscall::ErrorCode::EISDIR)
         }
@@ -581,8 +600,8 @@ fn write_handler(fd: i32, buf: u64, count: u64) -> syscall::SyscallResult {
             let written = current.fd_table.write(fd, &temp_buf[..copied])?;
             Ok(written as u64)
         }
-        fs::FdKind::Directory(_) => {
-            // Can't write to directories
+        fs::FdKind::Directory(_) | fs::FdKind::DiskFile(_) | fs::FdKind::DiskDirectory(_) => {
+            // Can't write to directories or disk files (read-only filesystem)
             Err(syscall::ErrorCode::EBADF)
         }
         fs::FdKind::PipeWrite(pipe_id) => {
@@ -840,22 +859,26 @@ fn getdents64_handler(fd: i32, buf: u64, count: u64) -> syscall::SyscallResult {
 
     // Get fd kind and verify it's a directory
     let fd_kind = current.fd_table.get(fd)?;
-    let open_file = match fd_kind {
-        fs::FdKind::Directory(open) => open,
+    
+    // Get entries based on directory type
+    let (entries, offset) = match fd_kind {
+        fs::FdKind::Directory(open) => {
+            let node = fs::FILES.get(open.node_index).ok_or(syscall::ErrorCode::ENOENT)?;
+            if node.file_type != fs::FileType::Directory {
+                return Err(syscall::ErrorCode::ENOTDIR);
+            }
+            let entries = fs::list_directory(node.path)?;
+            (entries, open.offset)
+        }
+        fs::FdKind::DiskDirectory(open) => {
+            let entries = crate::mount::diskfs_list_dir(open.inode)?;
+            (entries, open.offset)
+        }
         _ => return Err(syscall::ErrorCode::ENOTDIR),
     };
 
-    // Get the directory path from the node
-    let node = fs::FILES.get(open_file.node_index).ok_or(syscall::ErrorCode::ENOENT)?;
-    if node.file_type != fs::FileType::Directory {
-        return Err(syscall::ErrorCode::ENOTDIR);
-    }
-
-    // List directory entries
-    let entries = fs::list_directory(node.path)?;
-
     // Check if we've reached the end (offset >= number of entries)
-    if open_file.offset >= entries.len() {
+    if offset >= entries.len() {
         return Ok(0); // EOF
     }
 
@@ -867,7 +890,7 @@ fn getdents64_handler(fd: i32, buf: u64, count: u64) -> syscall::SyscallResult {
     // Build directory entries in kernel buffer
     let mut kernel_buf = Vec::new();
 
-    for (name, file_type) in entries.iter().skip(open_file.offset) {
+    for (name, file_type) in entries.iter().skip(offset) {
         // Calculate record size: fixed header (19 bytes) + name + null + padding to 8-byte align
         let name_len = name.len();
         let record_size = 19 + name_len + 1; // header + name + null
@@ -880,11 +903,11 @@ fn getdents64_handler(fd: i32, buf: u64, count: u64) -> syscall::SyscallResult {
 
         // Build the directory entry
         // d_ino (8 bytes)
-        let d_ino = (open_file.offset + entries_read + 1) as u64;
+        let d_ino = (offset + entries_read + 1) as u64;
         kernel_buf.extend_from_slice(&d_ino.to_le_bytes());
 
         // d_off (8 bytes) - offset to next entry
-        let d_off = (open_file.offset + entries_read + 1) as u64;
+        let d_off = (offset + entries_read + 1) as u64;
         kernel_buf.extend_from_slice(&d_off.to_le_bytes());
 
         // d_reclen (2 bytes)
@@ -916,7 +939,7 @@ fn getdents64_handler(fd: i32, buf: u64, count: u64) -> syscall::SyscallResult {
         crate::usermode::copy_to_user_bytes(buf, &kernel_buf[..bytes_written])?;
 
         // Update offset in fd table
-        let new_offset = open_file.offset + entries_read;
+        let new_offset = offset + entries_read;
         current.fd_table.update_directory_offset(fd, new_offset)?;
     }
 
@@ -1364,4 +1387,138 @@ unsafe fn start_first_process() -> ! {
 #[test_case]
 fn trivial_assertion() {
     assert_eq!(1, 1);
+}
+
+/// Disk filesystem smoke test
+#[cfg(feature = "disk-fs-smoke")]
+fn run_disk_fs_smoke_test() {
+    use alloc::string::ToString;
+    
+    serial_println!("Testing disk filesystem at /mnt");
+    
+    // Test 1: Check if /mnt exists and is a directory
+    match fs::stat_path("/mnt") {
+        Ok(metadata) => {
+            serial_println!("✓ /mnt exists");
+            if metadata.file_type == fs::FileType::Directory {
+                serial_println!("✓ /mnt is a directory");
+            } else {
+                serial_println!("✗ /mnt is not a directory");
+                serial_println!("TEST FAIL disk_fs_smoke");
+                loop {
+                    x86_64::instructions::hlt();
+                }
+            }
+        }
+        Err(e) => {
+            serial_println!("✗ Failed to stat /mnt: {:?}", e);
+            serial_println!("TEST FAIL disk_fs_smoke");
+            loop {
+                x86_64::instructions::hlt();
+            }
+        }
+    }
+    
+    // Test 2: List directory entries in /mnt
+    match fs::list_directory("/mnt") {
+        Ok(entries) => {
+            serial_println!("✓ Successfully listed /mnt");
+            serial_println!("  Found {} entries:", entries.len());
+            for (name, file_type) in &entries {
+                let type_str = match file_type {
+                    fs::FileType::File => "file",
+                    fs::FileType::Directory => "dir",
+                };
+                serial_println!("    - {} ({})", name, type_str);
+            }
+            
+            // Check for expected files
+            let has_hello = entries.iter().any(|(n, _)| n == "hello.txt");
+            let has_readme = entries.iter().any(|(n, _)| n == "README");
+            
+            if has_hello && has_readme {
+                serial_println!("✓ Found expected files (hello.txt, README)");
+            } else {
+                serial_println!("✗ Missing expected files");
+                serial_println!("TEST FAIL disk_fs_smoke");
+                loop {
+                    x86_64::instructions::hlt();
+                }
+            }
+        }
+        Err(e) => {
+            serial_println!("✗ Failed to list /mnt: {:?}", e);
+            serial_println!("TEST FAIL disk_fs_smoke");
+            loop {
+                x86_64::instructions::hlt();
+            }
+        }
+    }
+    
+    // Test 3: Read contents of /mnt/hello.txt
+    let mut fd_table = fs::FdTable::new();
+    match fs::open_path_with_flags(&mut fd_table, "/mnt/hello.txt", fs::O_RDONLY) {
+        Ok(fd) => {
+            serial_println!("✓ Opened /mnt/hello.txt (fd {})", fd);
+            
+            let mut buffer = [0u8; 256];
+            match fd_table.read(fd, &mut buffer) {
+                Ok(bytes_read) => {
+                    if bytes_read > 0 {
+                        let content = core::str::from_utf8(&buffer[..bytes_read])
+                            .unwrap_or("<invalid utf8>");
+                        serial_println!("✓ Read {} bytes from /mnt/hello.txt", bytes_read);
+                        serial_println!("  Content: \"{}\"", content.trim());
+                        
+                        if content.contains("Hello from disk") {
+                            serial_println!("✓ File content matches expected");
+                        } else {
+                            serial_println!("✗ File content doesn't match expected");
+                            serial_println!("TEST FAIL disk_fs_smoke");
+                            loop {
+                                x86_64::instructions::hlt();
+                            }
+                        }
+                    } else {
+                        serial_println!("✗ Read 0 bytes (unexpected EOF)");
+                        serial_println!("TEST FAIL disk_fs_smoke");
+                        loop {
+                            x86_64::instructions::hlt();
+                        }
+                    }
+                }
+                Err(e) => {
+                    serial_println!("✗ Failed to read from /mnt/hello.txt: {:?}", e);
+                    serial_println!("TEST FAIL disk_fs_smoke");
+                    loop {
+                        x86_64::instructions::hlt();
+                    }
+                }
+            }
+            
+            // Close file
+            let _ = fd_table.close(fd);
+        }
+        Err(e) => {
+            serial_println!("✗ Failed to open /mnt/hello.txt: {:?}", e);
+            serial_println!("TEST FAIL disk_fs_smoke");
+            loop {
+                x86_64::instructions::hlt();
+            }
+        }
+    }
+    
+    serial_println!("✓ All disk filesystem tests passed");
+    serial_println!("TEST PASS disk_fs_smoke");
+    
+    // Exit QEMU
+    use x86_64::instructions::port::Port;
+    unsafe {
+        let mut port = Port::new(0xf4);
+        port.write(0x10u32); // Success exit code
+    }
+    
+    loop {
+        x86_64::instructions::hlt();
+    }
 }

@@ -21,11 +21,14 @@
 
 // Pure logic modules (always available, testable on host)
 pub mod bitmap;
+pub mod block;
 pub mod memory;
 pub mod pid;
 pub mod ringbuffer;
 
 // Hardware-specific modules (only with hardware feature)
+#[cfg(feature = "hardware")]
+pub mod ata;
 #[cfg(feature = "hardware")]
 pub mod serial;
 #[cfg(feature = "hardware")]

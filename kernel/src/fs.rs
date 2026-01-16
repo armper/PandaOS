@@ -56,6 +56,13 @@ pub struct OpenFile {
     pub offset: usize,
 }
 
+/// Open disk file descriptor
+#[derive(Clone, Copy, Debug)]
+pub struct OpenDiskFile {
+    pub inode: u32,
+    pub offset: usize,
+}
+
 /// File descriptor kinds
 #[derive(Clone, Copy, Debug)]
 pub enum FdKind {
@@ -63,6 +70,10 @@ pub enum FdKind {
     File(OpenFile, bool), // (open_file, writable)
     /// Directory (opened for reading entries)
     Directory(OpenFile),
+    /// Disk file from mounted filesystem
+    DiskFile(OpenDiskFile),
+    /// Disk directory from mounted filesystem
+    DiskDirectory(OpenDiskFile),
     /// Pipe read end
     PipeRead(PipeId),
     /// Pipe write end
@@ -168,7 +179,7 @@ impl FdTable {
                 FdKind::PipeWrite(pipe_id) => {
                     crate::pipe::pipe_close_write(pipe_id)?;
                 }
-                FdKind::File(_, _) | FdKind::Directory(_) => {
+                FdKind::File(_, _) | FdKind::Directory(_) | FdKind::DiskFile(_) | FdKind::DiskDirectory(_) => {
                     // Files and directories don't need cleanup
                 }
             }
@@ -244,6 +255,23 @@ impl FdTable {
                 // Use getdents64 syscall instead
                 Err(ErrorCode::EISDIR)
             }
+            FdKind::DiskFile(open) => {
+                // Read from disk file
+                let bytes_read = crate::mount::diskfs_read(open.inode, open.offset, buffer)?;
+                
+                // Update offset
+                let new_offset = open.offset + bytes_read;
+                self.entries[fd as usize] = Some(FdKind::DiskFile(OpenDiskFile {
+                    inode: open.inode,
+                    offset: new_offset,
+                }));
+                
+                Ok(bytes_read)
+            }
+            FdKind::DiskDirectory(_) => {
+                // Reading directories via read() is not supported
+                Err(ErrorCode::EISDIR)
+            }
             FdKind::PipeRead(_) | FdKind::PipeWrite(_) => {
                 // Pipes are handled through separate syscall path
                 Err(ErrorCode::EBADF)
@@ -300,6 +328,7 @@ impl FdTable {
                 Ok(data.len())
             }
             FdKind::Directory(_) => Err(ErrorCode::EBADF),
+            FdKind::DiskFile(_) | FdKind::DiskDirectory(_) => Err(ErrorCode::EROFS),
             FdKind::PipeRead(_) | FdKind::PipeWrite(_) => {
                 // Pipes are handled through separate syscall path
                 Err(ErrorCode::EBADF)
@@ -317,14 +346,22 @@ impl FdTable {
         }
 
         let kind = self.entries[fd as usize].ok_or(ErrorCode::EBADF)?;
-        if let FdKind::Directory(open) = kind {
-            self.entries[fd as usize] = Some(FdKind::Directory(OpenFile {
-                node_index: open.node_index,
-                offset: new_offset,
-            }));
-            Ok(())
-        } else {
-            Err(ErrorCode::ENOTDIR)
+        match kind {
+            FdKind::Directory(open) => {
+                self.entries[fd as usize] = Some(FdKind::Directory(OpenFile {
+                    node_index: open.node_index,
+                    offset: new_offset,
+                }));
+                Ok(())
+            }
+            FdKind::DiskDirectory(open) => {
+                self.entries[fd as usize] = Some(FdKind::DiskDirectory(OpenDiskFile {
+                    inode: open.inode,
+                    offset: new_offset,
+                }));
+                Ok(())
+            }
+            _ => Err(ErrorCode::ENOTDIR),
         }
     }
 
@@ -357,6 +394,12 @@ impl FdTable {
             FdKind::Directory(open) => {
                 self.entries[newfd as usize] = Some(FdKind::Directory(open));
             }
+            FdKind::DiskFile(open) => {
+                self.entries[newfd as usize] = Some(FdKind::DiskFile(open));
+            }
+            FdKind::DiskDirectory(open) => {
+                self.entries[newfd as usize] = Some(FdKind::DiskDirectory(open));
+            }
             FdKind::PipeRead(pipe_id) => {
                 crate::pipe::pipe_open_read_end(pipe_id)?;
                 self.entries[newfd as usize] = Some(FdKind::PipeRead(pipe_id));
@@ -385,7 +428,7 @@ impl FdTable {
                     FdKind::PipeWrite(pipe_id) => {
                         crate::pipe::pipe_open_write_end(*pipe_id)?;
                     }
-                    FdKind::File(_, _) | FdKind::Directory(_) => {
+                    FdKind::File(_, _) | FdKind::Directory(_) | FdKind::DiskFile(_) | FdKind::DiskDirectory(_) => {
                         // Files and directories don't need refcounting
                     }
                 }
@@ -405,6 +448,8 @@ pub static FILES: &[FileNode] = &[
     FileNode { path: "/etc", data: b"", file_type: FileType::Directory },
     // /tmp directory (writable)
     FileNode { path: "/tmp", data: b"", file_type: FileType::Directory },
+    // /mnt directory (mount point for disk filesystem)
+    FileNode { path: "/mnt", data: b"", file_type: FileType::Directory },
     // Regular files
     FileNode {
         path: "/init",
@@ -504,7 +549,35 @@ fn create_dynamic_file(path: &str) -> Result<usize, ErrorCode> {
 
 /// Open a file by path into a file descriptor table with flags.
 pub fn open_path_with_flags(table: &mut FdTable, path: &str, flags: u64) -> Result<i32, ErrorCode> {
-    // Try to look up existing file
+    // Check if path is on a mounted filesystem
+    if let Some((_mount, rel_path)) = crate::mount::resolve_mount_path(path) {
+        // Open file from disk filesystem
+        let inode = crate::mount::diskfs_lookup(&rel_path)?;
+        let metadata = crate::mount::diskfs_stat(inode)?;
+        
+        // Allocate FD
+        let fd = table.allocate_fd()?;
+        
+        // Check if writable (disk fs is read-only)
+        let writable = (flags & O_WRONLY) != 0 || (flags & O_RDWR) != 0;
+        if writable {
+            return Err(ErrorCode::EROFS); // Read-only filesystem
+        }
+        
+        // Open based on file type
+        match metadata.file_type {
+            FileType::File => {
+                table.entries[fd] = Some(FdKind::DiskFile(OpenDiskFile { inode, offset: 0 }));
+            }
+            FileType::Directory => {
+                table.entries[fd] = Some(FdKind::DiskDirectory(OpenDiskFile { inode, offset: 0 }));
+            }
+        }
+        
+        return Ok(fd as i32);
+    }
+    
+    // Try to look up existing file in memory filesystem
     let node_index = if let Some((idx, _node)) = lookup_node(path) {
         idx
     } else {
@@ -546,6 +619,13 @@ pub fn list_directory(
 ) -> Result<alloc::vec::Vec<(alloc::string::String, FileType)>, ErrorCode> {
     use alloc::string::String;
     use alloc::vec::Vec;
+
+    // Check if path is on a mounted filesystem
+    if let Some((_mount, rel_path)) = crate::mount::resolve_mount_path(dir_path) {
+        // List directory from disk filesystem
+        let inode = crate::mount::diskfs_lookup(&rel_path)?;
+        return crate::mount::diskfs_list_dir(inode);
+    }
 
     // Verify the path is a directory
     let (_, node) = lookup_node(dir_path).ok_or(ErrorCode::ENOENT)?;
@@ -678,6 +758,12 @@ pub fn validate_directory(path: &str) -> Result<(), ErrorCode> {
 
 /// Get file metadata by path
 pub fn stat_path(path: &str) -> Result<FileMetadata, ErrorCode> {
+    // Check if path is on a mounted filesystem
+    if let Some((_mount, rel_path)) = crate::mount::resolve_mount_path(path) {
+        let inode = crate::mount::diskfs_lookup(&rel_path)?;
+        return crate::mount::diskfs_stat(inode);
+    }
+
     let (node_index, node) = lookup_node(path).ok_or(ErrorCode::ENOENT)?;
 
     // Check if this is a dynamic file with data in WRITABLE_FILES
@@ -725,6 +811,9 @@ pub fn fstat_fd(table: &FdTable, fd: i32) -> Result<FileMetadata, ErrorCode> {
         FdKind::Directory(open) => {
             let node = FILES.get(open.node_index).ok_or(ErrorCode::ENOENT)?;
             Ok(FileMetadata { file_type: node.file_type, size: 0 })
+        }
+        FdKind::DiskFile(open) | FdKind::DiskDirectory(open) => {
+            crate::mount::diskfs_stat(open.inode)
         }
         FdKind::PipeRead(_) | FdKind::PipeWrite(_) => {
             // Pipes don't have traditional stat metadata
