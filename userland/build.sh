@@ -129,7 +129,17 @@ echo "Building cp..."
 nasm -f elf64 cp.asm -o build/cp.o
 $LINKER -o build/cp build/cp.o -static -nostdlib --entry=_start
 
-cp build/hello build/hello1 build/hello2 build/init build/sh build/cat build/true build/echo build/wc build/ls build/chmod build/id build/su build/chown build/brk_test build/mmap_test build/vm_test build/touch build/mkdir build/rm build/mv build/cp bin/
+# Build args program
+echo "Building args..."
+nasm -f elf64 args.asm -o build/args.o
+$LINKER -o build/args build/args.o -static -nostdlib --entry=_start
+
+# Build printenv program
+echo "Building printenv..."
+nasm -f elf64 printenv.asm -o build/printenv.o
+$LINKER -o build/printenv build/printenv.o -static -nostdlib --entry=_start
+
+cp build/hello build/hello1 build/hello2 build/init build/sh build/cat build/true build/echo build/wc build/ls build/chmod build/id build/su build/chown build/brk_test build/mmap_test build/vm_test build/touch build/mkdir build/rm build/mv build/cp build/args build/printenv bin/
 
 echo "Userland programs built successfully!"
 ls -lh build/
