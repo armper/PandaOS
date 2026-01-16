@@ -56,7 +56,7 @@ _start:
     syscall
     
     cmp rax, 0
-    jle .fail               ; Failed to get break
+    je .fail                ; Failed to get break (zero is invalid)
     mov r12, rax            ; Save current break in r12
     
     ; Grow heap by 8KB (2 pages)
@@ -69,8 +69,9 @@ _start:
     mov rax, 12             ; sys_brk
     syscall
     
-    cmp rax, 0
-    jle .fail               ; Failed to grow heap
+    ; Check if brk succeeded (should return address >= requested)
+    cmp rax, rdi
+    jb .fail                ; Failed to grow heap
     mov r13, rax            ; Save new break in r13
     
     ; Write test pattern to heap

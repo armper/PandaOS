@@ -1297,6 +1297,10 @@ fn fork_handler() -> syscall::SyscallResult {
 
 /// brk handler - manage program break (heap allocation)
 fn brk_handler(addr: u64) -> syscall::SyscallResult {
+    // Constants for page alignment
+    const PAGE_SIZE: u64 = 4096;
+    const PAGE_MASK: u64 = 0xFFF;
+    
     // SAFETY: Called from syscall handler with interrupts disabled
     let scheduler = unsafe { get_scheduler() };
     let current = scheduler.current_process_mut().ok_or(syscall::ErrorCode::ESRCH)?;
@@ -1318,7 +1322,7 @@ fn brk_handler(addr: u64) -> syscall::SyscallResult {
     }
 
     let old_break = current.heap.heap_end;
-    let new_break = (addr + 0xFFF) & !0xFFF; // Page-align upward
+    let new_break = (addr + PAGE_MASK) & !PAGE_MASK; // Page-align upward
 
     serial_println!(
         "[BRK] Change break from {:#x} to {:#x} (requested {:#x})",
@@ -1329,11 +1333,11 @@ fn brk_handler(addr: u64) -> syscall::SyscallResult {
 
     if new_break > old_break {
         // Growing heap - map new pages
-        let num_pages = ((new_break - old_break) / 4096) as usize;
+        let num_pages = ((new_break - old_break) / PAGE_SIZE) as usize;
         serial_println!("[BRK] Growing heap by {} pages", num_pages);
 
         for i in 0..num_pages {
-            let page_addr = old_break + (i as u64 * 4096);
+            let page_addr = old_break + (i as u64 * PAGE_SIZE);
 
             // Allocate physical frame
             // SAFETY: Frame allocator is initialized
@@ -1366,11 +1370,11 @@ fn brk_handler(addr: u64) -> syscall::SyscallResult {
         current.heap.heap_end = new_break;
     } else if new_break < old_break {
         // Shrinking heap - unmap pages
-        let num_pages = ((old_break - new_break) / 4096) as usize;
+        let num_pages = ((old_break - new_break) / PAGE_SIZE) as usize;
         serial_println!("[BRK] Shrinking heap by {} pages", num_pages);
 
         for i in 0..num_pages {
-            let page_addr = new_break + (i as u64 * 4096);
+            let page_addr = new_break + (i as u64 * PAGE_SIZE);
             let virt_addr = paging::VirtAddr::new(page_addr);
 
             // Unmap and deallocate
@@ -1399,6 +1403,12 @@ fn mmap_handler(
     fd: i32,
     _offset: u64,
 ) -> syscall::SyscallResult {
+    // Constants for page alignment and memory layout
+    const PAGE_SIZE: u64 = 4096;
+    const PAGE_MASK: u64 = 0xFFF;
+    const MAX_MMAP_SIZE: u64 = 0x4000_0000; // 1GB
+    const KERNEL_SPACE_START: u64 = 0x8000_0000_0000;
+    
     serial_println!(
         "[MMAP] addr={:#x}, length={}, prot={}, flags={:#x}, fd={}",
         addr,
@@ -1409,14 +1419,13 @@ fn mmap_handler(
     );
 
     // Validate length
-    if length == 0 || length > 0x4000_0000 {
-        // Max 1GB
+    if length == 0 || length > MAX_MMAP_SIZE {
         return Err(syscall::ErrorCode::EINVAL);
     }
 
     // Round up to page size
-    let size = (length + 0xFFF) & !0xFFF;
-    let num_pages = (size / 4096) as usize;
+    let size = (length + PAGE_MASK) & !PAGE_MASK;
+    let num_pages = (size / PAGE_SIZE) as usize;
 
     // Only support MAP_PRIVATE | MAP_ANONYMOUS
     const MAP_PRIVATE: i32 = 0x02;
@@ -1454,14 +1463,14 @@ fn mmap_handler(
         current.mmap_base
     } else {
         // User specified address - validate it's page-aligned
-        if (addr & 0xFFF) != 0 {
+        if (addr & PAGE_MASK) != 0 {
             return Err(syscall::ErrorCode::EINVAL);
         }
         addr
     };
 
     // Validate address doesn't overlap kernel space
-    if map_addr >= 0x8000_0000_0000 {
+    if map_addr >= KERNEL_SPACE_START {
         return Err(syscall::ErrorCode::EINVAL);
     }
 
@@ -1469,7 +1478,7 @@ fn mmap_handler(
 
     // Map pages
     for i in 0..num_pages {
-        let page_addr = map_addr + (i as u64 * 4096);
+        let page_addr = map_addr + (i as u64 * PAGE_SIZE);
 
         // Allocate physical frame
         // SAFETY: Frame allocator is initialized
