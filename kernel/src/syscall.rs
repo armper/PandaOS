@@ -186,10 +186,12 @@ pub enum ErrorCode {
     EINVAL = 22,
     /// Too many open files
     EMFILE = 24,
-    /// Result too large
-    ERANGE = 34,
+    /// Read-only filesystem
+    EROFS = 30,
     /// Broken pipe
     EPIPE = 32,
+    /// Result too large
+    ERANGE = 34,
     /// Function not implemented
     ENOSYS = 38,
 }

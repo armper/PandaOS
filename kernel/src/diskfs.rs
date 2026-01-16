@@ -29,7 +29,7 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use panda_hal::block::{BlockDevice, BlockError, SECTOR_SIZE};
+use panda_hal::block::{BlockDevice, SECTOR_SIZE};
 
 /// Filesystem magic number: "PAND"
 const FS_MAGIC: u32 = 0x50414E44;
@@ -166,7 +166,9 @@ impl<D: BlockDevice> DiskFs<D> {
             .ok_or(DiskFsError::InvalidInodeType)?;
 
         let mut blocks = Vec::new();
-        for &block in &inode.direct_blocks {
+        // Copy direct_blocks to avoid unaligned reference
+        let direct_blocks_copy = inode.direct_blocks;
+        for &block in &direct_blocks_copy {
             if block != 0 {
                 blocks.push(block);
             }
@@ -221,7 +223,7 @@ impl<D: BlockDevice> DiskFs<D> {
             }
 
             let name_bytes = &buffer[offset..offset + name_len];
-            let name = String::from_utf8_lossy(name_bytes).to_string();
+            let name = String::from_utf8_lossy(name_bytes).into_owned();
             
             entries.push(DiskDirEntry {
                 inode: entry.inode_num,
