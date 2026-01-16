@@ -366,6 +366,7 @@ unsafe fn init_scheduler_and_start() -> ! {
     syscall::set_chdir_handler(chdir_handler);
     syscall::set_unlink_handler(unlink_handler);
     syscall::set_getenv_handler(getenv_handler);
+    syscall::set_chmod_handler(chmod_handler);
     syscall::set_signal_handler(signal_handler);
 
     // Unmask timer interrupt (IRQ 0)
@@ -1154,6 +1155,31 @@ fn unlink_handler(path_ptr: u64) -> syscall::SyscallResult {
 
     // Unlink the file
     fs::unlink_path(&resolved_path)?;
+
+    Ok(0)
+}
+
+/// chmod handler - change file mode
+fn chmod_handler(path_ptr: u64, mode: u16) -> syscall::SyscallResult {
+    const MAX_PATH_LEN: usize = 64;
+    let mut path_buf = [0u8; MAX_PATH_LEN];
+
+    let path = crate::usermode::copy_user_cstr(path_ptr, &mut path_buf)?;
+
+    // SAFETY: Called from syscall handler with interrupts disabled
+    let scheduler = unsafe { get_scheduler() };
+    let current = scheduler.current_process().ok_or(syscall::ErrorCode::ESRCH)?;
+
+    // Resolve path relative to cwd
+    let resolved_path = fs::resolve_path(&current.cwd, path)?;
+
+    // Validate mode (only permission bits 0-0777)
+    if mode > 0o777 {
+        return Err(syscall::ErrorCode::EINVAL);
+    }
+
+    // Change the file mode
+    fs::chmod_path(&resolved_path, mode)?;
 
     Ok(0)
 }
