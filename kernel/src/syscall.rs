@@ -54,6 +54,8 @@ pub enum SyscallNumber {
     Stat = 4,
     /// Get file status (by fd)
     Fstat = 5,
+    /// Seek file position
+    Lseek = 8,
     /// Memory map
     Mmap = 9,
     /// Memory protect
@@ -89,6 +91,12 @@ pub enum SyscallNumber {
     Getcwd = 79,
     /// Change directory
     Chdir = 80,
+    /// Rename file
+    Rename = 82,
+    /// Create directory
+    Mkdir = 83,
+    /// Remove directory
+    Rmdir = 84,
     /// Unlink (delete) file
     Unlink = 87,
     /// Change file mode (chmod)
@@ -119,6 +127,7 @@ impl SyscallNumber {
             3 => Some(Self::Close),
             4 => Some(Self::Stat),
             5 => Some(Self::Fstat),
+            8 => Some(Self::Lseek),
             9 => Some(Self::Mmap),
             10 => Some(Self::Mprotect),
             11 => Some(Self::Munmap),
@@ -135,6 +144,9 @@ impl SyscallNumber {
             61 => Some(Self::Wait4),
             79 => Some(Self::Getcwd),
             80 => Some(Self::Chdir),
+            82 => Some(Self::Rename),
+            83 => Some(Self::Mkdir),
+            84 => Some(Self::Rmdir),
             87 => Some(Self::Unlink),
             90 => Some(Self::Chmod),
             92 => Some(Self::Chown),
@@ -158,6 +170,7 @@ impl SyscallNumber {
             Self::Close => "close",
             Self::Stat => "stat",
             Self::Fstat => "fstat",
+            Self::Lseek => "lseek",
             Self::Exit => "exit",
             Self::Fork => "fork",
             Self::Execve => "execve",
@@ -174,6 +187,9 @@ impl SyscallNumber {
             Self::Getpid => "getpid",
             Self::Kill => "kill",
             Self::Setpgid => "setpgid",
+            Self::Rename => "rename",
+            Self::Mkdir => "mkdir",
+            Self::Rmdir => "rmdir",
             Self::Unlink => "unlink",
             Self::Yield => "yield",
             Self::Getdents64 => "getdents64",
@@ -236,6 +252,10 @@ pub enum ErrorCode {
     ENOSYS = 38,
     /// Directory not empty
     ENOTEMPTY = 39,
+    /// Illegal seek (e.g., on a pipe)
+    ESPIPE = 29,
+    /// Cross-device link
+    EXDEV = 18,
 }
 
 impl ErrorCode {
@@ -277,6 +297,7 @@ pub fn handle_syscall(
         SyscallNumber::Close => sys_close(arg1 as i32),
         SyscallNumber::Stat => sys_stat(arg1, arg2),
         SyscallNumber::Fstat => sys_fstat(arg1 as i32, arg2),
+        SyscallNumber::Lseek => sys_lseek(arg1 as i32, arg2 as i64, arg3 as i32),
         SyscallNumber::Brk => sys_brk(arg1),
         SyscallNumber::Mmap => sys_mmap(arg1, arg2, arg3 as i32, _arg4 as i32, _arg5 as i32, _arg6),
         SyscallNumber::Getpid => sys_getpid(),
@@ -291,6 +312,9 @@ pub fn handle_syscall(
         SyscallNumber::Getdents64 => sys_getdents64(arg1 as i32, arg2, arg3),
         SyscallNumber::Getcwd => sys_getcwd(arg1, arg2),
         SyscallNumber::Chdir => sys_chdir(arg1),
+        SyscallNumber::Rename => sys_rename(arg1, arg2),
+        SyscallNumber::Mkdir => sys_mkdir(arg1, arg2 as u16),
+        SyscallNumber::Rmdir => sys_rmdir(arg1),
         SyscallNumber::Unlink => sys_unlink(arg1),
         SyscallNumber::Getenv => sys_getenv(arg1, arg2, arg3),
         SyscallNumber::Chmod => sys_chmod(arg1, arg2 as u16),
@@ -1027,6 +1051,66 @@ fn sys_setgid(gid: u32) -> SyscallResult {
     }
 }
 
+/// sys_lseek - Reposition read/write file offset
+///
+/// Linux-compatible lseek syscall:
+/// - fd: file descriptor
+/// - offset: new offset (relative or absolute)
+/// - whence: SEEK_SET (0), SEEK_CUR (1), or SEEK_END (2)
+///
+/// Returns new offset on success, or -errno on error.
+fn sys_lseek(fd: i32, offset: i64, whence: i32) -> SyscallResult {
+    if let Some(lseek_fn) = LSEEK_HANDLER.get() {
+        lseek_fn(fd, offset, whence)
+    } else {
+        Err(ErrorCode::ENOSYS)
+    }
+}
+
+/// sys_mkdir - Create a directory
+///
+/// Linux-compatible mkdir syscall:
+/// - path_ptr: pointer to path string in user space
+/// - mode: permission mode (ignored for now)
+///
+/// Returns 0 on success, or -errno on error.
+fn sys_mkdir(path_ptr: u64, mode: u16) -> SyscallResult {
+    if let Some(mkdir_fn) = MKDIR_HANDLER.get() {
+        mkdir_fn(path_ptr, mode)
+    } else {
+        Err(ErrorCode::ENOSYS)
+    }
+}
+
+/// sys_rmdir - Remove an empty directory
+///
+/// Linux-compatible rmdir syscall:
+/// - path_ptr: pointer to path string in user space
+///
+/// Returns 0 on success, or -errno on error.
+fn sys_rmdir(path_ptr: u64) -> SyscallResult {
+    if let Some(rmdir_fn) = RMDIR_HANDLER.get() {
+        rmdir_fn(path_ptr)
+    } else {
+        Err(ErrorCode::ENOSYS)
+    }
+}
+
+/// sys_rename - Rename/move a file or directory
+///
+/// Linux-compatible rename syscall:
+/// - oldpath_ptr: pointer to old path string in user space
+/// - newpath_ptr: pointer to new path string in user space
+///
+/// Returns 0 on success, or -errno on error.
+fn sys_rename(oldpath_ptr: u64, newpath_ptr: u64) -> SyscallResult {
+    if let Some(rename_fn) = RENAME_HANDLER.get() {
+        rename_fn(oldpath_ptr, newpath_ptr)
+    } else {
+        Err(ErrorCode::ENOSYS)
+    }
+}
+
 /// sys_brk - Change the program break (heap management)
 ///
 /// Linux-compatible brk syscall:
@@ -1092,6 +1176,10 @@ static SETUID_HANDLER: Once<fn(u32) -> SyscallResult> = Once::new();
 static SETGID_HANDLER: Once<fn(u32) -> SyscallResult> = Once::new();
 static BRK_HANDLER: Once<fn(u64) -> SyscallResult> = Once::new();
 static MMAP_HANDLER: Once<fn(u64, u64, i32, i32, i32, u64) -> SyscallResult> = Once::new();
+static LSEEK_HANDLER: Once<fn(i32, i64, i32) -> SyscallResult> = Once::new();
+static MKDIR_HANDLER: Once<fn(u64, u16) -> SyscallResult> = Once::new();
+static RMDIR_HANDLER: Once<fn(u64) -> SyscallResult> = Once::new();
+static RENAME_HANDLER: Once<fn(u64, u64) -> SyscallResult> = Once::new();
 
 /// Set the yield handler for syscall yield
 ///
@@ -1244,6 +1332,26 @@ pub fn set_mmap_handler(handler: fn(u64, u64, i32, i32, i32, u64) -> SyscallResu
 /// It should send SIGINT to the foreground process group.
 pub fn set_signal_handler(handler: fn()) {
     SIGNAL_HANDLER.call_once(|| handler);
+}
+
+/// Set the lseek handler for syscall lseek
+pub fn set_lseek_handler(handler: fn(i32, i64, i32) -> SyscallResult) {
+    LSEEK_HANDLER.call_once(|| handler);
+}
+
+/// Set the mkdir handler for syscall mkdir
+pub fn set_mkdir_handler(handler: fn(u64, u16) -> SyscallResult) {
+    MKDIR_HANDLER.call_once(|| handler);
+}
+
+/// Set the rmdir handler for syscall rmdir
+pub fn set_rmdir_handler(handler: fn(u64) -> SyscallResult) {
+    RMDIR_HANDLER.call_once(|| handler);
+}
+
+/// Set the rename handler for syscall rename
+pub fn set_rename_handler(handler: fn(u64, u64) -> SyscallResult) {
+    RENAME_HANDLER.call_once(|| handler);
 }
 
 #[cfg(test)]

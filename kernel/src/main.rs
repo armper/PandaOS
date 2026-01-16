@@ -377,6 +377,10 @@ unsafe fn init_scheduler_and_start() -> ! {
     syscall::set_setuid_handler(setuid_handler);
     syscall::set_setgid_handler(setgid_handler);
     syscall::set_signal_handler(signal_handler);
+    syscall::set_lseek_handler(lseek_handler);
+    syscall::set_mkdir_handler(mkdir_handler);
+    syscall::set_rmdir_handler(rmdir_handler);
+    syscall::set_rename_handler(rename_handler);
 
     // Unmask timer interrupt (IRQ 0)
     println!("Enabling timer interrupt...");
@@ -586,7 +590,13 @@ fn open_handler(path: &str, flags: u64) -> syscall::SyscallResult {
     // Resolve path relative to cwd
     let resolved_path = fs::resolve_path(&current.cwd, path)?;
 
-    let fd = fs::open_path_with_flags(&mut current.fd_table, &resolved_path, flags, current.uid, current.gid)?;
+    let fd = fs::open_path_with_flags(
+        &mut current.fd_table,
+        &resolved_path,
+        flags,
+        current.uid,
+        current.gid,
+    )?;
     Ok(fd as u64)
 }
 
@@ -1347,6 +1357,197 @@ fn getenv_handler(name_ptr: u64, buf_ptr: u64, size: u64) -> syscall::SyscallRes
     crate::usermode::copy_to_user_bytes(buf_ptr + value_bytes.len() as u64, &null_byte)?;
 
     Ok(value_bytes.len() as u64)
+}
+
+/// lseek handler - reposition read/write file offset
+fn lseek_handler(fd: i32, offset: i64, whence: i32) -> syscall::SyscallResult {
+    const SEEK_SET: i32 = 0;
+    const SEEK_CUR: i32 = 1;
+    const SEEK_END: i32 = 2;
+
+    // SAFETY: Called from syscall handler with interrupts disabled
+    let scheduler = unsafe { get_scheduler() };
+    let current = scheduler.current_process_mut().ok_or(syscall::ErrorCode::ESRCH)?;
+
+    // Calculate new offset based on whence
+    let new_offset = match whence {
+        SEEK_SET => {
+            // Absolute position
+            if offset < 0 {
+                return Err(syscall::ErrorCode::EINVAL);
+            }
+            offset
+        }
+        SEEK_CUR => {
+            // Relative to current position
+            let current_offset = current.fd_table.get_offset(fd)?;
+            let result = current_offset.checked_add(offset).ok_or(syscall::ErrorCode::EINVAL)?;
+            if result < 0 {
+                return Err(syscall::ErrorCode::EINVAL);
+            }
+            result
+        }
+        SEEK_END => {
+            // Relative to end of file
+            let file_size = current.fd_table.get_file_size(fd)?;
+            let result = file_size.checked_add(offset).ok_or(syscall::ErrorCode::EINVAL)?;
+            if result < 0 {
+                return Err(syscall::ErrorCode::EINVAL);
+            }
+            result
+        }
+        _ => return Err(syscall::ErrorCode::EINVAL),
+    };
+
+    // Set the new offset
+    let final_offset = current.fd_table.set_offset(fd, new_offset)?;
+    Ok(final_offset as u64)
+}
+
+/// mkdir handler - create a directory
+fn mkdir_handler(path_ptr: u64, _mode: u16) -> syscall::SyscallResult {
+    const MAX_PATH_LEN: usize = 256;
+    let mut path_buf = [0u8; MAX_PATH_LEN];
+    let path = crate::usermode::copy_user_cstr(path_ptr, &mut path_buf)?;
+
+    // SAFETY: Called from syscall handler with interrupts disabled
+    let scheduler = unsafe { get_scheduler() };
+    let current = scheduler.current_process().ok_or(syscall::ErrorCode::ESRCH)?;
+
+    // Resolve path against cwd
+    let abs_path = fs::resolve_path(&current.cwd, path)?;
+
+    // Check if path is on a mounted filesystem
+    if let Some((_mount, rel_path, fs_type)) = mount::resolve_mount_path(&abs_path) {
+        match fs_type {
+            mount::FsType::Disk => {
+                // Disk filesystem is read-only
+                return Err(syscall::ErrorCode::EROFS);
+            }
+            mount::FsType::Tmpfs => {
+                // Extract parent path and directory name
+                let (parent, name) = if let Some(pos) = rel_path.rfind('/') {
+                    let parent = &rel_path[..pos];
+                    let name = &rel_path[pos + 1..];
+                    (if parent.is_empty() { "/" } else { parent }, name)
+                } else {
+                    ("/", rel_path.as_str())
+                };
+
+                // Create the directory in tmpfs
+                mount::tmpfs_mkdir(parent, name)?;
+                return Ok(0);
+            }
+        }
+    }
+
+    // In-memory filesystem doesn't support mkdir
+    Err(syscall::ErrorCode::EACCES)
+}
+
+/// rmdir handler - remove an empty directory
+fn rmdir_handler(path_ptr: u64) -> syscall::SyscallResult {
+    const MAX_PATH_LEN: usize = 256;
+    let mut path_buf = [0u8; MAX_PATH_LEN];
+    let path = crate::usermode::copy_user_cstr(path_ptr, &mut path_buf)?;
+
+    // SAFETY: Called from syscall handler with interrupts disabled
+    let scheduler = unsafe { get_scheduler() };
+    let current = scheduler.current_process().ok_or(syscall::ErrorCode::ESRCH)?;
+
+    // Resolve path against cwd
+    let abs_path = fs::resolve_path(&current.cwd, path)?;
+
+    // Check if path is on a mounted filesystem
+    if let Some((_mount, rel_path, fs_type)) = mount::resolve_mount_path(&abs_path) {
+        match fs_type {
+            mount::FsType::Disk => {
+                // Disk filesystem is read-only
+                return Err(syscall::ErrorCode::EROFS);
+            }
+            mount::FsType::Tmpfs => {
+                // Extract parent path and directory name
+                let (parent, name) = if let Some(pos) = rel_path.rfind('/') {
+                    let parent = &rel_path[..pos];
+                    let name = &rel_path[pos + 1..];
+                    (if parent.is_empty() { "/" } else { parent }, name)
+                } else {
+                    ("/", rel_path.as_str())
+                };
+
+                // Remove the directory from tmpfs
+                mount::tmpfs_rmdir(parent, name)?;
+                return Ok(0);
+            }
+        }
+    }
+
+    // In-memory filesystem doesn't support rmdir
+    Err(syscall::ErrorCode::EACCES)
+}
+
+/// rename handler - rename/move a file or directory
+fn rename_handler(oldpath_ptr: u64, newpath_ptr: u64) -> syscall::SyscallResult {
+    const MAX_PATH_LEN: usize = 256;
+    let mut oldpath_buf = [0u8; MAX_PATH_LEN];
+    let mut newpath_buf = [0u8; MAX_PATH_LEN];
+    let oldpath = crate::usermode::copy_user_cstr(oldpath_ptr, &mut oldpath_buf)?;
+    let newpath = crate::usermode::copy_user_cstr(newpath_ptr, &mut newpath_buf)?;
+
+    // SAFETY: Called from syscall handler with interrupts disabled
+    let scheduler = unsafe { get_scheduler() };
+    let current = scheduler.current_process().ok_or(syscall::ErrorCode::ESRCH)?;
+
+    // Resolve paths against cwd
+    let abs_oldpath = fs::resolve_path(&current.cwd, oldpath)?;
+    let abs_newpath = fs::resolve_path(&current.cwd, newpath)?;
+
+    // Check if paths are on mounted filesystems
+    let old_mount = mount::resolve_mount_path(&abs_oldpath);
+    let new_mount = mount::resolve_mount_path(&abs_newpath);
+
+    match (old_mount, new_mount) {
+        (None, None) => {
+            // Both in in-memory filesystem - not supported
+            Err(syscall::ErrorCode::EACCES)
+        }
+        (Some((_, _, old_fs)), Some((_, _, new_fs))) if old_fs != new_fs => {
+            // Different filesystems
+            Err(syscall::ErrorCode::EXDEV)
+        }
+        (Some((_, old_rel, mount::FsType::Disk)), Some((_, _, mount::FsType::Disk))) => {
+            // Both on disk - read-only
+            let _ = old_rel;
+            Err(syscall::ErrorCode::EROFS)
+        }
+        (Some((_, old_rel, mount::FsType::Tmpfs)), Some((_, new_rel, mount::FsType::Tmpfs))) => {
+            // Both on tmpfs - perform rename
+            // Extract parent paths and names
+            let (old_parent, old_name) = if let Some(pos) = old_rel.rfind('/') {
+                let parent = &old_rel[..pos];
+                let name = &old_rel[pos + 1..];
+                (if parent.is_empty() { "/" } else { parent }, name)
+            } else {
+                ("/", old_rel.as_str())
+            };
+
+            let (new_parent, new_name) = if let Some(pos) = new_rel.rfind('/') {
+                let parent = &new_rel[..pos];
+                let name = &new_rel[pos + 1..];
+                (if parent.is_empty() { "/" } else { parent }, name)
+            } else {
+                ("/", new_rel.as_str())
+            };
+
+            // Perform the rename
+            mount::tmpfs_rename(old_parent, old_name, new_parent, new_name)?;
+            Ok(0)
+        }
+        _ => {
+            // One path is mounted, the other is not - cross-device
+            Err(syscall::ErrorCode::EXDEV)
+        }
+    }
 }
 
 /// fork handler - create a child process

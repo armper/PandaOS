@@ -231,7 +231,12 @@ impl FdTable {
         Err(ErrorCode::EMFILE)
     }
 
-    pub fn open_node(&mut self, node_index: usize, proc_uid: u32, proc_gid: u32) -> Result<i32, ErrorCode> {
+    pub fn open_node(
+        &mut self,
+        node_index: usize,
+        proc_uid: u32,
+        proc_gid: u32,
+    ) -> Result<i32, ErrorCode> {
         self.open_node_with_flags(node_index, O_RDONLY, proc_uid, proc_gid)
     }
 
@@ -641,19 +646,155 @@ impl FdTable {
 
         Ok(new_table)
     }
+
+    /// Get the current offset for a file descriptor
+    pub fn get_offset(&self, fd: i32) -> Result<i64, ErrorCode> {
+        if fd < 0 || fd as usize >= MAX_FDS {
+            return Err(ErrorCode::EBADF);
+        }
+        if fd < FIRST_NONSTD_FD as i32 {
+            return Err(ErrorCode::EBADF);
+        }
+
+        let kind = self.entries[fd as usize].ok_or(ErrorCode::EBADF)?;
+        match kind {
+            FdKind::File(open, _) => Ok(open.offset as i64),
+            FdKind::DiskFile(open) => Ok(open.offset as i64),
+            FdKind::TmpfsFile(open) => Ok(open.offset as i64),
+            FdKind::Directory(_) | FdKind::DiskDirectory(_) | FdKind::TmpfsDirectory(_) => {
+                Err(ErrorCode::EISDIR)
+            }
+            FdKind::PipeRead(_) | FdKind::PipeWrite(_) => Err(ErrorCode::ESPIPE),
+        }
+    }
+
+    /// Set the offset for a file descriptor (lseek)
+    pub fn set_offset(&mut self, fd: i32, new_offset: i64) -> Result<i64, ErrorCode> {
+        if fd < 0 || fd as usize >= MAX_FDS {
+            return Err(ErrorCode::EBADF);
+        }
+        if fd < FIRST_NONSTD_FD as i32 {
+            return Err(ErrorCode::EBADF);
+        }
+        if new_offset < 0 {
+            return Err(ErrorCode::EINVAL);
+        }
+
+        let kind = self.entries[fd as usize].ok_or(ErrorCode::EBADF)?;
+        match kind {
+            FdKind::File(open, writable) => {
+                let new_offset = new_offset as usize;
+                self.entries[fd as usize] = Some(FdKind::File(
+                    OpenFile { node_index: open.node_index, offset: new_offset },
+                    writable,
+                ));
+                Ok(new_offset as i64)
+            }
+            FdKind::DiskFile(open) => {
+                let new_offset = new_offset as usize;
+                self.entries[fd as usize] =
+                    Some(FdKind::DiskFile(OpenDiskFile { inode: open.inode, offset: new_offset }));
+                Ok(new_offset as i64)
+            }
+            FdKind::TmpfsFile(open) => {
+                let new_offset = new_offset as usize;
+                self.entries[fd as usize] = Some(FdKind::TmpfsFile(OpenTmpfsFile {
+                    inode: open.inode,
+                    offset: new_offset,
+                }));
+                Ok(new_offset as i64)
+            }
+            FdKind::Directory(_) | FdKind::DiskDirectory(_) | FdKind::TmpfsDirectory(_) => {
+                Err(ErrorCode::EISDIR)
+            }
+            FdKind::PipeRead(_) | FdKind::PipeWrite(_) => Err(ErrorCode::ESPIPE),
+        }
+    }
+
+    /// Get file size for lseek `SEEK_END`
+    pub fn get_file_size(&self, fd: i32) -> Result<i64, ErrorCode> {
+        if fd < 0 || fd as usize >= MAX_FDS {
+            return Err(ErrorCode::EBADF);
+        }
+        if fd < FIRST_NONSTD_FD as i32 {
+            return Err(ErrorCode::EBADF);
+        }
+
+        let kind = self.entries[fd as usize].ok_or(ErrorCode::EBADF)?;
+        match kind {
+            FdKind::File(open, _) => {
+                let node = FILES.get(open.node_index).ok_or(ErrorCode::ENOENT)?;
+                // Check writable files storage
+                let files = WRITABLE_FILES.lock();
+                if let Some(ref store) = *files {
+                    if let Some(file_data) = store.get(&open.node_index) {
+                        return Ok(file_data.len() as i64);
+                    }
+                }
+                Ok(node.data.len() as i64)
+            }
+            FdKind::DiskFile(open) => {
+                let metadata = crate::mount::diskfs_stat(open.inode)?;
+                Ok(metadata.size as i64)
+            }
+            FdKind::TmpfsFile(open) => {
+                let metadata = crate::mount::tmpfs_stat(open.inode)?;
+                Ok(metadata.size as i64)
+            }
+            FdKind::Directory(_) | FdKind::DiskDirectory(_) | FdKind::TmpfsDirectory(_) => {
+                Err(ErrorCode::EISDIR)
+            }
+            FdKind::PipeRead(_) | FdKind::PipeWrite(_) => Err(ErrorCode::ESPIPE),
+        }
+    }
 }
 
 pub static FILES: &[FileNode] = &[
     // Root directory
-    FileNode { path: "/", data: b"", file_type: FileType::Directory, mode: DEFAULT_DIR_MODE, uid: 0, gid: 0 },
+    FileNode {
+        path: "/",
+        data: b"",
+        file_type: FileType::Directory,
+        mode: DEFAULT_DIR_MODE,
+        uid: 0,
+        gid: 0,
+    },
     // /bin directory (now empty - programs loaded from disk/tmpfs)
-    FileNode { path: "/bin", data: b"", file_type: FileType::Directory, mode: DEFAULT_DIR_MODE, uid: 0, gid: 0 },
+    FileNode {
+        path: "/bin",
+        data: b"",
+        file_type: FileType::Directory,
+        mode: DEFAULT_DIR_MODE,
+        uid: 0,
+        gid: 0,
+    },
     // /etc directory
-    FileNode { path: "/etc", data: b"", file_type: FileType::Directory, mode: DEFAULT_DIR_MODE, uid: 0, gid: 0 },
+    FileNode {
+        path: "/etc",
+        data: b"",
+        file_type: FileType::Directory,
+        mode: DEFAULT_DIR_MODE,
+        uid: 0,
+        gid: 0,
+    },
     // /tmp directory (writable)
-    FileNode { path: "/tmp", data: b"", file_type: FileType::Directory, mode: DEFAULT_DIR_MODE, uid: 0, gid: 0 },
+    FileNode {
+        path: "/tmp",
+        data: b"",
+        file_type: FileType::Directory,
+        mode: DEFAULT_DIR_MODE,
+        uid: 0,
+        gid: 0,
+    },
     // /mnt directory (mount point for disk filesystem)
-    FileNode { path: "/mnt", data: b"", file_type: FileType::Directory, mode: DEFAULT_DIR_MODE, uid: 0, gid: 0 },
+    FileNode {
+        path: "/mnt",
+        data: b"",
+        file_type: FileType::Directory,
+        mode: DEFAULT_DIR_MODE,
+        uid: 0,
+        gid: 0,
+    },
     // Configuration files
     FileNode {
         path: "/etc/motd",
@@ -749,7 +890,9 @@ pub fn open_path_with_flags(
                 let readable = (flags & O_WRONLY) == 0 || (flags & O_RDWR) != 0;
 
                 // Check permissions
-                if readable && !can_read(proc_uid, proc_gid, metadata.uid, metadata.gid, metadata.mode) {
+                if readable
+                    && !can_read(proc_uid, proc_gid, metadata.uid, metadata.gid, metadata.mode)
+                {
                     return Err(ErrorCode::EACCES);
                 }
                 if writable {
@@ -824,10 +967,14 @@ pub fn open_path_with_flags(
                 let readable = (flags & O_WRONLY) == 0 || (flags & O_RDWR) != 0;
 
                 // Check permissions
-                if readable && !can_read(proc_uid, proc_gid, metadata.uid, metadata.gid, metadata.mode) {
+                if readable
+                    && !can_read(proc_uid, proc_gid, metadata.uid, metadata.gid, metadata.mode)
+                {
                     return Err(ErrorCode::EACCES);
                 }
-                if writable && !can_write(proc_uid, proc_gid, metadata.uid, metadata.gid, metadata.mode) {
+                if writable
+                    && !can_write(proc_uid, proc_gid, metadata.uid, metadata.gid, metadata.mode)
+                {
                     return Err(ErrorCode::EACCES);
                 }
 
@@ -867,7 +1014,12 @@ pub fn open_path_with_flags(
 }
 
 /// Open a file by path into a file descriptor table.
-pub fn open_path(table: &mut FdTable, path: &str, proc_uid: u32, proc_gid: u32) -> Result<i32, ErrorCode> {
+pub fn open_path(
+    table: &mut FdTable,
+    path: &str,
+    proc_uid: u32,
+    proc_gid: u32,
+) -> Result<i32, ErrorCode> {
     let (node_index, _node) = lookup_node(path).ok_or(ErrorCode::ENOENT)?;
     table.open_node(node_index, proc_uid, proc_gid)
 }
