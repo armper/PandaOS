@@ -26,7 +26,6 @@
     feature = "ctrlc-smoke",
     feature = "ls-smoke",
     feature = "ls-stat-smoke",
-        feature = "ls-long-smoke",
     feature = "ls-long-smoke",
     feature = "cd-smoke",
     feature = "path-smoke",
@@ -501,7 +500,7 @@ compile_error!(
 
 #[cfg(all(
     feature = "ls-stat-smoke",
-        feature = "ls-long-smoke",
+    feature = "ls-long-smoke",
     any(
         feature = "cd-smoke",
         feature = "path-smoke",
@@ -548,7 +547,7 @@ compile_error!(
     feature = "ctrlc-smoke",
     feature = "ls-smoke",
     feature = "ls-stat-smoke",
-        feature = "ls-long-smoke",
+    feature = "ls-long-smoke",
     feature = "cd-smoke",
     feature = "path-smoke",
     feature = "redir-smoke",
