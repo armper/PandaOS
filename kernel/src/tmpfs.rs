@@ -61,6 +61,8 @@ pub struct TmpFs {
     next_inode: Inode,
     /// Map of inode to node
     nodes: BTreeMap<Inode, TmpFsNode>,
+    /// Map of inode to mode bits
+    modes: BTreeMap<Inode, u16>,
     /// Root directory inode
     root_inode: Inode,
 }
@@ -72,7 +74,10 @@ impl TmpFs {
         let mut nodes = BTreeMap::new();
         nodes.insert(root_inode, TmpFsNode::new_directory());
 
-        Self { next_inode: root_inode + 1, nodes, root_inode }
+        let mut modes = BTreeMap::new();
+        modes.insert(root_inode, crate::fs::DEFAULT_DIR_MODE);
+
+        Self { next_inode: root_inode + 1, nodes, modes, root_inode }
     }
 
     /// Get the root inode
@@ -153,6 +158,14 @@ impl TmpFs {
 
         // Add to nodes
         self.nodes.insert(new_inode, new_node);
+
+        // Set default mode
+        let default_mode = if is_dir {
+            crate::fs::DEFAULT_DIR_MODE
+        } else {
+            crate::fs::DEFAULT_FILE_MODE
+        };
+        self.modes.insert(new_inode, default_mode);
 
         // Add to parent directory (now we can safely get mut again)
         let parent = self.nodes.get_mut(&parent_inode).ok_or(ErrorCode::ENOENT)?;
@@ -277,11 +290,31 @@ impl TmpFs {
     /// Get file metadata
     pub fn stat(&self, inode: Inode) -> Result<FileMetadata, ErrorCode> {
         let node = self.nodes.get(&inode).ok_or(ErrorCode::ENOENT)?;
-        let mode = match node.file_type() {
+        // Get actual mode from storage, or use default
+        let mode = self.modes.get(&inode).copied().unwrap_or_else(|| match node.file_type() {
             FileType::Directory => crate::fs::DEFAULT_DIR_MODE,
             FileType::File => crate::fs::DEFAULT_FILE_MODE,
-        };
+        });
         Ok(FileMetadata { file_type: node.file_type(), size: node.size(), mode })
+    }
+
+    /// Change file mode (chmod)
+    pub fn chmod(&mut self, inode: Inode, new_mode: u16) -> Result<(), ErrorCode> {
+        // Check that inode exists
+        let node = self.nodes.get(&inode).ok_or(ErrorCode::ENOENT)?;
+
+        // Preserve file type bits, only change permission bits
+        let file_type_bits = match node.file_type() {
+            FileType::Directory => crate::fs::S_IFDIR,
+            FileType::File => crate::fs::S_IFREG,
+        };
+        let permission_bits = new_mode & 0o777;
+        let final_mode = file_type_bits | permission_bits;
+
+        // Store the new mode
+        self.modes.insert(inode, final_mode);
+
+        Ok(())
     }
 
     /// List directory entries

@@ -279,3 +279,8 @@ pub fn tmpfs_unlink(parent_path: &str, name: &str) -> Result<(), ErrorCode> {
         fs.unlink(parent_inode, name)
     })
 }
+
+/// Change file mode (chmod) in tmpfs
+pub fn tmpfs_chmod(inode: TmpfsInode, new_mode: u16) -> Result<(), ErrorCode> {
+    crate::tmpfs::with_tmpfs(|fs| fs.chmod(inode, new_mode))
+}
