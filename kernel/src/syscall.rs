@@ -605,13 +605,21 @@ compile_error!(
 
 #[cfg(all(
     feature = "path-smoke",
-    any(feature = "redir-smoke", feature = "tmpfs-redir-smoke", feature = "elf-exec-smoke", feature = "tty-smoke")
+    any(
+        feature = "redir-smoke",
+        feature = "tmpfs-redir-smoke",
+        feature = "elf-exec-smoke",
+        feature = "tty-smoke"
+    )
 ))]
 compile_error!(
     "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, tmpfs-redir-smoke, elf-exec-smoke, and tty-smoke are mutually exclusive"
 );
 
-#[cfg(all(feature = "redir-smoke", any(feature = "tmpfs-redir-smoke", feature = "elf-exec-smoke", feature = "tty-smoke")))]
+#[cfg(all(
+    feature = "redir-smoke",
+    any(feature = "tmpfs-redir-smoke", feature = "elf-exec-smoke", feature = "tty-smoke")
+))]
 compile_error!(
     "shell-smoke, vfs-cat-smoke, fork-exec-smoke, pipe-smoke, ctrlc-smoke, ls-smoke, ls-stat-smoke, cd-smoke, path-smoke, redir-smoke, tmpfs-redir-smoke, elf-exec-smoke, and tty-smoke are mutually exclusive"
 );

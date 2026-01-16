@@ -1198,3 +1198,98 @@ make test-vm
 - `fork_exec_smoke`: Tests fork/exec without memory management focus
 - `vm_smoke`: Comprehensive integration test combining all VM features
 
+
+## tmpfs_redir_smoke Test
+
+**Purpose**: Comprehensive test of writable tmpfs filesystem and shell redirection
+
+**Test Feature**: `tmpfs-redir-smoke`
+
+**What It Tests**:
+1. **mkdir**: Create directories in tmpfs
+2. **File creation**: Create files via shell redirection (`>`)
+3. **File append**: Append to files via shell redirection (`>>`)
+4. **File operations**: Read, list, rename, delete files
+5. **Directory operations**: List directory, remove directory
+6. **Pipe + redirection**: Combine pipes with output redirection
+7. **Error handling**: Empty directory check on rmdir
+
+**Test Commands** (scripted input):
+```bash
+mkdir /tmp/a                    # Create directory
+echo hello > /tmp/a/msg         # Create file with truncate
+cat /tmp/a/msg                  # Read file (should show "hello")
+echo world >> /tmp/a/msg        # Append to file
+cat /tmp/a/msg                  # Read file (should show "hello\nworld")
+echo hi | wc > /tmp/a/count     # Pipe output to file
+cat /tmp/a/count                # Read wc output
+ls /tmp/a                       # List directory contents
+mv /tmp/a/msg /tmp/a/msg2       # Rename file
+ls /tmp/a                       # List directory (msg2, count)
+rm /tmp/a/msg2                  # Remove file
+rm /tmp/a/count                 # Remove file
+rmdir /tmp/a                    # Remove empty directory
+ls /tmp                         # List /tmp (should be empty)
+exit                            # Exit shell
+```
+
+**Expected Behaviors**:
+1. **mkdir**: Creates `/tmp/a` directory successfully
+2. **Output redirection (`>`)**: Creates `/tmp/a/msg` with "hello\n" (truncate mode)
+3. **cat**: Reads and displays "hello"
+4. **Append redirection (`>>`)**: Appends "world\n" to file
+5. **cat**: Reads and displays "hello\nworld\n"
+6. **Pipe to file**: `wc` counts "hi\n" (3 bytes, 1 line, 1 word) and writes to `/tmp/a/count`
+7. **ls /tmp/a**: Shows "count" and "msg" (or "msg2" after rename)
+8. **rename**: Moves `/tmp/a/msg` to `/tmp/a/msg2`
+9. **ls /tmp/a**: Shows "count" and "msg2"
+10. **rm**: Removes both files successfully
+11. **rmdir**: Removes empty directory successfully
+12. **ls /tmp**: Shows empty directory or only root entries
+
+**Success Criteria**:
+- All commands execute without errors
+- File contents match expected values
+- Directory listings show correct entries
+- Final TEST PASS marker: `TEST PASS tmpfs_redir_smoke`
+
+**Run Test**:
+```bash
+TMPFS_REDIR_SMOKE=1 ./scripts/qemu-test.sh
+```
+
+**Syscalls Exercised**:
+- `open()` with O_CREAT, O_TRUNC, O_APPEND flags
+- `write()` to tmpfs files
+- `read()` from tmpfs files
+- `lseek()` (implicitly via read/write)
+- `mkdir()` syscall #83
+- `rmdir()` syscall #84
+- `rename()` syscall #82
+- `unlink()` syscall #87
+- `getdents64()` for directory listing
+- `dup2()` for redirection setup
+
+**What This Validates**:
+1. **Tmpfs backend**: File and directory operations work correctly
+2. **Mount table**: Path resolution routes `/tmp` to tmpfs
+3. **Shell redirection**: `>` and `>>` operators function correctly
+4. **Open flags**: O_CREAT, O_TRUNC, O_APPEND behave properly
+5. **File lifecycle**: Create, write, read, rename, delete all work
+6. **Directory lifecycle**: Create, list, remove work
+7. **Cross-operation integration**: Pipes, redirection, and filesystem all work together
+8. **Error handling**: ENOTEMPTY on non-empty rmdir
+
+**Known Behaviors**:
+- All data in tmpfs is lost on reboot (RAM only)
+- Cross-device rename (e.g., `/tmp` to `/mnt`) returns EXDEV
+- Permissions are checked but uid/gid are always 0
+- Timestamps are not tracked
+- No hard or symbolic links
+
+**Debugging Tips**:
+- Check serial log in `target/qemu/tmpfs_redir_smoke.log`
+- Look for syscall error codes in output
+- Verify file contents match expected values
+- Check directory listing order (alphabetical)
+- Confirm wc output format (depends on implementation)
