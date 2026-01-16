@@ -174,7 +174,9 @@ impl FdTable {
         }
     }
 
-    pub fn read(&mut self, fd: i32, count: usize) -> Result<&'static [u8], ErrorCode> {
+    /// Read from a file descriptor into a buffer
+    /// Returns the number of bytes read
+    pub fn read(&mut self, fd: i32, buffer: &mut [u8]) -> Result<usize, ErrorCode> {
         if fd < 0 || fd as usize >= MAX_FDS {
             return Err(ErrorCode::EBADF);
         }
@@ -184,35 +186,30 @@ impl FdTable {
         let kind = self.entries[fd as usize].ok_or(ErrorCode::EBADF)?;
         match kind {
             FdKind::File(open, _writable) => {
+                let count = buffer.len();
+                
                 // Check if this is a writable file with data in WRITABLE_FILES
                 let files = WRITABLE_FILES.lock();
                 if let Some(ref store) = *files {
                     if let Some(file_data) = store.get(&open.node_index) {
                         // Read from writable file storage
                         if open.offset >= file_data.len() || count == 0 {
-                            return Ok(&[]);
+                            return Ok(0);
                         }
                         let available = file_data.len() - open.offset;
                         let to_read = available.min(count);
                         let start = open.offset;
                         let end = start + to_read;
                         
-                        // We need to return a &'static [u8], but file_data is heap-allocated
-                        // This is a limitation - we'll need to handle this differently
-                        // For now, we'll leak the memory to get a static reference
-                        // This is not ideal but works for the minimal implementation
-                        
-                        // Create a buffer that lives long enough
-                        use alloc::boxed::Box;
-                        let slice = file_data[start..end].to_vec();
-                        let leaked: &'static [u8] = Box::leak(slice.into_boxed_slice());
+                        // Copy data to buffer
+                        buffer[..to_read].copy_from_slice(&file_data[start..end]);
                         
                         // Update offset
                         drop(files);
                         self.entries[fd as usize] =
                             Some(FdKind::File(OpenFile { node_index: open.node_index, offset: end }, _writable));
                         
-                        return Ok(leaked);
+                        return Ok(to_read);
                     }
                 }
                 drop(files);
@@ -220,15 +217,19 @@ impl FdTable {
                 // Fall back to static file data
                 let node = FILES.get(open.node_index).ok_or(ErrorCode::ENOENT)?;
                 if open.offset >= node.data.len() || count == 0 {
-                    return Ok(&[]);
+                    return Ok(0);
                 }
                 let available = node.data.len() - open.offset;
                 let to_read = available.min(count);
                 let start = open.offset;
                 let end = start + to_read;
+                
+                // Copy data to buffer
+                buffer[..to_read].copy_from_slice(&node.data[start..end]);
+                
                 self.entries[fd as usize] =
                     Some(FdKind::File(OpenFile { node_index: open.node_index, offset: end }, _writable));
-                Ok(&node.data[start..end])
+                Ok(to_read)
             }
             FdKind::Directory(_) => {
                 // Reading directories via read() is not supported
@@ -764,12 +765,17 @@ mod tests {
     fn test_read_offsets_and_eof() {
         let mut table = FdTable::new();
         let fd = open_path(&mut table, "/etc/version").expect("version should exist");
-        let first = table.read(fd, 6).expect("read should succeed");
-        assert_eq!(first, b"PandaO");
-        let second = table.read(fd, 64).expect("read should succeed");
-        assert_eq!(second, b"S 0.1.0\r\n");
-        let eof = table.read(fd, 4).expect("read should succeed");
-        assert_eq!(eof.len(), 0);
+        
+        let mut buf = [0u8; 64];
+        let n = table.read(fd, &mut buf[..6]).expect("read should succeed");
+        assert_eq!(n, 6);
+        assert_eq!(&buf[..6], b"PandaO");
+        
+        let n = table.read(fd, &mut buf[..64]).expect("read should succeed");
+        assert_eq!(&buf[..n], b"S 0.1.0\r\n");
+        
+        let n = table.read(fd, &mut buf[..4]).expect("read should succeed");
+        assert_eq!(n, 0);
     }
 
     #[test]
@@ -781,7 +787,8 @@ mod tests {
         let err = table.open_node(0).unwrap_err();
         assert_eq!(err, ErrorCode::EMFILE);
 
-        let err = table.read(99, 1).unwrap_err();
+        let mut buf = [0u8; 1];
+        let err = table.read(99, &mut buf).unwrap_err();
         assert_eq!(err, ErrorCode::EBADF);
 
         let err = table.close(1).unwrap_err();

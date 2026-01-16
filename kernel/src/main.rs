@@ -510,10 +510,15 @@ fn read_handler(fd: i32, buf: u64, count: u64) -> syscall::SyscallResult {
 
     match fd_kind {
         fs::FdKind::File(_open, _writable) => {
-            // Read from file
-            let data = current.fd_table.read(fd, count)?;
-            crate::usermode::copy_to_user_bytes(buf, data)?;
-            Ok(data.len() as u64)
+            // Read from file using a temporary buffer
+            let mut temp_buf = [0u8; 4096];
+            let to_read = count.min(temp_buf.len());
+            let bytes_read = current.fd_table.read(fd, &mut temp_buf[..to_read])?;
+            
+            if bytes_read > 0 {
+                crate::usermode::copy_to_user_bytes(buf, &temp_buf[..bytes_read])?;
+            }
+            Ok(bytes_read as u64)
         }
         fs::FdKind::Directory(_) => {
             // Can't read directories with read() - use getdents64
