@@ -202,7 +202,7 @@ impl FdTable {
 
         // Check access mode
         let writable = (flags & O_WRONLY) != 0 || (flags & O_RDWR) != 0;
-        let readable = (flags & O_RDONLY) == 0 || (flags & O_RDWR) != 0;
+        let readable = (flags & O_WRONLY) == 0 || (flags & O_RDWR) != 0;
 
         // Check permissions
         if readable && !can_read(metadata.mode) {
@@ -677,7 +677,7 @@ pub fn open_path_with_flags(table: &mut FdTable, path: &str, flags: u64) -> Resu
 
                 // Check access mode and permissions
                 let writable = (flags & O_WRONLY) != 0 || (flags & O_RDWR) != 0;
-                let readable = (flags & O_RDONLY) == 0 || (flags & O_RDWR) != 0;
+                let readable = (flags & O_WRONLY) == 0 || (flags & O_RDWR) != 0;
 
                 // Check permissions
                 if readable && !can_read(metadata.mode) {
@@ -750,7 +750,7 @@ pub fn open_path_with_flags(table: &mut FdTable, path: &str, flags: u64) -> Resu
 
                 // Check access mode and permissions
                 let writable = (flags & O_WRONLY) != 0 || (flags & O_RDWR) != 0;
-                let readable = (flags & O_RDONLY) == 0 || (flags & O_RDWR) != 0;
+                let readable = (flags & O_WRONLY) == 0 || (flags & O_RDWR) != 0;
 
                 // Check permissions
                 if readable && !can_read(metadata.mode) {
