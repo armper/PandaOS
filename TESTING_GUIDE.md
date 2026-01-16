@@ -818,3 +818,84 @@ TEST PASS disk_fs_smoke
 - Data blocks: file contents and directory entries
 - Maximum 10 direct block pointers per inode
 - Directory entries: inode number + name length + name
+
+## Tmpfs Testing
+
+### Overview
+
+Tmpfs is a writable in-memory temporary filesystem mounted at `/tmp`. It provides persistent (within session) file storage that survives across process boundaries but is lost on reboot.
+
+### Manual Testing
+
+You can test tmpfs functionality through the shell (requires shell redirection support):
+
+```bash
+# Create a file in /tmp
+echo hello > /tmp/test.txt
+
+# Read the file
+cat /tmp/test.txt
+
+# List /tmp directory
+ls /tmp
+
+# Delete a file (requires rm command or unlink syscall)
+unlink /tmp/test.txt
+```
+
+### Syscall Testing
+
+Test tmpfs via syscalls:
+
+```c
+// Create and write
+int fd = open("/tmp/test.txt", O_CREAT | O_WRONLY, 0);
+write(fd, "hello", 5);
+close(fd);
+
+// Read
+int fd = open("/tmp/test.txt", O_RDONLY, 0);
+char buf[10];
+int n = read(fd, buf, 10);
+close(fd);
+
+// Delete
+unlink("/tmp/test.txt");
+```
+
+### Unit Tests
+
+Tmpfs includes comprehensive unit tests in `kernel/src/tmpfs.rs`:
+- File creation and basic I/O
+- Writing and reading data
+- File unlinking (deletion)
+- Directory creation and listing
+- Truncation
+- Error cases (ENOENT, EEXIST, ENOTDIR, ENOTEMPTY)
+
+### Verification Points
+
+1. **Mount Status**: Verify tmpfs is mounted at boot
+   - Check kernel log: "Tmpfs mounted at /tmp"
+
+2. **File Persistence**: Files survive across processes
+   - Create file in one shell session
+   - Access from another process
+
+3. **Memory Only**: All data in RAM
+   - No disk I/O for /tmp operations
+   - Data lost on reboot
+
+4. **Error Handling**:
+   - ENOENT when file doesn't exist
+   - EEXIST when file already exists (O_CREAT without O_EXCL on existing)
+   - ENOTDIR when accessing non-directory as directory
+   - ENOTEMPTY when deleting non-empty directory
+
+### Known Limitations
+
+- No rename operation yet
+- No permissions/ownership
+- No hard or symbolic links
+- Empty directories must be explicitly deleted
+- Root `/tmp` directory cannot be deleted
