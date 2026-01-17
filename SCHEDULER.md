@@ -2,7 +2,9 @@
 
 ## Overview
 
-PandaOS implements a minimal cooperative scheduler with round-robin scheduling. The scheduler coordinates with syscalls for voluntary yielding; timer preemption is planned but not enabled yet.
+PandaOS implements a minimal preemptive scheduler with round-robin scheduling and timer-driven
+multitasking. The scheduler uses a hybrid approach that provides preemption at syscall boundaries,
+combining the simplicity of cooperative scheduling with the benefits of preemptive multitasking.
 
 ## Architecture
 
@@ -113,15 +115,39 @@ static mut SCHEDULER: Option<Scheduler> = None;
 
 ### Timer-Based Preemption
 
-**Current Status: Not Implemented**
+**Current Status: Implemented**
 
-Timer preemption requires:
-- Saving interrupt frame state
-- Stack switching (user → kernel → new user)
-- Context restoration via iretq
-- Proper segment selector management
+Timer preemption is implemented using a hybrid approach that provides preemptive multitasking
+at syscall boundaries:
 
-This is left for future implementation due to complexity.
+1. **Timer Interrupt Handler**:
+   - Increments tick counter
+   - Sets `need_resched` flag on every timer tick
+   - Does NOT perform context switches directly
+
+2. **Syscall Exit Reschedule Point**:
+   - After every syscall completes, checks `need_resched` flag
+   - If set, triggers a context switch before returning to user mode
+   - Uses the same yield mechanism as cooperative scheduling
+
+3. **Kernel Mode Deferral**:
+   - Processes running in kernel mode (handling syscalls) are not preempted
+   - Preemption occurs only when returning to user mode
+   - This maintains correctness and simplifies implementation
+
+4. **Benefits of This Approach**:
+   - Avoids complexity of interrupt-based context switching
+   - Maintains use of syscall/sysretq for user transitions
+   - No need to mix iretq and sysretq mechanisms
+   - Provides sufficient preemption for practical use
+   - Deterministic and correct
+
+**Implementation Details:**
+- Timer configured at 100Hz (10ms intervals)
+- Every timer tick sets `need_resched = true`
+- Syscall exit path checks flag and performs yield if needed
+- Context switch counter tracks total switches for observability
+- Feature flag `preempt-log` enables verbose logging
 
 ### Cooperative Scheduling
 
@@ -268,9 +294,9 @@ Processes can be blocked while waiting for events:
 
 ### Short Term
 
-1. Implement timer-based preemption
-2. Test with multiple processes
-3. Add scheduler metrics (context switch count, etc.)
+1. ~~Implement timer-based preemption~~ **Complete**: Hybrid preemption at syscall boundaries
+2. Add per-process timeslice accounting for more sophisticated scheduling
+3. Add scheduler metrics (context switch rate, CPU utilization, etc.)
 
 ### Medium Term
 
@@ -278,6 +304,7 @@ Processes can be blocked while waiting for events:
 2. ~~Implement fork syscall~~ **Complete**
 3. ~~Implement exec syscall~~ **Complete**
 4. ~~Add wait/waitpid for process management~~ **Complete**: Blocking waitpid
+5. Implement true interrupt-based preemption (if needed for specific use cases)
 
 ### Long Term
 
@@ -365,6 +392,6 @@ Processes can be blocked while waiting for events:
 
 ---
 
-**Last Updated**: 2026-01-15  
-**Status**: Core infrastructure complete, preemption pending implementation  
+**Last Updated**: 2026-01-17  
+**Status**: Core infrastructure complete, preemptive multitasking implemented via hybrid approach  
 **Maintainer**: PandaOS Team

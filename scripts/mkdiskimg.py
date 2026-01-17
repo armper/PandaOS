@@ -187,7 +187,7 @@ def main():
     # Collect userland binaries first so we can compute inode table size up front.
     userland_bin = Path(__file__).parent.parent / "userland" / "bin"
     bin_files = []
-    for name in ["init", "sh", "ls", "cat", "echo", "wc", "true"]:
+    for name in ["init", "sh", "ls", "cat", "echo", "wc", "true", "spin", "pingpong", "preempt_test"]:
         p = userland_bin / name
         if p.exists():
             bin_files.append((name, p))

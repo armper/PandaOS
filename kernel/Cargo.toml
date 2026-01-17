@@ -38,6 +38,8 @@ tmpfs-redir-smoke = []
 disk-fs-smoke = []
 elf-exec-smoke = []
 tty-smoke = []
+preempt-smoke = []
+preempt-log = []
 build-userland = []
 
 [package.metadata.bootimage]

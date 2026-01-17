@@ -313,12 +313,50 @@ extern "C" fn syscall_entry() {
 
 /// Rust syscall handler called from assembly entry point
 ///
-/// This function reads syscall arguments from the saved CpuContext.
+/// This function reads syscall arguments from the saved CpuContext and
+/// handles the syscall. After the syscall completes, it checks if preemption
+/// is needed (need_resched flag) and performs a context switch if so.
+///
+/// This implements preemption at syscall exit boundaries, providing
+/// timer-driven multitasking without needing interrupt-based context switches.
 extern "C" fn syscall_handler_rust() -> i64 {
     // SAFETY: syscall_entry saved the current process context before calling.
     let ctx = unsafe { CURRENT_CONTEXT_PTR.as_ref() }.expect("Syscall context not set");
 
-    syscall::handle_syscall(ctx.rax, ctx.rdi, ctx.rsi, ctx.rdx, ctx.r10, ctx.r8, ctx.r9)
+    let result =
+        syscall::handle_syscall(ctx.rax, ctx.rdi, ctx.rsi, ctx.rdx, ctx.r10, ctx.r8, ctx.r9);
+
+    // Check if preemption is needed (set by timer interrupt)
+    // This provides preemptive multitasking at syscall boundaries
+    check_and_handle_preemption();
+
+    result
+}
+
+/// Check if preemption is needed and handle it
+///
+/// This is called after every syscall to implement preemption at syscall
+/// exit boundaries. If the need_resched flag is set (by timer interrupt),
+/// this will trigger a context switch to the next runnable process.
+///
+/// This approach provides preemptive multitasking without needing to
+/// handle context switches from interrupt context, which simplifies
+/// the implementation and maintains correctness.
+fn check_and_handle_preemption() {
+    // Check need_resched flag
+    // SAFETY: We're in syscall context with a consistent state
+    let need_resched = unsafe { crate::get_need_resched() };
+
+    if need_resched {
+        // Clear the flag
+        unsafe { crate::clear_need_resched() };
+
+        // Trigger a yield to switch to the next process
+        // This uses the same mechanism as the yield syscall
+        if let Some(yield_fn) = syscall::get_yield_handler() {
+            yield_fn();
+        }
+    }
 }
 
 /// Switch to a new user process from syscall context
