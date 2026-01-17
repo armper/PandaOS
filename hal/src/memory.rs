@@ -430,7 +430,7 @@ impl FrameAllocator {
                 if *refcount > 0 {
                     *refcount -= 1;
                     let new_count = *refcount;
-                    
+
                     // If refcount hits 0, deallocate the frame
                     if new_count == 0 {
                         self.clear_allocated(frame);
@@ -438,7 +438,7 @@ impl FrameAllocator {
                             self.next_frame = frame;
                         }
                     }
-                    
+
                     return Some(new_count);
                 }
             }

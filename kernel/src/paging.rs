@@ -662,8 +662,7 @@ pub unsafe fn set_pte_flags(
     flags_to_set: PageTableFlags,
 ) -> Result<(), &'static str> {
     // SAFETY: Caller guarantees page table is valid
-    let pte = unsafe { walk_page_table(page_table_phys, virt_addr) }
-        .ok_or("Page not mapped")?;
+    let pte = unsafe { walk_page_table(page_table_phys, virt_addr) }.ok_or("Page not mapped")?;
 
     let current_flags = pte.flags();
     let new_flags = PageTableFlags::from_bits(current_flags.bits() | flags_to_set.bits());
@@ -691,8 +690,7 @@ pub unsafe fn clear_pte_flags(
     flags_to_clear: PageTableFlags,
 ) -> Result<(), &'static str> {
     // SAFETY: Caller guarantees page table is valid
-    let pte = unsafe { walk_page_table(page_table_phys, virt_addr) }
-        .ok_or("Page not mapped")?;
+    let pte = unsafe { walk_page_table(page_table_phys, virt_addr) }.ok_or("Page not mapped")?;
 
     let current_flags = pte.flags();
     let new_flags = PageTableFlags::from_bits(current_flags.bits() & !flags_to_clear.bits());
