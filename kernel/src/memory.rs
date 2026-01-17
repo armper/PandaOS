@@ -10,9 +10,9 @@
 //! - No frame overlap between allocations
 //! - Heap is mapped before allocator initialization
 
+use core::sync::atomic::{AtomicU64, Ordering};
 use panda_hal::memory::FrameAllocator;
 use spin::Mutex;
-use core::sync::atomic::{AtomicU64, Ordering};
 
 /// Memory region type
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

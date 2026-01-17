@@ -30,6 +30,7 @@
 
 - **Ready**: Process is ready to run
 - **Running**: Process is currently executing
+- **Stopped**: Process is suspended (stopped by SIGTSTP), not scheduled until SIGCONT
 - **Zombie(code)**: Process has exited but not yet reaped by parent
 - **Exited(code)**: Process has exited and has no parent (immediate reap)
 
@@ -37,10 +38,34 @@
 
 Processes can be in one of three wait states for blocking operations:
 - **NotWaiting**: Process is not blocked
-- **WaitingForAnyChild**: Process is blocked waiting for any child to exit
-- **WaitingForChild(pid)**: Process is blocked waiting for a specific child
+- **WaitingForAnyChild**: Process is blocked waiting for any child to exit or stop
+- **WaitingForChild(pid)**: Process is blocked waiting for a specific child to exit or stop
 
 Blocked processes are skipped by the scheduler until they are woken.
+
+## Signal-Induced State Transitions
+
+### SIGTSTP (Stop Signal)
+When a process receives SIGTSTP (typically from Ctrl+Z):
+1. Process transitions to **Stopped** state
+2. Parent waiting with WUNTRACED is woken
+3. Process is skipped by scheduler until resumed
+4. Resources (memory, file descriptors) remain allocated
+
+### SIGCONT (Continue Signal)
+When a stopped process receives SIGCONT:
+1. Process transitions from **Stopped** to **Ready**
+2. Process becomes schedulable again
+3. Execution resumes from where it was stopped
+
+### State Diagram
+```
+Ready ←→ Running → Stopped (SIGTSTP)
+  ↑                    ↓
+  └──────(SIGCONT)─────┘
+  
+Running → Exited/Zombie (exit or SIGINT)
+```
 
 ## exit(code)
 - If process has a parent:
@@ -58,26 +83,47 @@ Blocked processes are skipped by the scheduler until they are woken.
 - If no runnable processes remain, print test marker and halt
 
 ## waitpid(pid, status_ptr, options)
-- Waits for a child process to exit (blocking behavior)
+- Waits for a child process to change state (exit or stop)
 - Supported options:
   - pid = -1: Wait for any child
   - pid > 0: Wait for specific child
-  - options must be 0 (no WNOHANG support yet)
+  - **WUNTRACED** (0x2): Also report stopped children
+  - options = 0: Only wait for exited children (default)
+  
+- **If stopped child found** (with WUNTRACED):
+  - Return child PID
+  - Write stop status to user memory: `(signal << 8) | 0x7f`
+  - **Do NOT reap** - stopped process remains in scheduler
+  - Example: SIGTSTP (20) → status = 0x147f
+  
 - If zombie child found:
   - Return child PID
-  - Write exit status to user memory (if status_ptr != 0)
+  - Write exit status to user memory (if status_ptr != 0): `exit_code << 8`
   - Free child's page tables and kernel stack (reap)
   - **Deallocate all heap and mmap pages**
-- If no zombie children but has children:
+  
+- If no zombie or stopped children but has children:
   - **Block the parent process** (WaitingForChild state)
   - Yield CPU to other processes
-  - Wake when child exits or signal received
-  - Retry finding zombie after wake
+  - Wake when child exits, stops (with WUNTRACED), or signal received
+  - Retry finding zombie or stopped child after wake
   - Return EINTR if still not ready (signal woke us)
+  
 - If no children at all:
   - Return ESRCH (no such process)
 
-**Blocking Behavior**: Unlike the previous busy-wait implementation, waitpid now properly blocks the calling process. The scheduler will skip blocked processes, eliminating CPU spinning. When a child exits, the exit handler wakes any parent waiting for that child.
+**Status Encoding:**
+- **Exited**: `(exit_code << 8)` - e.g., exit(0) → 0x0000, exit(1) → 0x0100
+- **Stopped**: `(signal << 8) | 0x7f` - e.g., SIGTSTP → 0x147f
+- **Signaled**: `128 + signal` - e.g., SIGINT → 130
+
+Shell can use macros to decode:
+- `WIFEXITED(status)`: `(status & 0x7f) == 0`
+- `WIFSTOPPED(status)`: `(status & 0xff) == 0x7f`
+- `WEXITSTATUS(status)`: `(status >> 8) & 0xff`
+- `WSTOPSIG(status)`: `(status >> 8) & 0xff`
+
+**Blocking Behavior**: Unlike the previous busy-wait implementation, waitpid now properly blocks the calling process. The scheduler will skip blocked processes, eliminating CPU spinning. When a child exits or stops, the scheduler wakes any parent waiting for that child.
 
 ## execve(path, argv, envp) - Deep Dive
 

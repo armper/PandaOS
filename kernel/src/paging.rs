@@ -429,9 +429,8 @@ pub unsafe fn map_page(
     }
 
     // SAFETY: Entry is now present
-    let l3_table = unsafe {
-        &mut *(phys_to_virt_addr(l4_table[p4_index].addr()) as *mut PageTable)
-    };
+    let l3_table =
+        unsafe { &mut *(phys_to_virt_addr(l4_table[p4_index].addr()) as *mut PageTable) };
 
     // Get or create L2 table
     if !l3_table[p3_index].is_present() {
@@ -453,9 +452,8 @@ pub unsafe fn map_page(
     }
 
     // SAFETY: Entry is now present
-    let l2_table = unsafe {
-        &mut *(phys_to_virt_addr(l3_table[p3_index].addr()) as *mut PageTable)
-    };
+    let l2_table =
+        unsafe { &mut *(phys_to_virt_addr(l3_table[p3_index].addr()) as *mut PageTable) };
 
     // Get or create L1 table
     if !l2_table[p2_index].is_present() {
@@ -477,9 +475,8 @@ pub unsafe fn map_page(
     }
 
     // SAFETY: Entry is now present
-    let l1_table = unsafe {
-        &mut *(phys_to_virt_addr(l2_table[p2_index].addr()) as *mut PageTable)
-    };
+    let l1_table =
+        unsafe { &mut *(phys_to_virt_addr(l2_table[p2_index].addr()) as *mut PageTable) };
 
     // Check if the page is already mapped
     // This handles cases where:
@@ -557,27 +554,24 @@ pub unsafe fn unmap_page(
     }
 
     // SAFETY: Entry is present
-    let l3_table = unsafe {
-        &mut *(phys_to_virt_addr(l4_table[p4_index].addr()) as *mut PageTable)
-    };
+    let l3_table =
+        unsafe { &mut *(phys_to_virt_addr(l4_table[p4_index].addr()) as *mut PageTable) };
 
     if !l3_table[p3_index].is_present() {
         return Err("Page not mapped (L3 entry missing)");
     }
 
     // SAFETY: Entry is present
-    let l2_table = unsafe {
-        &mut *(phys_to_virt_addr(l3_table[p3_index].addr()) as *mut PageTable)
-    };
+    let l2_table =
+        unsafe { &mut *(phys_to_virt_addr(l3_table[p3_index].addr()) as *mut PageTable) };
 
     if !l2_table[p2_index].is_present() {
         return Err("Page not mapped (L2 entry missing)");
     }
 
     // SAFETY: Entry is present
-    let l1_table = unsafe {
-        &mut *(phys_to_virt_addr(l2_table[p2_index].addr()) as *mut PageTable)
-    };
+    let l1_table =
+        unsafe { &mut *(phys_to_virt_addr(l2_table[p2_index].addr()) as *mut PageTable) };
 
     if !l1_table[p1_index].is_present() {
         return Err("Page not mapped (L1 entry missing)");
@@ -852,9 +846,7 @@ pub unsafe fn clone_user_address_space(parent_page_table_phys: u64) -> Result<u6
     let child_pt = unsafe { create_user_page_table()? };
 
     // SAFETY: Both page tables are valid
-    let parent_l4 = unsafe {
-        &*(phys_to_virt_addr(parent_page_table_phys) as *const PageTable)
-    };
+    let parent_l4 = unsafe { &*(phys_to_virt_addr(parent_page_table_phys) as *const PageTable) };
     let child_l4 = unsafe { &mut *(phys_to_virt_addr(child_pt) as *mut PageTable) };
 
     // Walk the parent's user space (lower half, entries 0-255)
@@ -865,9 +857,7 @@ pub unsafe fn clone_user_address_space(parent_page_table_phys: u64) -> Result<u6
 
         let parent_l3_phys = parent_l4[p4_index].addr();
         // SAFETY: L3 address is from a present L4 entry
-        let parent_l3 = unsafe {
-            &*(phys_to_virt_addr(parent_l3_phys) as *const PageTable)
-        };
+        let parent_l3 = unsafe { &*(phys_to_virt_addr(parent_l3_phys) as *const PageTable) };
 
         // Create or get child L3 table
         if !child_l4[p4_index].is_present() {
@@ -889,9 +879,7 @@ pub unsafe fn clone_user_address_space(parent_page_table_phys: u64) -> Result<u6
 
         let child_l3_phys = child_l4[p4_index].addr();
         // SAFETY: L3 is now present
-        let child_l3 = unsafe {
-            &mut *(phys_to_virt_addr(child_l3_phys) as *mut PageTable)
-        };
+        let child_l3 = unsafe { &mut *(phys_to_virt_addr(child_l3_phys) as *mut PageTable) };
 
         for p3_index in 0..ENTRY_COUNT {
             if !parent_l3[p3_index].is_present() {
@@ -900,9 +888,7 @@ pub unsafe fn clone_user_address_space(parent_page_table_phys: u64) -> Result<u6
 
             let parent_l2_phys = parent_l3[p3_index].addr();
             // SAFETY: L2 address is from a present L3 entry
-            let parent_l2 = unsafe {
-                &*(phys_to_virt_addr(parent_l2_phys) as *const PageTable)
-            };
+            let parent_l2 = unsafe { &*(phys_to_virt_addr(parent_l2_phys) as *const PageTable) };
 
             // Create child L2 table
             if !child_l3[p3_index].is_present() {
@@ -924,9 +910,7 @@ pub unsafe fn clone_user_address_space(parent_page_table_phys: u64) -> Result<u6
 
             let child_l2_phys = child_l3[p3_index].addr();
             // SAFETY: L2 is now present
-            let child_l2 = unsafe {
-                &mut *(phys_to_virt_addr(child_l2_phys) as *mut PageTable)
-            };
+            let child_l2 = unsafe { &mut *(phys_to_virt_addr(child_l2_phys) as *mut PageTable) };
 
             for p2_index in 0..ENTRY_COUNT {
                 if !parent_l2[p2_index].is_present() {
@@ -939,9 +923,8 @@ pub unsafe fn clone_user_address_space(parent_page_table_phys: u64) -> Result<u6
 
                 let parent_l1_phys = parent_l2[p2_index].addr();
                 // SAFETY: L1 address is from a present L2 entry
-                let parent_l1 = unsafe {
-                    &*(phys_to_virt_addr(parent_l1_phys) as *const PageTable)
-                };
+                let parent_l1 =
+                    unsafe { &*(phys_to_virt_addr(parent_l1_phys) as *const PageTable) };
 
                 // Create child L1 table
                 if !child_l2[p2_index].is_present() {
@@ -952,8 +935,7 @@ pub unsafe fn clone_user_address_space(parent_page_table_phys: u64) -> Result<u6
                     };
                     let l1_phys = l1_frame as u64 * panda_hal::memory::FRAME_SIZE as u64;
                     // SAFETY: Frame was just allocated
-                    let l1_table =
-                        unsafe { &mut *(phys_to_virt_addr(l1_phys) as *mut PageTable) };
+                    let l1_table = unsafe { &mut *(phys_to_virt_addr(l1_phys) as *mut PageTable) };
                     l1_table.zero();
 
                     let flags = PageTableFlags::PRESENT
@@ -964,9 +946,8 @@ pub unsafe fn clone_user_address_space(parent_page_table_phys: u64) -> Result<u6
 
                 let child_l1_phys = child_l2[p2_index].addr();
                 // SAFETY: L1 is now present
-                let child_l1 = unsafe {
-                    &mut *(phys_to_virt_addr(child_l1_phys) as *mut PageTable)
-                };
+                let child_l1 =
+                    unsafe { &mut *(phys_to_virt_addr(child_l1_phys) as *mut PageTable) };
 
                 // Copy each mapped page
                 for p1_index in 0..ENTRY_COUNT {

@@ -144,12 +144,7 @@ impl<D: BlockDevice> DiskFs<D> {
             return Err(DiskFsError::InvalidVersion);
         }
 
-        Ok(Self {
-            device,
-            root_inode,
-            total_inodes,
-            first_data_block,
-        })
+        Ok(Self { device, root_inode, total_inodes, first_data_block })
     }
 
     /// Read an inode from disk

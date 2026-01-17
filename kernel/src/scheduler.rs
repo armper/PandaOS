@@ -308,7 +308,10 @@ impl Scheduler {
     ///
     /// - `Some(&Process)` - A stopped child process (not removed from queue)
     /// - `None` - No stopped children found
-    pub fn find_stopped_child(&self, parent_pid: panda_hal::pid::Pid) -> Option<panda_hal::pid::Pid> {
+    pub fn find_stopped_child(
+        &self,
+        parent_pid: panda_hal::pid::Pid,
+    ) -> Option<panda_hal::pid::Pid> {
         // Check current process first
         if let Some(proc) = &self.current {
             if proc.is_stopped() && proc.parent_pid == Some(parent_pid) {

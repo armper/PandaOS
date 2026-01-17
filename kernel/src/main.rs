@@ -1968,7 +1968,7 @@ fn waitpid_handler(pid: i64, status_ptr: u64, options: i32) -> syscall::SyscallR
     // Support WUNTRACED option (0x2)
     const WUNTRACED: i32 = 0x2;
     let wuntraced = (options & WUNTRACED) != 0;
-    
+
     // Only support options=0 or WUNTRACED
     if options != 0 && options != WUNTRACED {
         return Err(syscall::ErrorCode::EINVAL);
@@ -1984,7 +1984,7 @@ fn waitpid_handler(pid: i64, status_ptr: u64, options: i32) -> syscall::SyscallR
     if wuntraced {
         if let Some(stopped_pid) = scheduler.find_stopped_child(parent_pid) {
             serial_println!("[WAITPID] Found stopped child PID {}", stopped_pid.as_u64());
-            
+
             // Write stop status to user if pointer is non-null
             // Status format for stopped: 0x7f (127) in low byte, signal in next byte
             // For SIGTSTP (20): (20 << 8) | 0x7f = 0x147f
@@ -1993,7 +1993,7 @@ fn waitpid_handler(pid: i64, status_ptr: u64, options: i32) -> syscall::SyscallR
                 let status_bytes = status.to_ne_bytes();
                 crate::usermode::copy_to_user_bytes(status_ptr, &status_bytes)?;
             }
-            
+
             // Return child PID (don't reap stopped processes)
             return Ok(stopped_pid.as_u64());
         }
@@ -2074,15 +2074,18 @@ fn waitpid_handler(pid: i64, status_ptr: u64, options: i32) -> syscall::SyscallR
                 // Check for stopped children again if WUNTRACED is set
                 if wuntraced {
                     if let Some(stopped_pid) = scheduler.find_stopped_child(parent_pid) {
-                        serial_println!("[WAITPID] After wake, found stopped child PID {}", stopped_pid.as_u64());
-                        
+                        serial_println!(
+                            "[WAITPID] After wake, found stopped child PID {}",
+                            stopped_pid.as_u64()
+                        );
+
                         // Write stop status to user if pointer is non-null
                         if status_ptr != 0 {
                             let status = ((crate::process::Signal::SIGTSTP as u32) << 8) | 0x7f;
                             let status_bytes = status.to_ne_bytes();
                             crate::usermode::copy_to_user_bytes(status_ptr, &status_bytes)?;
                         }
-                        
+
                         return Ok(stopped_pid.as_u64());
                     }
                 }
