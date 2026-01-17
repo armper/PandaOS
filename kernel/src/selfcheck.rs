@@ -137,14 +137,13 @@ fn check_paging_memory() -> bool {
     }
     serial_println!("✓ CR3 = {:#x} (page table loaded)", cr3);
 
-    // Verify kernel higher-half is mapped by reading a known kernel address
-    // The kernel code should be in higher half
-    let kernel_addr = check_paging_memory as *const fn() -> bool as u64;
-    if kernel_addr < 0x8000_0000_0000 {
-        serial_println!("⚠ Warning: Kernel not in higher-half? addr={:#x}", kernel_addr);
+    // Verify kernel higher-half is mapped by checking the kernel virtual base
+    let kernel_base = crate::linker_symbols::KERNEL_VIRT_BASE;
+    if kernel_base < 0x8000_0000_0000 {
+        serial_println!("⚠ Warning: Kernel not in higher-half? base={:#x}", kernel_base);
         // Don't fail on this - bootloader might not use higher-half
     } else {
-        serial_println!("✓ Kernel in higher-half at {:#x}", kernel_addr);
+        serial_println!("✓ Kernel in higher-half at {:#x}", kernel_base);
     }
 
     // Verify heap allocations work

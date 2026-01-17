@@ -34,6 +34,11 @@ pub fn record_boot_step(step: u32) {
     }
 }
 
+/// Get current boot step number
+pub fn get_current_step() -> u32 {
+    CURRENT_STEP.load(Ordering::SeqCst)
+}
+
 /// Get the last N boot steps for crash reporting
 pub fn get_last_steps(out: &mut [u32]) -> usize {
     let current = CURRENT_STEP.load(Ordering::SeqCst) as usize;
@@ -94,8 +99,7 @@ macro_rules! BOOT_STEP {
 macro_rules! BOOT_ASSERT {
     ($cond:expr, $code:expr) => {{
         if !($cond) {
-            let step =
-                $crate::boot_diagnostics::CURRENT_STEP.load(core::sync::atomic::Ordering::SeqCst);
+            let step = $crate::boot_diagnostics::get_current_step();
             serial_println!("BOOT ASSERT FAIL code={:#x} step={}", $code, step);
             $crate::exit_qemu($crate::QemuExitCode::Failed);
         }
