@@ -37,6 +37,38 @@ impl MapFlags {
     pub const MAP_ANONYMOUS: Self = Self(0x20);
 }
 
+/// Type of VM region
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VMRegionType {
+    /// Executable code segment
+    Code,
+    /// Data segment
+    Data,
+    /// Heap region
+    Heap,
+    /// Stack region
+    Stack,
+    /// Anonymous mapping
+    Anonymous,
+}
+
+/// VM region tracking for process address space
+#[derive(Debug, Clone)]
+pub struct VMRegion {
+    /// Start virtual address
+    pub start_addr: u64,
+    /// End virtual address (exclusive)
+    pub end_addr: u64,
+    /// Protection flags (PROT_READ, PROT_WRITE, PROT_EXEC)
+    pub flags: u32,
+    /// Type of region
+    pub region_type: VMRegionType,
+    /// True if backed by a file (ELF segment)
+    pub file_backed: bool,
+    /// File offset for file-backed regions
+    pub file_offset: u64,
+}
+
 /// A single memory mapping created by mmap
 #[derive(Debug, Clone)]
 pub struct MemoryMapping {
@@ -180,6 +212,8 @@ pub struct Process {
     pub mappings: Vec<MemoryMapping>,
     /// Base address for mmap allocations
     pub mmap_base: u64,
+    /// VM regions for tracking address space layout
+    pub vm_regions: Vec<VMRegion>,
 }
 
 impl Process {
@@ -278,6 +312,7 @@ impl Process {
             heap,
             mappings: Vec::new(),
             mmap_base,
+            vm_regions: Vec::new(),
         })
     }
 
@@ -324,6 +359,7 @@ impl Process {
                 CpuContext::new_user(elf_info.entry_point, user_stack_top, user_cs, user_ss);
             self.heap = heap;
             self.mappings.clear();
+            self.vm_regions.clear();
 
             Ok(())
         })();
@@ -393,6 +429,7 @@ impl Process {
             heap: self.heap.clone(),
             mappings: self.mappings.clone(),
             mmap_base: self.mmap_base,
+            vm_regions: self.vm_regions.clone(),
         })
     }
 
@@ -592,6 +629,7 @@ mod tests {
             heap: HeapInfo::new(0x1000000),
             mappings: Vec::new(),
             mmap_base: 0x7FFF_0000_0000,
+            vm_regions: Vec::new(),
         };
 
         assert_eq!(process.state, ProcessState::Ready);
@@ -631,6 +669,7 @@ mod tests {
             heap: HeapInfo::new(0x1000000),
             mappings: Vec::new(),
             mmap_base: 0x7FFF_0000_0000,
+            vm_regions: Vec::new(),
         };
 
         // Parent has no parent
@@ -663,6 +702,7 @@ mod tests {
             heap: HeapInfo::new(0x1000000),
             mappings: Vec::new(),
             mmap_base: 0x7FFF_0000_0000,
+            vm_regions: Vec::new(),
         };
 
         // Initially not a zombie
