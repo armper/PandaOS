@@ -27,7 +27,7 @@ static mut BOOT_STEP_HISTORY: [u32; MAX_BOOT_STEPS] = [0; MAX_BOOT_STEPS];
 pub fn record_boot_step(step: u32) {
     let prev = CURRENT_STEP.fetch_add(1, Ordering::SeqCst);
     let idx = (prev as usize) % MAX_BOOT_STEPS;
-    
+
     // SAFETY: Atomic access ensures no data races
     unsafe {
         BOOT_STEP_HISTORY[idx] = step;
@@ -38,7 +38,7 @@ pub fn record_boot_step(step: u32) {
 pub fn get_last_steps(out: &mut [u32]) -> usize {
     let current = CURRENT_STEP.load(Ordering::SeqCst) as usize;
     let count = out.len().min(current).min(MAX_BOOT_STEPS);
-    
+
     // SAFETY: We're reading from a static buffer with proper bounds
     unsafe {
         for i in 0..count {
@@ -46,7 +46,7 @@ pub fn get_last_steps(out: &mut [u32]) -> usize {
             out[i] = BOOT_STEP_HISTORY[idx];
         }
     }
-    
+
     count
 }
 
@@ -94,7 +94,8 @@ macro_rules! BOOT_STEP {
 macro_rules! BOOT_ASSERT {
     ($cond:expr, $code:expr) => {{
         if !($cond) {
-            let step = $crate::boot_diagnostics::CURRENT_STEP.load(core::sync::atomic::Ordering::SeqCst);
+            let step =
+                $crate::boot_diagnostics::CURRENT_STEP.load(core::sync::atomic::Ordering::SeqCst);
             serial_println!("BOOT ASSERT FAIL code={:#x} step={}", $code, step);
             $crate::exit_qemu($crate::QemuExitCode::Failed);
         }
@@ -107,10 +108,10 @@ pub fn dump_boot_diagnostics() {
     serial_println!("CPU: {}", get_cpu_id());
     serial_println!("CR3: {:#x}", get_cr3());
     serial_println!("RSP: {:#x}", get_rsp());
-    
+
     let mut steps = [0u32; 16];
     let count = get_last_steps(&mut steps);
-    
+
     if count > 0 {
         serial_println!("Last {} boot steps:", count);
         for i in 0..count {

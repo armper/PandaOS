@@ -149,12 +149,12 @@ pub extern "C" fn _start(boot_info: &'static bootloader::BootInfo) -> ! {
     #[cfg(feature = "boot-selfcheck")]
     {
         serial_println!("=== Boot Selfcheck Mode ===");
-        
+
         let _state = state.finalize();
-        
+
         // Run selfcheck suite
         let passed = selfcheck::run();
-        
+
         if passed {
             serial_println!("TEST PASS boot_selfcheck");
             exit_qemu(QemuExitCode::Success);
@@ -222,10 +222,10 @@ pub extern "C" fn _start(boot_info: &'static bootloader::BootInfo) -> ! {
 fn panic(info: &PanicInfo) -> ! {
     println!("KERNEL PANIC: {}", info);
     serial_println!("KERNEL PANIC: {}", info);
-    
+
     // Dump boot diagnostics to help debug
     boot_diagnostics::dump_boot_diagnostics();
-    
+
     exit_qemu(QemuExitCode::Failed);
 }
 
