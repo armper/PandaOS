@@ -476,20 +476,41 @@ pub unsafe fn map_page(
     // 1. Bootloader pre-maps kernel pages and we try to map them again
     // 2. ELF loading maps the same page twice (e.g., adjacent segments sharing page boundaries)
     // 3. Kernel stack or heap initialization overlaps with existing mappings
-    if l1_table[p1_index].is_present() {
+    let already_mapped = l1_table[p1_index].is_present();
+
+    // Debug logging for mapping operation
+    println!(
+        "map_page: VA={:#x}, phys_frame={:#x}, flags={:#x}, already_mapped={}",
+        virt_addr.as_u64(),
+        phys_addr.as_u64(),
+        flags.bits(),
+        already_mapped
+    );
+
+    if already_mapped {
         let existing_addr = l1_table[p1_index].addr();
         let new_addr = phys_addr.page_align_down().as_u64();
 
         // If already mapped to the same frame, this is an idempotent operation - allow it
         // This is safe and correct: we're just ensuring the mapping and potentially updating flags
         if existing_addr == new_addr {
+            println!(
+                "map_page: Idempotent mapping detected - page {:#x} already mapped to frame {:#x}, updating flags",
+                virt_addr.as_u64(),
+                existing_addr
+            );
             // Update flags in case they changed
             l1_table[p1_index].set(phys_addr.as_u64(), flags);
             return Ok(());
         }
 
         // If mapped to a different frame, this is an error - we don't support remapping
-        return Err("Page already mapped to a different physical frame");
+        panic!(
+            "Page already mapped to different frame: VA={:#x}, existing_frame={:#x}, requested_frame={:#x}",
+            virt_addr.as_u64(),
+            existing_addr,
+            new_addr
+        );
     }
 
     // Map the page for the first time

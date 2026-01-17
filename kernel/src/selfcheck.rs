@@ -33,6 +33,9 @@ pub fn run() -> bool {
     // We'll implement a simpler version that just verifies timer is configured
     all_passed &= check_timer_configured();
 
+    // E) Segment mapping idempotency check
+    all_passed &= check_segment_mapping_idempotency();
+
     serial_println!("=== Selfcheck Summary ===");
     if all_passed {
         serial_println!("✓ All checks passed");
@@ -185,4 +188,102 @@ fn check_timer_configured() -> bool {
         // Don't fail - timer might not be set up in selfcheck mode
         true
     }
+}
+
+/// Check idempotent segment mapping (no PageAlreadyMapped panic)
+fn check_segment_mapping_idempotency() -> bool {
+    serial_println!("[SELFCHECK] Segment mapping idempotency check...");
+
+    // Create a new page table for testing
+    let page_table_phys = unsafe {
+        match paging::create_user_page_table() {
+            Ok(pt) => pt,
+            Err(e) => {
+                serial_println!("✗ Failed to create test page table: {}", e);
+                return false;
+            }
+        }
+    };
+
+    // Allocate a physical frame for mapping
+    let frame = unsafe {
+        match crate::memory::allocate_frame() {
+            Some(f) => f,
+            None => {
+                serial_println!("✗ Failed to allocate frame for test");
+                return false;
+            }
+        }
+    };
+
+    let phys_addr = paging::PhysAddr::new(frame as u64 * panda_hal::memory::FRAME_SIZE as u64);
+    let virt_addr = paging::VirtAddr::new(0x400000); // User space address
+
+    // First mapping - should succeed
+    let flags = paging::PageTableFlags::PRESENT
+        .or(paging::PageTableFlags::WRITABLE)
+        .or(paging::PageTableFlags::USER_ACCESSIBLE);
+
+    unsafe {
+        if let Err(e) = paging::map_page(page_table_phys, virt_addr, phys_addr, flags) {
+            serial_println!("✗ First mapping failed: {}", e);
+            return false;
+        }
+    }
+    serial_println!("✓ First mapping succeeded");
+
+    // Second mapping to the same frame with same flags - should be idempotent
+    unsafe {
+        if let Err(e) = paging::map_page(page_table_phys, virt_addr, phys_addr, flags) {
+            serial_println!("✗ Idempotent mapping failed: {}", e);
+            return false;
+        }
+    }
+    serial_println!("✓ Idempotent mapping succeeded (same frame, same flags)");
+
+    // Third mapping with different flags but same frame - should update flags
+    let new_flags = paging::PageTableFlags::PRESENT.or(paging::PageTableFlags::USER_ACCESSIBLE); // Remove WRITABLE
+
+    unsafe {
+        if let Err(e) = paging::map_page(page_table_phys, virt_addr, phys_addr, new_flags) {
+            serial_println!("✗ Idempotent mapping with different flags failed: {}", e);
+            return false;
+        }
+    }
+    serial_println!("✓ Idempotent mapping with different flags succeeded");
+
+    // Test overlapping segment scenario
+    serial_println!("  Testing overlapping segment mapping...");
+
+    let page2_virt = paging::VirtAddr::new(0x401000);
+    let frame2 = unsafe {
+        match crate::memory::allocate_frame() {
+            Some(f) => f,
+            None => {
+                serial_println!("✗ Failed to allocate second frame");
+                return false;
+            }
+        }
+    };
+    let phys2 = paging::PhysAddr::new(frame2 as u64 * panda_hal::memory::FRAME_SIZE as u64);
+
+    // Map a second page
+    unsafe {
+        if let Err(e) = paging::map_page(page_table_phys, page2_virt, phys2, flags) {
+            serial_println!("✗ Second page mapping failed: {}", e);
+            return false;
+        }
+    }
+
+    // Remap the same page (simulating overlapping segments)
+    unsafe {
+        if let Err(e) = paging::map_page(page_table_phys, page2_virt, phys2, flags) {
+            serial_println!("✗ Overlapping segment mapping failed: {}", e);
+            return false;
+        }
+    }
+    serial_println!("✓ Overlapping segment mapping succeeded");
+
+    serial_println!("✓ Segment mapping idempotency checks passed");
+    true
 }
