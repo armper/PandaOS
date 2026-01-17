@@ -33,6 +33,7 @@ use core::panic::PanicInfo;
 #[macro_use]
 extern crate panda_hal;
 
+pub mod boot_diagnostics;
 pub mod boot_phases;
 pub mod context;
 pub mod context_switch;
@@ -56,6 +57,8 @@ pub mod pic;
 pub mod pipe;
 pub mod process;
 pub mod scheduler;
+#[cfg(feature = "boot-selfcheck")]
+pub mod selfcheck;
 pub mod spinlock_irq;
 pub mod syscall;
 pub mod timer;
@@ -77,18 +80,21 @@ pub extern "C" fn _start(boot_info: &'static bootloader::BootInfo) -> ! {
     // SAFETY: This is the first initialization call during boot
     let state = unsafe { state.init_hal() };
 
+    BOOT_STEP!(1);
     // Explicit early boot log to confirm serial is working
     serial_println!("[BOOT] serial ok");
     serial_println!("Serial output initialized");
     println!("PandaOS v{}", env!("CARGO_PKG_VERSION"));
     println!("Hardware abstraction layer initialized");
 
+    BOOT_STEP!(2);
     // SAFETY: HAL is now initialized, safe to proceed
     let state = unsafe { state.init_memory() };
 
     // Initialize memory management with bootloader info (no bootloader types exposed)
     unsafe { memory::init_from_bootloader(boot_info) };
 
+    BOOT_STEP!(3);
     // SAFETY: Memory is now initialized, safe to proceed
     let state = unsafe { state.init_interrupts() };
 
@@ -99,18 +105,22 @@ pub extern "C" fn _start(boot_info: &'static bootloader::BootInfo) -> ! {
     }
     println!("Paging infrastructure initialized");
 
+    BOOT_STEP!(4);
     // Initialize GDT (must be before interrupts are enabled)
     unsafe { gdt::init() };
     println!("GDT initialized");
 
+    BOOT_STEP!(5);
     // Initialize interrupts (after GDT)
     interrupts::init();
     println!("Interrupt handling initialized");
 
+    BOOT_STEP!(6);
     // Initialize syscall/sysret support (after GDT and interrupts)
     unsafe { usermode::init_syscall() };
     println!("Syscall/sysret initialized");
 
+    BOOT_STEP!(7);
     // Map heap region (allocate frames and map pages)
     // MUST happen before heap allocator init
     unsafe {
@@ -118,6 +128,7 @@ pub extern "C" fn _start(boot_info: &'static bootloader::BootInfo) -> ! {
     }
     println!("Heap region mapped");
 
+    BOOT_STEP!(8);
     // Initialize heap allocator (after heap is mapped)
     unsafe { heap::init() };
     println!("Heap allocator initialized");
@@ -132,49 +143,76 @@ pub extern "C" fn _start(boot_info: &'static bootloader::BootInfo) -> ! {
         println!("Heap test passed: {:?}", test_vec);
     }
 
-    // Initialize mount table
-    mount::init_mount_table();
-    println!("Mount table initialized");
+    BOOT_STEP!(9);
 
-    // Mount tmpfs at /tmp
-    match mount::mount_tmpfs_at_tmp() {
-        Ok(()) => println!("Tmpfs mounted at /tmp"),
-        Err(e) => println!("Warning: Failed to mount tmpfs at /tmp: {:?}", e),
-    }
-
-    // Mount disk filesystem at /mnt
-    match mount::mount_disk_at_mnt() {
-        Ok(()) => println!("Disk filesystem mounted at /mnt"),
-        Err(e) => println!("Warning: Failed to mount disk at /mnt: {:?}", e),
-    }
-
-    // Finalize boot
-    let _state = state.finalize();
-    println!("Kernel initialization complete!");
-
-    #[cfg(test)]
-    test_main();
-
-    #[cfg(not(test))]
+    // If boot-selfcheck feature is enabled, run selfcheck instead of normal boot
+    #[cfg(feature = "boot-selfcheck")]
     {
-        // Run disk filesystem smoke test if feature is enabled
-        #[cfg(feature = "disk-fs-smoke")]
+        serial_println!("=== Boot Selfcheck Mode ===");
+
+        let _state = state.finalize();
+
+        // Run selfcheck suite
+        let passed = selfcheck::run();
+
+        if passed {
+            serial_println!("TEST PASS boot_selfcheck");
+            exit_qemu(QemuExitCode::Success);
+        } else {
+            serial_println!("TEST FAIL boot_selfcheck");
+            exit_qemu(QemuExitCode::Failed);
+        }
+    }
+
+    // Normal boot continues here (only if boot-selfcheck is NOT enabled)
+    #[cfg(not(feature = "boot-selfcheck"))]
+    {
+        // Initialize mount table
+        mount::init_mount_table();
+        println!("Mount table initialized");
+
+        // Mount tmpfs at /tmp
+        match mount::mount_tmpfs_at_tmp() {
+            Ok(()) => println!("Tmpfs mounted at /tmp"),
+            Err(e) => println!("Warning: Failed to mount tmpfs at /tmp: {:?}", e),
+        }
+
+        // Mount disk filesystem at /mnt
+        match mount::mount_disk_at_mnt() {
+            Ok(()) => println!("Disk filesystem mounted at /mnt"),
+            Err(e) => println!("Warning: Failed to mount disk at /mnt: {:?}", e),
+        }
+
+        BOOT_STEP!(10);
+        // Finalize boot
+        let _state = state.finalize();
+        println!("Kernel initialization complete!");
+
+        #[cfg(test)]
+        test_main();
+
+        #[cfg(not(test))]
         {
-            serial_println!("Running disk_fs_smoke test");
-            run_disk_fs_smoke_test();
+            // Run disk filesystem smoke test if feature is enabled
+            #[cfg(feature = "disk-fs-smoke")]
+            {
+                serial_println!("Running disk_fs_smoke test");
+                run_disk_fs_smoke_test();
+            }
+
+            BOOT_STEP!(11);
+            // Initialize scheduler and start multitasking
+            unsafe {
+                init_scheduler_and_start();
+            }
         }
 
-        // Initialize scheduler and start multitasking
-        unsafe {
-            init_scheduler_and_start();
-        }
-    }
-
-    #[cfg(test)]
-    {
-        println!("All tests passed. Halting CPU.");
-        loop {
-            x86_64::instructions::hlt();
+        #[cfg(test)]
+        {
+            println!("All tests passed. Halting CPU.");
+            loop {
+                x86_64::instructions::hlt();
+            }
         }
     }
 }
@@ -184,9 +222,11 @@ pub extern "C" fn _start(boot_info: &'static bootloader::BootInfo) -> ! {
 fn panic(info: &PanicInfo) -> ! {
     println!("KERNEL PANIC: {}", info);
     serial_println!("KERNEL PANIC: {}", info);
-    loop {
-        x86_64::instructions::hlt();
-    }
+
+    // Dump boot diagnostics to help debug
+    boot_diagnostics::dump_boot_diagnostics();
+
+    exit_qemu(QemuExitCode::Failed);
 }
 
 /// Allocation error handler
