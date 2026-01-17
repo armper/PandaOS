@@ -34,7 +34,8 @@ def create_superblock():
     struct.pack_into('<I', sb, 8, SECTOR_SIZE)  # block_size
     struct.pack_into('<I', sb, 12, TOTAL_SECTORS)  # total_blocks
     struct.pack_into('<I', sb, 16, MAX_INODES)  # inode_count
-    struct.pack_into('<I', sb, 20, MAX_DATA_BLOCKS - 1)  # free_blocks (minus root dir)
+    # free_blocks: total data blocks minus one for root directory
+    struct.pack_into('<I', sb, 20, MAX_DATA_BLOCKS - 1)
     struct.pack_into('<I', sb, 24, MAX_INODES - 1)  # free_inodes (minus root)
     struct.pack_into('<I', sb, 28, 35)  # first_data_block
     struct.pack_into('<I', sb, 32, 1)  # inode_bitmap_sector

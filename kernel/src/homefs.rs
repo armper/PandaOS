@@ -329,7 +329,8 @@ impl<D: BlockDevice> HomeFs<D> {
 
     /// Helper to write directory entry to buffer (static method)
     fn write_dir_entry_to_buf(buf: &mut [u8], entry: &DirEntry) {
-        // SAFETY: DirEntry is repr(C, packed)
+        assert!(buf.len() >= DIR_ENTRY_SIZE, "Buffer too small for directory entry");
+        // SAFETY: DirEntry is repr(C, packed) and we verified buffer size
         unsafe {
             core::ptr::copy_nonoverlapping(
                 entry as *const DirEntry as *const u8,
@@ -570,7 +571,7 @@ impl<D: BlockDevice> HomeFs<D> {
         child_inode: u32,
         child_type: FileType,
     ) -> Result<(), HomeFsError> {
-        if name.len() == 0 || name.len() > MAX_FILENAME_LEN {
+        if name.is_empty() || name.len() > MAX_FILENAME_LEN {
             return Err(HomeFsError::InvalidArgument);
         }
 
@@ -958,7 +959,7 @@ impl<D: BlockDevice> HomeFs<D> {
                 break;
             }
             let block_num = file_inode.direct_blocks[block_idx];
-            if block_num > 0 {
+            if block_num != 0 {
                 self.free_block(block_num)?;
             }
         }

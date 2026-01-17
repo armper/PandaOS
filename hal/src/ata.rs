@@ -35,7 +35,9 @@ const ATA_CMD_WRITE_SECTORS: u8 = 0x30;
 #[cfg(feature = "hardware")]
 pub struct AtaDisk {
     io_base: u16,
-    drive_select_base: u8, // 0xE0 for master, 0xF0 for slave
+    /// Drive select base value: 0xE0 for master, 0xF0 for slave
+    /// This base value is ORed with the upper 4 bits of the LBA
+    drive_select_base: u8,
 }
 
 #[cfg(feature = "hardware")]
