@@ -12,6 +12,7 @@
 
 use panda_hal::memory::FrameAllocator;
 use spin::Mutex;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 /// Memory region type
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,6 +75,23 @@ const MAX_TRACKED_FRAMES: usize = 1_048_576;
 const FRAME_BITMAP_BYTES: usize = (MAX_TRACKED_FRAMES + 7) / 8;
 static mut FRAME_BITMAP_STORAGE: [u8; FRAME_BITMAP_BYTES] = [0; FRAME_BITMAP_BYTES];
 
+/// Bootloader-provided offset where physical memory is mapped in the virtual address space.
+///
+/// With the `bootloader/map_physical_memory` feature enabled, the bootloader maps all physical
+/// memory at this offset (typically in 2MiB pages). The kernel can then access an arbitrary
+/// physical address `p` at virtual address `p + offset`.
+static PHYSICAL_MEMORY_OFFSET: AtomicU64 = AtomicU64::new(0);
+
+/// Returns the physical memory mapping offset provided by the bootloader.
+pub fn physical_memory_offset() -> u64 {
+    PHYSICAL_MEMORY_OFFSET.load(Ordering::Relaxed)
+}
+
+/// Convert a physical address to a virtual address using the bootloader mapping.
+pub fn phys_to_virt(phys_addr: u64) -> u64 {
+    phys_addr + physical_memory_offset()
+}
+
 /// Initialize memory management from bootloader memory map
 ///
 /// This function:
@@ -86,6 +104,10 @@ static mut FRAME_BITMAP_STORAGE: [u8; FRAME_BITMAP_BYTES] = [0; FRAME_BITMAP_BYT
 /// Must be called exactly once during boot with valid memory map.
 pub unsafe fn init_from_bootloader(boot_info: &'static bootloader::BootInfo) {
     use panda_hal::memory::ReservationReason;
+
+    // Record the physical memory offset mapping provided by the bootloader.
+    // This enables safe access to allocated frames before we have our own mapping layer.
+    PHYSICAL_MEMORY_OFFSET.store(boot_info.physical_memory_offset, Ordering::SeqCst);
 
     // Convert bootloader memory map to normalized format
     let mut memory_map = MemoryMapInfo::new();

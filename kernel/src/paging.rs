@@ -269,9 +269,6 @@ pub unsafe fn init_identity_map_minimal() -> Result<(), &'static str> {
 /// Must be called after identity mapping is set up.
 /// Frame allocator and page table tracker must be initialized.
 pub unsafe fn init_higher_half_mapping() -> Result<(), &'static str> {
-    // Initialize page table tracker
-    crate::page_table_tracker::init();
-
     // For now, we continue to use bootloader's identity mapping
     // TODO: Implement custom higher-half page table setup with:
     // - Kernel text mapped as RX (Read + Execute, No Write)
@@ -281,20 +278,25 @@ pub unsafe fn init_higher_half_mapping() -> Result<(), &'static str> {
 
     println!("Higher-half mapping: Prepared (using identity mapping for now)");
 
-    // Track existing page tables from bootloader
-    // SAFETY: We're reading CR3 which is safe
+    // Reserve the active L4 page table frame so it is never reused.
+    // We intentionally avoid the Vec-backed `page_table_tracker` here because
+    // it would allocate before the heap is initialized.
+    // SAFETY: We're reading CR3 which is safe.
     use x86_64::registers::control::Cr3;
     let (level_4_table_frame, _) = Cr3::read();
     let l4_frame_num =
         level_4_table_frame.start_address().as_u64() / panda_hal::memory::FRAME_SIZE as u64;
 
-    // Track the L4 page table frame
-    // SAFETY: This frame is the active page table, we're just tracking it
+    // SAFETY: Frame allocator is initialized at this point.
     unsafe {
-        crate::page_table_tracker::track_page_table_frame(l4_frame_num as usize);
+        crate::memory::reserve_frames(
+            l4_frame_num as usize,
+            l4_frame_num as usize + 1,
+            panda_hal::memory::ReservationReason::PageTables,
+        );
     }
 
-    println!("Page table tracking: L4 frame {} tracked", l4_frame_num);
+    println!("Page tables: L4 frame {} reserved", l4_frame_num);
 
     Ok(())
 }
@@ -333,6 +335,11 @@ pub const KERNEL_STACK_TOP: u64 = 0xFFFF_FFFF_8000_0000;
 /// Default kernel stack size in pages
 pub const KERNEL_STACK_PAGES: usize = 4;
 
+#[inline]
+fn phys_to_virt_addr(phys_addr: u64) -> u64 {
+    crate::memory::phys_to_virt(phys_addr)
+}
+
 /// Create a new user page table with kernel mappings
 ///
 /// Creates a fresh L4 page table and copies kernel mappings from the current
@@ -353,10 +360,9 @@ pub unsafe fn create_user_page_table() -> Result<u64, &'static str> {
     let l4_phys_addr = l4_frame as u64 * panda_hal::memory::FRAME_SIZE as u64;
 
     // Zero out the new page table
-    // NOTE: This assumes identity mapping of physical memory
-    // TODO: Use proper virtual address translation
-    // SAFETY: We just allocated this frame and assume identity mapping
-    let l4_table = unsafe { &mut *(l4_phys_addr as *mut PageTable) };
+    // NOTE: Access physical memory through the bootloader's phys->virt mapping.
+    // SAFETY: We just allocated this frame and the phys->virt mapping is valid.
+    let l4_table = unsafe { &mut *(phys_to_virt_addr(l4_phys_addr) as *mut PageTable) };
     l4_table.zero();
 
     // Copy kernel mappings from current page table (upper half)
@@ -365,10 +371,9 @@ pub unsafe fn create_user_page_table() -> Result<u64, &'static str> {
     let (current_l4_frame, _) = Cr3::read();
     let current_l4_phys = current_l4_frame.start_address().as_u64();
 
-    // NOTE: This assumes identity mapping of physical memory
-    // TODO: Use proper virtual address translation
-    // SAFETY: Current L4 is valid and we assume identity mapping
-    let current_l4 = unsafe { &*(current_l4_phys as *const PageTable) };
+    // NOTE: Access physical memory through the bootloader's phys->virt mapping.
+    // SAFETY: Current L4 is valid and the phys->virt mapping is valid.
+    let current_l4 = unsafe { &*(phys_to_virt_addr(current_l4_phys) as *const PageTable) };
 
     // Copy upper half entries (256-511) for kernel space
     for i in 256..512 {
@@ -396,9 +401,8 @@ pub unsafe fn map_page(
     flags: PageTableFlags,
 ) -> Result<(), &'static str> {
     // SAFETY: Caller guarantees page table is valid
-    // NOTE: All pointer casts assume identity mapping of physical memory
-    // TODO: Use proper virtual address translation
-    let l4_table = unsafe { &mut *(page_table_phys as *mut PageTable) };
+    // NOTE: Access physical memory through the bootloader's phys->virt mapping.
+    let l4_table = unsafe { &mut *(phys_to_virt_addr(page_table_phys) as *mut PageTable) };
 
     let p4_index = virt_addr.p4_index();
     let p3_index = virt_addr.p3_index();
@@ -415,7 +419,7 @@ pub unsafe fn map_page(
         let p3_phys = p3_frame as u64 * panda_hal::memory::FRAME_SIZE as u64;
 
         // SAFETY: Frame was just allocated
-        let p3_table = unsafe { &mut *(p3_phys as *mut PageTable) };
+        let p3_table = unsafe { &mut *(phys_to_virt_addr(p3_phys) as *mut PageTable) };
         p3_table.zero();
 
         let p3_flags = PageTableFlags::PRESENT
@@ -425,7 +429,9 @@ pub unsafe fn map_page(
     }
 
     // SAFETY: Entry is now present
-    let l3_table = unsafe { &mut *(l4_table[p4_index].addr() as *mut PageTable) };
+    let l3_table = unsafe {
+        &mut *(phys_to_virt_addr(l4_table[p4_index].addr()) as *mut PageTable)
+    };
 
     // Get or create L2 table
     if !l3_table[p3_index].is_present() {
@@ -437,7 +443,7 @@ pub unsafe fn map_page(
         let p2_phys = p2_frame as u64 * panda_hal::memory::FRAME_SIZE as u64;
 
         // SAFETY: Frame was just allocated
-        let p2_table = unsafe { &mut *(p2_phys as *mut PageTable) };
+        let p2_table = unsafe { &mut *(phys_to_virt_addr(p2_phys) as *mut PageTable) };
         p2_table.zero();
 
         let p2_flags = PageTableFlags::PRESENT
@@ -447,7 +453,9 @@ pub unsafe fn map_page(
     }
 
     // SAFETY: Entry is now present
-    let l2_table = unsafe { &mut *(l3_table[p3_index].addr() as *mut PageTable) };
+    let l2_table = unsafe {
+        &mut *(phys_to_virt_addr(l3_table[p3_index].addr()) as *mut PageTable)
+    };
 
     // Get or create L1 table
     if !l2_table[p2_index].is_present() {
@@ -459,7 +467,7 @@ pub unsafe fn map_page(
         let p1_phys = p1_frame as u64 * panda_hal::memory::FRAME_SIZE as u64;
 
         // SAFETY: Frame was just allocated
-        let p1_table = unsafe { &mut *(p1_phys as *mut PageTable) };
+        let p1_table = unsafe { &mut *(phys_to_virt_addr(p1_phys) as *mut PageTable) };
         p1_table.zero();
 
         let p1_flags = PageTableFlags::PRESENT
@@ -469,7 +477,9 @@ pub unsafe fn map_page(
     }
 
     // SAFETY: Entry is now present
-    let l1_table = unsafe { &mut *(l2_table[p2_index].addr() as *mut PageTable) };
+    let l1_table = unsafe {
+        &mut *(phys_to_virt_addr(l2_table[p2_index].addr()) as *mut PageTable)
+    };
 
     // Check if the page is already mapped
     // This handles cases where:
@@ -533,8 +543,8 @@ pub unsafe fn unmap_page(
     virt_addr: VirtAddr,
 ) -> Result<PhysAddr, &'static str> {
     // SAFETY: Caller guarantees page table is valid
-    // NOTE: All pointer casts assume identity mapping of physical memory
-    let l4_table = unsafe { &mut *(page_table_phys as *mut PageTable) };
+    // NOTE: Access physical memory through the bootloader's phys->virt mapping.
+    let l4_table = unsafe { &mut *(phys_to_virt_addr(page_table_phys) as *mut PageTable) };
 
     let p4_index = virt_addr.p4_index();
     let p3_index = virt_addr.p3_index();
@@ -547,21 +557,27 @@ pub unsafe fn unmap_page(
     }
 
     // SAFETY: Entry is present
-    let l3_table = unsafe { &mut *(l4_table[p4_index].addr() as *mut PageTable) };
+    let l3_table = unsafe {
+        &mut *(phys_to_virt_addr(l4_table[p4_index].addr()) as *mut PageTable)
+    };
 
     if !l3_table[p3_index].is_present() {
         return Err("Page not mapped (L3 entry missing)");
     }
 
     // SAFETY: Entry is present
-    let l2_table = unsafe { &mut *(l3_table[p3_index].addr() as *mut PageTable) };
+    let l2_table = unsafe {
+        &mut *(phys_to_virt_addr(l3_table[p3_index].addr()) as *mut PageTable)
+    };
 
     if !l2_table[p2_index].is_present() {
         return Err("Page not mapped (L2 entry missing)");
     }
 
     // SAFETY: Entry is present
-    let l1_table = unsafe { &mut *(l2_table[p2_index].addr() as *mut PageTable) };
+    let l1_table = unsafe {
+        &mut *(phys_to_virt_addr(l2_table[p2_index].addr()) as *mut PageTable)
+    };
 
     if !l1_table[p1_index].is_present() {
         return Err("Page not mapped (L1 entry missing)");
@@ -615,10 +631,9 @@ pub unsafe fn allocate_user_stack(
         }
 
         // Zero the stack page
-        // NOTE: This assumes identity mapping of physical memory
-        // TODO: Use proper virtual address translation
-        // SAFETY: We just mapped this page and assume identity mapping
-        let page_ptr = phys_addr.as_u64() as *mut u8;
+        // NOTE: Access physical memory through the bootloader's phys->virt mapping.
+        // SAFETY: We just mapped this page and the phys->virt mapping is valid.
+        let page_ptr = phys_to_virt_addr(phys_addr.as_u64()) as *mut u8;
         unsafe {
             core::ptr::write_bytes(page_ptr, 0, PAGE_SIZE as usize);
         }
@@ -658,10 +673,9 @@ pub unsafe fn allocate_kernel_stack(
         }
 
         // Zero the stack page
-        // NOTE: This assumes identity mapping of physical memory
-        // TODO: Use proper virtual address translation
-        // SAFETY: We just mapped this page and assume identity mapping
-        let page_ptr = phys_addr.as_u64() as *mut u8;
+        // NOTE: Access physical memory through the bootloader's phys->virt mapping.
+        // SAFETY: We just mapped this page and the phys->virt mapping is valid.
+        let page_ptr = phys_to_virt_addr(phys_addr.as_u64()) as *mut u8;
         unsafe {
             core::ptr::write_bytes(page_ptr, 0, PAGE_SIZE as usize);
         }
@@ -681,7 +695,7 @@ pub unsafe fn free_process_address_space(
     free_kernel_stack: bool,
 ) -> Result<(), &'static str> {
     // SAFETY: Caller guarantees the L4 page table is valid.
-    let l4_table = unsafe { &mut *(page_table_phys as *mut PageTable) };
+    let l4_table = unsafe { &mut *(phys_to_virt_addr(page_table_phys) as *mut PageTable) };
 
     for p4_index in 0..256 {
         if !l4_table[p4_index].is_present() {
@@ -690,7 +704,7 @@ pub unsafe fn free_process_address_space(
 
         let l3_phys = l4_table[p4_index].addr();
         // SAFETY: L3 table address is from a present L4 entry.
-        let l3_table = unsafe { &mut *(l3_phys as *mut PageTable) };
+        let l3_table = unsafe { &mut *(phys_to_virt_addr(l3_phys) as *mut PageTable) };
 
         for p3_index in 0..ENTRY_COUNT {
             if !l3_table[p3_index].is_present() {
@@ -699,7 +713,7 @@ pub unsafe fn free_process_address_space(
 
             let l2_phys = l3_table[p3_index].addr();
             // SAFETY: L2 table address is from a present L3 entry.
-            let l2_table = unsafe { &mut *(l2_phys as *mut PageTable) };
+            let l2_table = unsafe { &mut *(phys_to_virt_addr(l2_phys) as *mut PageTable) };
 
             for p2_index in 0..ENTRY_COUNT {
                 if !l2_table[p2_index].is_present() {
@@ -712,7 +726,7 @@ pub unsafe fn free_process_address_space(
 
                 let l1_phys = l2_table[p2_index].addr();
                 // SAFETY: L1 table address is from a present L2 entry.
-                let l1_table = unsafe { &mut *(l1_phys as *mut PageTable) };
+                let l1_table = unsafe { &mut *(phys_to_virt_addr(l1_phys) as *mut PageTable) };
 
                 for p1_index in 0..ENTRY_COUNT {
                     if !l1_table[p1_index].is_present() {
@@ -771,28 +785,28 @@ pub unsafe fn free_process_address_space(
 #[allow(clippy::cast_ptr_alignment)]
 unsafe fn lookup_phys_addr(page_table_phys: u64, virt: VirtAddr) -> Option<u64> {
     // SAFETY: Caller guarantees the L4 page table is valid.
-    let l4_table = unsafe { &*(page_table_phys as *const PageTable) };
+    let l4_table = unsafe { &*(phys_to_virt_addr(page_table_phys) as *const PageTable) };
     let l4_entry = l4_table[virt.p4_index()];
     if !l4_entry.is_present() {
         return None;
     }
 
     // SAFETY: L3 table address is from a present L4 entry.
-    let l3_table = unsafe { &*(l4_entry.addr() as *const PageTable) };
+    let l3_table = unsafe { &*(phys_to_virt_addr(l4_entry.addr()) as *const PageTable) };
     let l3_entry = l3_table[virt.p3_index()];
     if !l3_entry.is_present() {
         return None;
     }
 
     // SAFETY: L2 table address is from a present L3 entry.
-    let l2_table = unsafe { &*(l3_entry.addr() as *const PageTable) };
+    let l2_table = unsafe { &*(phys_to_virt_addr(l3_entry.addr()) as *const PageTable) };
     let l2_entry = l2_table[virt.p2_index()];
     if !l2_entry.is_present() || l2_entry.flags().contains(PageTableFlags::HUGE_PAGE) {
         return None;
     }
 
     // SAFETY: L1 table address is from a present L2 entry.
-    let l1_table = unsafe { &*(l2_entry.addr() as *const PageTable) };
+    let l1_table = unsafe { &*(phys_to_virt_addr(l2_entry.addr()) as *const PageTable) };
     let l1_entry = l1_table[virt.p1_index()];
     if !l1_entry.is_present() {
         return None;
@@ -838,8 +852,10 @@ pub unsafe fn clone_user_address_space(parent_page_table_phys: u64) -> Result<u6
     let child_pt = unsafe { create_user_page_table()? };
 
     // SAFETY: Both page tables are valid
-    let parent_l4 = unsafe { &*(parent_page_table_phys as *const PageTable) };
-    let child_l4 = unsafe { &mut *(child_pt as *mut PageTable) };
+    let parent_l4 = unsafe {
+        &*(phys_to_virt_addr(parent_page_table_phys) as *const PageTable)
+    };
+    let child_l4 = unsafe { &mut *(phys_to_virt_addr(child_pt) as *mut PageTable) };
 
     // Walk the parent's user space (lower half, entries 0-255)
     for p4_index in 0..256 {
@@ -849,7 +865,9 @@ pub unsafe fn clone_user_address_space(parent_page_table_phys: u64) -> Result<u6
 
         let parent_l3_phys = parent_l4[p4_index].addr();
         // SAFETY: L3 address is from a present L4 entry
-        let parent_l3 = unsafe { &*(parent_l3_phys as *const PageTable) };
+        let parent_l3 = unsafe {
+            &*(phys_to_virt_addr(parent_l3_phys) as *const PageTable)
+        };
 
         // Create or get child L3 table
         if !child_l4[p4_index].is_present() {
@@ -860,7 +878,7 @@ pub unsafe fn clone_user_address_space(parent_page_table_phys: u64) -> Result<u6
             };
             let l3_phys = l3_frame as u64 * panda_hal::memory::FRAME_SIZE as u64;
             // SAFETY: Frame was just allocated
-            let l3_table = unsafe { &mut *(l3_phys as *mut PageTable) };
+            let l3_table = unsafe { &mut *(phys_to_virt_addr(l3_phys) as *mut PageTable) };
             l3_table.zero();
 
             let flags = PageTableFlags::PRESENT
@@ -871,7 +889,9 @@ pub unsafe fn clone_user_address_space(parent_page_table_phys: u64) -> Result<u6
 
         let child_l3_phys = child_l4[p4_index].addr();
         // SAFETY: L3 is now present
-        let child_l3 = unsafe { &mut *(child_l3_phys as *mut PageTable) };
+        let child_l3 = unsafe {
+            &mut *(phys_to_virt_addr(child_l3_phys) as *mut PageTable)
+        };
 
         for p3_index in 0..ENTRY_COUNT {
             if !parent_l3[p3_index].is_present() {
@@ -880,7 +900,9 @@ pub unsafe fn clone_user_address_space(parent_page_table_phys: u64) -> Result<u6
 
             let parent_l2_phys = parent_l3[p3_index].addr();
             // SAFETY: L2 address is from a present L3 entry
-            let parent_l2 = unsafe { &*(parent_l2_phys as *const PageTable) };
+            let parent_l2 = unsafe {
+                &*(phys_to_virt_addr(parent_l2_phys) as *const PageTable)
+            };
 
             // Create child L2 table
             if !child_l3[p3_index].is_present() {
@@ -891,7 +913,7 @@ pub unsafe fn clone_user_address_space(parent_page_table_phys: u64) -> Result<u6
                 };
                 let l2_phys = l2_frame as u64 * panda_hal::memory::FRAME_SIZE as u64;
                 // SAFETY: Frame was just allocated
-                let l2_table = unsafe { &mut *(l2_phys as *mut PageTable) };
+                let l2_table = unsafe { &mut *(phys_to_virt_addr(l2_phys) as *mut PageTable) };
                 l2_table.zero();
 
                 let flags = PageTableFlags::PRESENT
@@ -902,7 +924,9 @@ pub unsafe fn clone_user_address_space(parent_page_table_phys: u64) -> Result<u6
 
             let child_l2_phys = child_l3[p3_index].addr();
             // SAFETY: L2 is now present
-            let child_l2 = unsafe { &mut *(child_l2_phys as *mut PageTable) };
+            let child_l2 = unsafe {
+                &mut *(phys_to_virt_addr(child_l2_phys) as *mut PageTable)
+            };
 
             for p2_index in 0..ENTRY_COUNT {
                 if !parent_l2[p2_index].is_present() {
@@ -915,7 +939,9 @@ pub unsafe fn clone_user_address_space(parent_page_table_phys: u64) -> Result<u6
 
                 let parent_l1_phys = parent_l2[p2_index].addr();
                 // SAFETY: L1 address is from a present L2 entry
-                let parent_l1 = unsafe { &*(parent_l1_phys as *const PageTable) };
+                let parent_l1 = unsafe {
+                    &*(phys_to_virt_addr(parent_l1_phys) as *const PageTable)
+                };
 
                 // Create child L1 table
                 if !child_l2[p2_index].is_present() {
@@ -926,7 +952,8 @@ pub unsafe fn clone_user_address_space(parent_page_table_phys: u64) -> Result<u6
                     };
                     let l1_phys = l1_frame as u64 * panda_hal::memory::FRAME_SIZE as u64;
                     // SAFETY: Frame was just allocated
-                    let l1_table = unsafe { &mut *(l1_phys as *mut PageTable) };
+                    let l1_table =
+                        unsafe { &mut *(phys_to_virt_addr(l1_phys) as *mut PageTable) };
                     l1_table.zero();
 
                     let flags = PageTableFlags::PRESENT
@@ -937,7 +964,9 @@ pub unsafe fn clone_user_address_space(parent_page_table_phys: u64) -> Result<u6
 
                 let child_l1_phys = child_l2[p2_index].addr();
                 // SAFETY: L1 is now present
-                let child_l1 = unsafe { &mut *(child_l1_phys as *mut PageTable) };
+                let child_l1 = unsafe {
+                    &mut *(phys_to_virt_addr(child_l1_phys) as *mut PageTable)
+                };
 
                 // Copy each mapped page
                 for p1_index in 0..ENTRY_COUNT {
@@ -959,8 +988,8 @@ pub unsafe fn clone_user_address_space(parent_page_table_phys: u64) -> Result<u6
                     // Copy page contents from parent to child
                     // SAFETY: Both frames are valid and identity-mapped
                     unsafe {
-                        let src = parent_phys as *const u8;
-                        let dst = child_phys as *mut u8;
+                        let src = phys_to_virt_addr(parent_phys) as *const u8;
+                        let dst = phys_to_virt_addr(child_phys) as *mut u8;
                         core::ptr::copy_nonoverlapping(src, dst, PAGE_SIZE as usize);
                     }
 

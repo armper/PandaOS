@@ -304,10 +304,9 @@ pub unsafe fn load_elf_segments(
             }
 
             // Zero the page first
-            // NOTE: This assumes identity mapping of physical memory
-            // TODO: Use proper virtual address translation
-            // SAFETY: We just allocated and mapped this frame, assuming identity mapping
-            let page_ptr = phys_addr.as_u64() as *mut u8;
+            // NOTE: Access physical memory through the bootloader's phys->virt mapping.
+            // SAFETY: We just allocated and mapped this frame, and the phys->virt mapping is valid.
+            let page_ptr = crate::memory::phys_to_virt(phys_addr.as_u64()) as *mut u8;
             unsafe {
                 core::ptr::write_bytes(page_ptr, 0, 4096);
             }
@@ -333,12 +332,12 @@ pub unsafe fn load_elf_segments(
 
                 if bytes_to_copy > 0 && file_offset < data.len() as u64 {
                     let src = &data[file_offset as usize..][..bytes_to_copy];
-                    // NOTE: This assumes identity mapping of physical memory
-                    // TODO: Use proper virtual address translation
-                    // SAFETY: We verified the physical address is valid and assume identity mapping
+                    // NOTE: Access physical memory through the bootloader's phys->virt mapping.
+                    // SAFETY: We verified the physical address is valid and the mapping is valid.
                     let dst = unsafe {
                         core::slice::from_raw_parts_mut(
-                            (phys_addr.as_u64() + offset_in_page as u64) as *mut u8,
+                            (crate::memory::phys_to_virt(phys_addr.as_u64())
+                                + offset_in_page as u64) as *mut u8,
                             bytes_to_copy,
                         )
                     };

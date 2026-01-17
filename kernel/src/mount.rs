@@ -47,7 +47,7 @@ impl MountTable {
     pub fn mount_disk(&mut self, mount_point: &'static str) -> Result<(), ErrorCode> {
         // Initialize ATA disk
         // SAFETY: This should only be called once during boot
-        let disk = unsafe { AtaDisk::new() };
+        let disk = unsafe { AtaDisk::new_slave() };
 
         // Create disk filesystem
         let disk_fs = DiskFs::new(disk).map_err(|_| ErrorCode::EIO)?;

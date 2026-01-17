@@ -378,7 +378,7 @@ static mut SCHEDULER: Option<scheduler::Scheduler> = None;
 unsafe fn init_scheduler_and_start() -> ! {
     use panda_hal::pid::PidAllocator;
 
-    println!("Initializing scheduler...");
+    serial_println!("[sched] Initializing scheduler...");
 
     // Create scheduler
     let mut sched = scheduler::Scheduler::new();
@@ -396,15 +396,16 @@ unsafe fn init_scheduler_and_start() -> ! {
         panic!("init program not found in /mnt/bin/init or /init");
     };
 
-    println!("Loading init from {}...", init_path);
+    serial_println!("[sched] Loading init from {}...", init_path);
     let init_data_vec = fs::read_file_to_vec(init_path).expect("Failed to read init");
-    println!("Loaded init program ({} bytes)...", init_data_vec.len());
+    serial_println!("[sched] Loaded init program ({} bytes)...", init_data_vec.len());
     let init_elf = elf::parse_elf(&init_data_vec).expect("Failed to parse init ELF");
+    serial_println!("[sched] Parsed init ELF OK");
     let init_process = unsafe {
         process::Process::new(&init_elf, &init_data_vec, &pid_allocator)
             .expect("Failed to create init process")
     };
-    println!("Created process PID {}", init_process.pid.as_u64());
+    serial_println!("[sched] Created init PID {}", init_process.pid.as_u64());
     sched.add_process(init_process);
 
     // Store scheduler in global

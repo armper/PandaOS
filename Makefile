@@ -43,8 +43,10 @@ run-gui: bootimage fs.img
 	@echo "Starting QEMU with GUI..."
 	qemu-system-x86_64 \
 		-drive format=raw,file=target/x86_64-unknown-none/debug/bootimage-panda-kernel.bin \
-		-drive file=fs.img,format=raw,if=ide \
-		-serial stdio
+		-drive file=fs.img,format=raw,if=ide,index=1,media=disk,file.locking=off \
+		-serial stdio \
+		-no-reboot \
+		-no-shutdown
 
 # Run tests
 test:

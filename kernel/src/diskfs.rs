@@ -38,7 +38,7 @@ const FS_MAGIC: u32 = 0x50414E44;
 const FS_VERSION: u32 = 1;
 
 /// Maximum direct block pointers per inode
-const MAX_DIRECT_BLOCKS: usize = 10;
+const MAX_DIRECT_BLOCKS: usize = 28;
 
 /// Maximum filename length
 const MAX_FILENAME_LEN: usize = 255;
@@ -73,25 +73,27 @@ impl InodeType {
     }
 }
 
-/// On-disk inode structure (64 bytes)
+/// On-disk inode structure (128 bytes)
 #[repr(C, packed)]
 #[derive(Clone, Copy, Debug)]
 struct Inode {
     inode_num: u32,           // 4 bytes
     file_type: u32,           // 4 bytes
     size: u64,                // 8 bytes
-    direct_blocks: [u32; 10], // 40 bytes (reduced from 12 to fit)
-    padding: [u8; 8],         // 8 bytes padding = 64 total
+    direct_blocks: [u32; 28], // 112 bytes
 }
 
-/// Directory entry structure
-#[repr(C, packed)]
-#[derive(Clone, Copy, Debug)]
-struct DirEntry {
-    inode_num: u32,
-    name_len: u8,
-    // Name follows (variable length, null-terminated)
-}
+/// Directory entry header (on-disk)
+///
+/// Layout is:
+/// - inode_num: u32 (little-endian)
+/// - name_len: u8
+/// - name bytes (name_len)
+/// - padding to 4-byte boundary
+///
+/// Note: We parse from raw bytes instead of a packed struct to avoid unaligned
+/// field loads.
+const DIRENT_HEADER_SIZE: usize = 5;
 
 /// In-memory representation of a file
 #[derive(Clone, Debug)]
@@ -127,21 +129,26 @@ impl<D: BlockDevice> DiskFs<D> {
         let mut sector = [0u8; SECTOR_SIZE];
         device.read_sector(0, &mut sector).map_err(|_| DiskFsError::IoError)?;
 
-        let superblock = unsafe { &*(sector.as_ptr() as *const Superblock) };
+        // Parse from raw bytes to avoid unaligned loads from packed structs.
+        let magic = u32::from_le_bytes([sector[0], sector[1], sector[2], sector[3]]);
+        let version = u32::from_le_bytes([sector[4], sector[5], sector[6], sector[7]]);
+        let root_inode = u32::from_le_bytes([sector[8], sector[9], sector[10], sector[11]]);
+        let total_inodes = u32::from_le_bytes([sector[12], sector[13], sector[14], sector[15]]);
+        let first_data_block = u32::from_le_bytes([sector[16], sector[17], sector[18], sector[19]]);
 
         // Validate magic and version
-        if superblock.magic != FS_MAGIC {
+        if magic != FS_MAGIC {
             return Err(DiskFsError::InvalidMagic);
         }
-        if superblock.version != FS_VERSION {
+        if version != FS_VERSION {
             return Err(DiskFsError::InvalidVersion);
         }
 
         Ok(Self {
             device,
-            root_inode: superblock.root_inode,
-            total_inodes: superblock.total_inodes,
-            first_data_block: superblock.first_data_block,
+            root_inode,
+            total_inodes,
+            first_data_block,
         })
     }
 
@@ -160,21 +167,49 @@ impl<D: BlockDevice> DiskFs<D> {
         let mut sector = [0u8; SECTOR_SIZE];
         self.device.read_sector(sector_num, &mut sector).map_err(|_| DiskFsError::IoError)?;
 
-        let inode = unsafe { &*(sector.as_ptr().add(inode_offset) as *const Inode) };
+        // Parse inode fields from raw bytes (little-endian) to avoid unaligned loads.
+        let base = inode_offset;
+        let inode_num_on_disk = u32::from_le_bytes([
+            sector[base],
+            sector[base + 1],
+            sector[base + 2],
+            sector[base + 3],
+        ]);
+        let file_type_raw = u32::from_le_bytes([
+            sector[base + 4],
+            sector[base + 5],
+            sector[base + 6],
+            sector[base + 7],
+        ]);
+        let size = u64::from_le_bytes([
+            sector[base + 8],
+            sector[base + 9],
+            sector[base + 10],
+            sector[base + 11],
+            sector[base + 12],
+            sector[base + 13],
+            sector[base + 14],
+            sector[base + 15],
+        ]);
 
-        let file_type =
-            InodeType::from_u32(inode.file_type).ok_or(DiskFsError::InvalidInodeType)?;
+        let file_type = InodeType::from_u32(file_type_raw).ok_or(DiskFsError::InvalidInodeType)?;
 
         let mut blocks = Vec::new();
-        // Copy direct_blocks to avoid unaligned reference
-        let direct_blocks_copy = inode.direct_blocks;
-        for &block in &direct_blocks_copy {
+        let direct_blocks_base = base + 16;
+        for i in 0..MAX_DIRECT_BLOCKS {
+            let off = direct_blocks_base + i * 4;
+            let block = u32::from_le_bytes([
+                sector[off],
+                sector[off + 1],
+                sector[off + 2],
+                sector[off + 3],
+            ]);
             if block != 0 {
                 blocks.push(block);
             }
         }
 
-        Ok(DiskFile { inode: inode.inode_num, file_type, size: inode.size, blocks })
+        Ok(DiskFile { inode: inode_num_on_disk, file_type, size, blocks })
     }
 
     /// Read directory entries from a directory inode
@@ -199,29 +234,29 @@ impl<D: BlockDevice> DiskFs<D> {
 
         // Parse directory entries
         let mut offset = 0;
-        while offset < buffer.len() && offset < file.size as usize {
-            if offset + core::mem::size_of::<DirEntry>() > buffer.len() {
+        let limit = (file.size as usize).min(buffer.len());
+
+        while offset < limit {
+            if offset + DIRENT_HEADER_SIZE > limit {
                 break;
             }
 
-            let entry = unsafe { &*(buffer.as_ptr().add(offset) as *const DirEntry) };
+            let inode_num = u32::from_le_bytes([
+                buffer[offset],
+                buffer[offset + 1],
+                buffer[offset + 2],
+                buffer[offset + 3],
+            ]);
+            let name_len = buffer[offset + 4] as usize;
+            offset += DIRENT_HEADER_SIZE;
 
-            if entry.inode_num == 0 {
-                break; // End of entries
-            }
-
-            offset += core::mem::size_of::<DirEntry>();
-
-            // Read name
-            let name_len = entry.name_len as usize;
-            if name_len > MAX_FILENAME_LEN || offset + name_len > buffer.len() {
+            if name_len == 0 || name_len > MAX_FILENAME_LEN || offset + name_len > limit {
                 break;
             }
 
             let name_bytes = &buffer[offset..offset + name_len];
             let name = String::from_utf8_lossy(name_bytes).into_owned();
-
-            entries.push(DiskDirEntry { inode: entry.inode_num, name });
+            entries.push(DiskDirEntry { inode: inode_num, name });
 
             offset += name_len;
             // Align to 4-byte boundary

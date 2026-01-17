@@ -96,11 +96,20 @@ pub unsafe fn map_heap() -> Result<(), &'static str> {
         }
     }
 
-    // Use first frame as heap start (bootloader identity-maps low memory)
-    let heap_start = heap_frames[0] * 4096;
+    // Use first frame as heap start.
+    // The bootloader maps physical memory at `boot_info.physical_memory_offset`, so we must
+    // access heap memory through that virtual mapping (not via identity mapping).
+    let heap_phys_start = (heap_frames[0] * 4096) as u64;
+    let heap_start = crate::memory::phys_to_virt(heap_phys_start) as usize;
 
     println!("Heap: {} frames allocated ({} KiB)", frames_allocated, HEAP_SIZE / 1024);
-    println!("Heap physical: {:#x}..{:#x}", heap_start, heap_start + HEAP_SIZE);
+    println!(
+        "Heap: phys {:#x}..{:#x} -> virt {:#x}..{:#x}",
+        heap_phys_start,
+        heap_phys_start + HEAP_SIZE as u64,
+        heap_start,
+        heap_start + HEAP_SIZE
+    );
 
     // Reserve heap frames so they won't be allocated again
     // Reserve each frame individually since they may not be consecutive
