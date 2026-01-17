@@ -400,11 +400,12 @@ unsafe fn init_scheduler_and_start() -> ! {
         #[cfg(feature = "preempt-smoke")]
         {
             // For preempt-smoke test, use embedded init_preempt
-            static INIT_PREEMPT_ELF: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/init_preempt_elf"));
+            static INIT_PREEMPT_ELF: &[u8] =
+                include_bytes!(concat!(env!("OUT_DIR"), "/init_preempt_elf"));
             serial_println!("[sched] Using embedded init_preempt for preempt-smoke test");
             (alloc::vec::Vec::from(INIT_PREEMPT_ELF), "embedded init_preempt")
         }
-        
+
         #[cfg(not(feature = "preempt-smoke"))]
         {
             // Load init program from filesystem
@@ -660,12 +661,16 @@ fn yield_handler() {
         // Increment context switch counter
         // SAFETY: Called with interrupts disabled
         unsafe { increment_context_switch_counter() };
-        
+
         // Log with rate limiting or feature flag
         #[cfg(feature = "preempt-log")]
         {
             let switch_count = unsafe { get_context_switch_counter() };
-            serial_println!("[YIELD] Switching to process PID {} (switch #{})", next.pid.as_u64(), switch_count);
+            serial_println!(
+                "[YIELD] Switching to process PID {} (switch #{})",
+                next.pid.as_u64(),
+                switch_count
+            );
         }
 
         // Update syscall context pointer and kernel stack for the new process.

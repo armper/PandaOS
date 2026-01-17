@@ -323,7 +323,8 @@ extern "C" fn syscall_handler_rust() -> i64 {
     // SAFETY: syscall_entry saved the current process context before calling.
     let ctx = unsafe { CURRENT_CONTEXT_PTR.as_ref() }.expect("Syscall context not set");
 
-    let result = syscall::handle_syscall(ctx.rax, ctx.rdi, ctx.rsi, ctx.rdx, ctx.r10, ctx.r8, ctx.r9);
+    let result =
+        syscall::handle_syscall(ctx.rax, ctx.rdi, ctx.rsi, ctx.rdx, ctx.r10, ctx.r8, ctx.r9);
 
     // Check if preemption is needed (set by timer interrupt)
     // This provides preemptive multitasking at syscall boundaries
@@ -345,11 +346,11 @@ fn check_and_handle_preemption() {
     // Check need_resched flag
     // SAFETY: We're in syscall context with a consistent state
     let need_resched = unsafe { crate::get_need_resched() };
-    
+
     if need_resched {
         // Clear the flag
         unsafe { crate::clear_need_resched() };
-        
+
         // Trigger a yield to switch to the next process
         // This uses the same mechanism as the yield syscall
         if let Some(yield_fn) = syscall::get_yield_handler() {
