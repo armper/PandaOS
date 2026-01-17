@@ -138,9 +138,7 @@ fn handle_demand_paging(
     page_table_phys: u64,
     mode: &str,
 ) {
-    // Protection flags from process.rs
-    const PROT_WRITE: u32 = 0x2;
-    const PROT_EXEC: u32 = 0x4;
+    use crate::process::ProtFlags;
 
     // Check if address is in a valid VM region
     let page_addr = cr2 & !0xFFF;
@@ -169,10 +167,10 @@ fn handle_demand_paging(
     let mut flags =
         crate::paging::PageTableFlags::PRESENT.or(crate::paging::PageTableFlags::USER_ACCESSIBLE);
 
-    if region.flags & PROT_WRITE != 0 {
+    if region.flags & ProtFlags::PROT_WRITE.0 != 0 {
         flags = flags.or(crate::paging::PageTableFlags::WRITABLE);
     }
-    if region.flags & PROT_EXEC == 0 {
+    if region.flags & ProtFlags::PROT_EXEC.0 == 0 {
         flags = flags.or(crate::paging::PageTableFlags::NO_EXECUTE);
     }
 
