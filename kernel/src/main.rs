@@ -395,22 +395,34 @@ unsafe fn init_scheduler_and_start() -> ! {
     // Create PID allocator
     let pid_allocator = PidAllocator::new(1);
 
-    // Load init program from filesystem
-    // First try /mnt/bin/init (disk), then fall back to /init (in-memory if present)
-    let init_path = if fs::stat_path("/mnt/bin/init").is_ok() {
-        "/mnt/bin/init"
-    } else if fs::stat_path("/init").is_ok() {
-        "/init"
-    } else {
-        panic!("init program not found in /mnt/bin/init or /init");
+    // Load init program
+    let (init_data_vec, init_path_label) = {
+        #[cfg(feature = "preempt-smoke")]
+        {
+            // For preempt-smoke test, use embedded init_preempt
+            static INIT_PREEMPT_ELF: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/init_preempt_elf"));
+            serial_println!("[sched] Using embedded init_preempt for preempt-smoke test");
+            (alloc::vec::Vec::from(INIT_PREEMPT_ELF), "embedded init_preempt")
+        }
+        
+        #[cfg(not(feature = "preempt-smoke"))]
+        {
+            // Load init program from filesystem
+            // First try /mnt/bin/init (disk), then fall back to /init (in-memory if present)
+            let init_path = if fs::stat_path("/mnt/bin/init").is_ok() {
+                "/mnt/bin/init"
+            } else if fs::stat_path("/init").is_ok() {
+                "/init"
+            } else {
+                panic!("init program not found in /mnt/bin/init or /init");
+            };
+
+            serial_println!("[sched] Loading init from {}...", init_path);
+            let data_vec = fs::read_file_to_vec(init_path).expect("Failed to read init");
+            (data_vec, init_path)
+        }
     };
 
-    // For preempt-smoke test, use init_preempt if available
-    #[cfg(feature = "preempt-smoke")]
-    let init_path = "/init_preempt";
-
-    serial_println!("[sched] Loading init from {}...", init_path);
-    let init_data_vec = fs::read_file_to_vec(init_path).expect("Failed to read init");
     serial_println!("[sched] Loaded init program ({} bytes)...", init_data_vec.len());
     let init_elf = elf::parse_elf(&init_data_vec).expect("Failed to parse init ELF");
     serial_println!("[sched] Parsed init ELF OK");
