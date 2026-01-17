@@ -48,7 +48,7 @@ impl Tty {
 
     /// Process a single input byte from the device
     ///
-    /// Returns true if a signal should be sent to the foreground process group
+    /// Returns an action indicating what should be done
     pub fn input_byte(&mut self, byte: u8) -> TtyAction {
         match byte {
             // Ctrl+C (ETX)
@@ -63,6 +63,19 @@ impl Tty {
                     panda_hal::serial::write_byte_raw(b'\n');
                 }
                 TtyAction::SendSignal
+            }
+            // Ctrl+Z (SUB) - Stop signal
+            0x1A => {
+                // Clear current line
+                self.current_line.clear();
+                // Echo ^Z\n
+                if self.echo {
+                    panda_hal::serial::write_byte_raw(b'^');
+                    panda_hal::serial::write_byte_raw(b'Z');
+                    panda_hal::serial::write_byte_raw(b'\r');
+                    panda_hal::serial::write_byte_raw(b'\n');
+                }
+                TtyAction::SendStopSignal
             }
             // Backspace (BS or DEL)
             0x08 | 0x7F => {
@@ -170,6 +183,8 @@ pub enum TtyAction {
     LineReady,
     /// Send SIGINT to foreground process group
     SendSignal,
+    /// Send SIGTSTP to foreground process group (Ctrl+Z)
+    SendStopSignal,
 }
 
 /// Global TTY instance

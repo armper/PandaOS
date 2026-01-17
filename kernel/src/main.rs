@@ -462,6 +462,7 @@ unsafe fn init_scheduler_and_start() -> ! {
     syscall::set_setuid_handler(setuid_handler);
     syscall::set_setgid_handler(setgid_handler);
     syscall::set_signal_handler(signal_handler);
+    syscall::set_stop_signal_handler(stop_signal_handler);
     syscall::set_lseek_handler(lseek_handler);
     syscall::set_mkdir_handler(mkdir_handler);
     syscall::set_rmdir_handler(rmdir_handler);
@@ -1095,6 +1096,24 @@ fn signal_handler() {
         }
     } else {
         serial_println!("[TTY] Ctrl+C: no foreground process group");
+    }
+}
+
+/// Handle Ctrl+Z by sending SIGTSTP to foreground process group
+fn stop_signal_handler() {
+    use crate::process::Signal;
+
+    // SAFETY: Called from syscall context with interrupts disabled
+    let scheduler = unsafe { get_scheduler() };
+
+    if let Some(pgid) = scheduler.foreground_pgid() {
+        serial_println!("[TTY] Ctrl+Z: sending SIGTSTP to foreground pgid {}", pgid.as_u64());
+        let count = scheduler.signal_process_group(pgid, Signal::SIGTSTP);
+        if count > 0 {
+            serial_println!("[TTY] Stopped {} processes", count);
+        }
+    } else {
+        serial_println!("[TTY] Ctrl+Z: no foreground process group");
     }
 }
 

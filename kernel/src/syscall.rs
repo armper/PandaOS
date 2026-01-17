@@ -750,6 +750,13 @@ fn sys_read(fd: i32, buf: u64, count: u64) -> SyscallResult {
                         }
                         // Continue waiting for input (shell will get SIGINT)
                     }
+                    crate::tty::TtyAction::SendStopSignal => {
+                        // Ctrl+Z pressed - send SIGTSTP to foreground process group
+                        if let Some(stop_fn) = STOP_SIGNAL_HANDLER.get() {
+                            stop_fn();
+                        }
+                        // Continue waiting for input (shell will get SIGTSTP)
+                    }
                     crate::tty::TtyAction::LineReady => {
                         // Line is ready, loop will read it on next iteration
                     }
@@ -1193,6 +1200,7 @@ static PIPE_HANDLER: Once<fn(u64) -> SyscallResult> = Once::new();
 static DUP2_HANDLER: Once<fn(i32, i32) -> SyscallResult> = Once::new();
 static KILL_HANDLER: Once<fn(i32, i32) -> SyscallResult> = Once::new();
 static SIGNAL_HANDLER: Once<fn()> = Once::new();
+static STOP_SIGNAL_HANDLER: Once<fn()> = Once::new();
 static SETPGID_HANDLER: Once<fn(i32, i32) -> SyscallResult> = Once::new();
 static GETDENTS64_HANDLER: Once<fn(i32, u64, u64) -> SyscallResult> = Once::new();
 static GETCWD_HANDLER: Once<fn(u64, u64) -> SyscallResult> = Once::new();
@@ -1365,6 +1373,14 @@ pub fn set_mmap_handler(handler: fn(u64, u64, i32, i32, i32, u64) -> SyscallResu
 /// It should send SIGINT to the foreground process group.
 pub fn set_signal_handler(handler: fn()) {
     SIGNAL_HANDLER.call_once(|| handler);
+}
+
+/// Set the stop signal handler for TTY Ctrl+Z
+///
+/// This handler is called when Ctrl+Z is pressed in the TTY.
+/// It should send SIGTSTP to the foreground process group.
+pub fn set_stop_signal_handler(handler: fn()) {
+    STOP_SIGNAL_HANDLER.call_once(|| handler);
 }
 
 /// Set the lseek handler for syscall lseek
