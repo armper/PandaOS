@@ -842,9 +842,11 @@ pub unsafe fn free_process_address_space(
 
                     let frame =
                         (l1_table[p1_index].addr() / panda_hal::memory::FRAME_SIZE as u64) as usize;
+                    // Decrement refcount instead of direct deallocation
+                    // This handles COW pages properly
                     // SAFETY: Frame was allocated via the global allocator.
                     unsafe {
-                        crate::memory::deallocate_frame(frame);
+                        crate::memory::dec_frame_refcount(frame);
                     }
                     l1_table[p1_index].clear();
                 }
@@ -1062,36 +1064,55 @@ pub unsafe fn clone_user_address_space(parent_page_table_phys: u64) -> Result<u6
                 let child_l1 =
                     unsafe { &mut *(phys_to_virt_addr(child_l1_phys) as *mut PageTable) };
 
-                // Copy each mapped page
+                // COW fork: share pages instead of copying
                 for p1_index in 0..ENTRY_COUNT {
                     if !parent_l1[p1_index].is_present() {
                         continue;
                     }
 
                     let parent_phys = parent_l1[p1_index].addr();
-                    let flags = parent_l1[p1_index].flags();
+                    let parent_frame =
+                        (parent_phys / panda_hal::memory::FRAME_SIZE as u64) as usize;
+                    let mut flags = parent_l1[p1_index].flags();
 
-                    // Allocate a new physical frame for the child
-                    // SAFETY: Caller guarantees frame allocator is initialized
-                    let child_frame = unsafe {
-                        crate::memory::allocate_frame()
-                            .ok_or("Failed to allocate frame for page copy")?
-                    };
-                    let child_phys = child_frame as u64 * panda_hal::memory::FRAME_SIZE as u64;
-
-                    // Copy page contents from parent to child
-                    // SAFETY: Both frames are valid and identity-mapped
-                    unsafe {
-                        let src = phys_to_virt_addr(parent_phys) as *const u8;
-                        let dst = phys_to_virt_addr(child_phys) as *mut u8;
-                        core::ptr::copy_nonoverlapping(src, dst, PAGE_SIZE as usize);
+                    // Mark page as COW and read-only in both parent and child
+                    // Skip if page is already read-only (e.g., code segments)
+                    let was_writable = flags.contains(PageTableFlags::WRITABLE);
+                    if was_writable {
+                        // Clear writable flag and set COW flag
+                        let new_flags = PageTableFlags::from_bits(
+                            (flags.bits() & !PageTableFlags::WRITABLE.bits())
+                                | PageTableFlags::COPY_ON_WRITE.bits(),
+                        );
+                        
+                        // Update parent's PTE to be read-only + COW
+                        // SAFETY: We're modifying the parent's page table
+                        unsafe {
+                            let parent_l1_mut = &mut *(phys_to_virt_addr(parent_l1_phys) as *mut PageTable);
+                            parent_l1_mut[p1_index].set(parent_phys, new_flags);
+                        }
+                        
+                        flags = new_flags;
                     }
 
-                    // Map the new frame in child's page table
-                    child_l1[p1_index].set(child_phys, flags);
+                    // Share the physical frame with child
+                    child_l1[p1_index].set(parent_phys, flags);
+
+                    // Increment reference count for shared frame
+                    // SAFETY: Frame was allocated via the global allocator
+                    unsafe {
+                        crate::memory::inc_frame_refcount(parent_frame);
+                    }
                 }
             }
         }
+    }
+
+    // Flush TLB for parent process to reflect COW changes
+    // SAFETY: We're flushing the TLB which is always safe
+    use x86_64::instructions::tlb;
+    unsafe {
+        tlb::flush_all();
     }
 
     Ok(child_pt)
