@@ -83,13 +83,13 @@ pub unsafe fn parse_argv(argv_ptr: u64) -> Result<Vec<Vec<u8>>, ErrorCode> {
 
         // Read string at arg_ptr with per-string length limit
         let arg = unsafe { read_user_string(arg_ptr, MAX_STRLEN)? };
-        
+
         // Check total bytes limit (32 KiB)
         total_bytes += arg.len() + 1; // +1 for NUL terminator
         if total_bytes > MAX_TOTAL_BYTES {
             return Err(ErrorCode::E2BIG);
         }
-        
+
         args.push(arg);
         i += 1;
     }
@@ -132,13 +132,13 @@ pub unsafe fn parse_envp(envp_ptr: u64) -> Result<Vec<Vec<u8>>, ErrorCode> {
 
         // Read string at env_ptr with per-string length limit
         let env = unsafe { read_user_string(env_ptr, MAX_STRLEN)? };
-        
+
         // Check total bytes limit (32 KiB shared with argv)
         total_bytes += env.len() + 1; // +1 for NUL terminator
         if total_bytes > MAX_TOTAL_BYTES {
             return Err(ErrorCode::E2BIG);
         }
-        
+
         envs.push(env);
         i += 1;
     }
@@ -219,7 +219,7 @@ pub unsafe fn setup_user_stack(
     total_size += (envp.len() + 1) * 8;
 
     // Space for auxv entries (comprehensive set)
-    // AT_PAGESZ, AT_PHDR, AT_PHENT, AT_PHNUM, AT_ENTRY, 
+    // AT_PAGESZ, AT_PHDR, AT_PHENT, AT_PHNUM, AT_ENTRY,
     // AT_UID, AT_EUID, AT_GID, AT_EGID, AT_RANDOM, AT_EXECFN, AT_NULL
     // = 12 entries * 16 bytes
     total_size += 192;
@@ -253,7 +253,7 @@ pub unsafe fn setup_user_stack(
     let mut sp = stack_top;
 
     // Write strings first (at high addresses)
-    
+
     // Write argv strings
     let mut argv_ptrs = Vec::new();
     for arg in argv.iter().rev() {
@@ -294,8 +294,8 @@ pub unsafe fn setup_user_stack(
     sp -= 16;
     let random_ptr = sp;
     let random_bytes: [u8; 16] = [
-        0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xba, 0xbe,
-        0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0,
+        0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xba, 0xbe, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde,
+        0xf0,
     ];
     // SAFETY: Caller ensures stack memory is allocated and page table is valid
     unsafe {
@@ -306,7 +306,7 @@ pub unsafe fn setup_user_stack(
     sp &= !7;
 
     // Write auxv entries (in reverse order, from AT_NULL upward)
-    
+
     // AT_NULL (end marker)
     sp -= 16;
     unsafe {

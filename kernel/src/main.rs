@@ -42,6 +42,7 @@ pub mod exec_stack;
 pub mod fs;
 pub mod gdt;
 pub mod heap;
+pub mod homefs;
 pub mod interrupts;
 pub mod invariants;
 pub mod linker_symbols;

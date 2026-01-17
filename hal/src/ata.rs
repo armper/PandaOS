@@ -29,11 +29,15 @@ const ATA_STATUS_ERR: u8 = 0x01; // Error
 
 /// ATA commands
 const ATA_CMD_READ_SECTORS: u8 = 0x20;
+const ATA_CMD_WRITE_SECTORS: u8 = 0x30;
 
 /// Primary master ATA disk driver
 #[cfg(feature = "hardware")]
 pub struct AtaDisk {
     io_base: u16,
+    /// Drive select base value: 0xE0 for master, 0xF0 for slave
+    /// This base value is ORed with the upper 4 bits of the LBA
+    drive_select_base: u8,
 }
 
 #[cfg(feature = "hardware")]
@@ -44,7 +48,16 @@ impl AtaDisk {
     /// Must only be called once, and only after proper hardware initialization.
     /// Assumes the ATA controller is present and configured.
     pub const unsafe fn new() -> Self {
-        Self { io_base: ATA_PRIMARY_IO }
+        Self { io_base: ATA_PRIMARY_IO, drive_select_base: 0xE0 }
+    }
+
+    /// Create a new ATA disk driver for the primary slave disk
+    ///
+    /// # Safety
+    /// Must only be called once, and only after proper hardware initialization.
+    /// Assumes the ATA controller is present and configured.
+    pub const unsafe fn new_slave() -> Self {
+        Self { io_base: ATA_PRIMARY_IO, drive_select_base: 0xF0 }
     }
 
     /// Wait for the drive to be ready (not busy)
@@ -106,8 +119,8 @@ impl BlockDevice for AtaDisk {
         // Wait for drive to be ready
         self.wait_not_busy()?;
 
-        // Select drive (0xE0 = master, LBA mode, bits 24-27 of LBA)
-        let drive = 0xE0 | (((sector >> 24) & 0x0F) as u8);
+        // Select drive (master or slave, LBA mode, bits 24-27 of LBA)
+        let drive = self.drive_select_base | (((sector >> 24) & 0x0F) as u8);
         let mut drive_port: Port<u8> = Port::new(self.io_base + ATA_DRIVE_SELECT);
         // SAFETY: Writing to ATA drive select port
         unsafe { drive_port.write(drive) };
@@ -146,6 +159,61 @@ impl BlockDevice for AtaDisk {
             buffer[offset] = (word & 0xFF) as u8;
             buffer[offset + 1] = ((word >> 8) & 0xFF) as u8;
         }
+
+        Ok(())
+    }
+
+    fn write_sector(&mut self, sector: u64, buffer: &[u8; SECTOR_SIZE]) -> Result<(), BlockError> {
+        // Only support 28-bit LBA
+        if sector >= (1 << 28) {
+            return Err(BlockError::InvalidSector);
+        }
+
+        // Wait for drive to be ready
+        self.wait_not_busy()?;
+
+        // Select drive (master or slave, LBA mode, bits 24-27 of LBA)
+        let drive = self.drive_select_base | (((sector >> 24) & 0x0F) as u8);
+        let mut drive_port: Port<u8> = Port::new(self.io_base + ATA_DRIVE_SELECT);
+        // SAFETY: Writing to ATA drive select port
+        unsafe { drive_port.write(drive) };
+
+        // Set sector count to 1
+        let mut count_port: Port<u8> = Port::new(self.io_base + ATA_SECTOR_COUNT);
+        // SAFETY: Writing to ATA sector count port
+        unsafe { count_port.write(1u8) };
+
+        // Set LBA (bits 0-7, 8-15, 16-23)
+        let mut lba_low: Port<u8> = Port::new(self.io_base + ATA_LBA_LOW);
+        let mut lba_mid: Port<u8> = Port::new(self.io_base + ATA_LBA_MID);
+        let mut lba_high: Port<u8> = Port::new(self.io_base + ATA_LBA_HIGH);
+
+        // SAFETY: Writing LBA address to ATA ports
+        unsafe {
+            lba_low.write((sector & 0xFF) as u8);
+            lba_mid.write(((sector >> 8) & 0xFF) as u8);
+            lba_high.write(((sector >> 16) & 0xFF) as u8);
+        }
+
+        // Send write command
+        let mut cmd_port: Port<u8> = Port::new(self.io_base + ATA_COMMAND);
+        // SAFETY: Writing write command to ATA command port
+        unsafe { cmd_port.write(ATA_CMD_WRITE_SECTORS) };
+
+        // Wait for data request ready
+        self.wait_drq()?;
+
+        // Write 512 bytes (256 words) to data port
+        let mut data_port: Port<u16> = Port::new(self.io_base + ATA_DATA);
+        for i in 0..256 {
+            let offset = i * 2;
+            let word = (buffer[offset] as u16) | ((buffer[offset + 1] as u16) << 8);
+            // SAFETY: Writing data to ATA data port
+            unsafe { data_port.write(word) };
+        }
+
+        // Wait for write to complete
+        self.wait_not_busy()?;
 
         Ok(())
     }
