@@ -75,6 +75,9 @@ const MAX_TRACKED_FRAMES: usize = 1_048_576;
 const FRAME_BITMAP_BYTES: usize = (MAX_TRACKED_FRAMES + 7) / 8;
 static mut FRAME_BITMAP_STORAGE: [u8; FRAME_BITMAP_BYTES] = [0; FRAME_BITMAP_BYTES];
 
+/// Refcount storage for COW support (u16 per frame)
+static mut FRAME_REFCOUNT_STORAGE: [u16; MAX_TRACKED_FRAMES] = [0; MAX_TRACKED_FRAMES];
+
 /// Bootloader-provided offset where physical memory is mapped in the virtual address space.
 ///
 /// With the `bootloader/map_physical_memory` feature enabled, the bootloader maps all physical
@@ -217,6 +220,11 @@ pub unsafe fn init_from_bootloader(boot_info: &'static bootloader::BootInfo) {
         }
     }
 
+    // Set refcount storage for COW support
+    // SAFETY: FRAME_REFCOUNT_STORAGE is a global buffer used only here.
+    let refcount_storage = unsafe { &mut FRAME_REFCOUNT_STORAGE[..] };
+    frame_allocator.set_refcount_storage(refcount_storage);
+
     *FRAME_ALLOCATOR.lock() = Some(frame_allocator);
 }
 
@@ -277,6 +285,40 @@ pub unsafe fn reserve_frames(
     if let Some(allocator) = FRAME_ALLOCATOR.lock().as_mut() {
         allocator.reserve_range(start_frame, end_frame, reason);
     }
+}
+
+/// Increment reference count for a frame (for COW support)
+///
+/// Returns the new refcount, or None if frame is invalid.
+///
+/// # Safety
+///
+/// Frame allocator must be initialized with refcount storage.
+pub unsafe fn inc_frame_refcount(frame: usize) -> Option<u16> {
+    FRAME_ALLOCATOR.lock().as_mut().and_then(|allocator| allocator.inc_refcount(frame))
+}
+
+/// Decrement reference count for a frame (for COW support)
+///
+/// Returns the new refcount, or None if frame is invalid.
+/// If refcount reaches 0, the frame is automatically freed.
+///
+/// # Safety
+///
+/// Frame allocator must be initialized with refcount storage.
+pub unsafe fn dec_frame_refcount(frame: usize) -> Option<u16> {
+    FRAME_ALLOCATOR.lock().as_mut().and_then(|allocator| allocator.dec_refcount(frame))
+}
+
+/// Get reference count for a frame (for COW support)
+///
+/// Returns the refcount, or None if frame is invalid.
+///
+/// # Safety
+///
+/// Frame allocator must be initialized with refcount storage.
+pub unsafe fn get_frame_refcount(frame: usize) -> Option<u16> {
+    FRAME_ALLOCATOR.lock().as_ref().and_then(|allocator| allocator.get_refcount(frame))
 }
 
 #[cfg(test)]
