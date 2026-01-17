@@ -76,10 +76,14 @@ impl ReservedRegion {
     }
 }
 
+/// Maximum reference count value
+const MAX_REFCOUNT: u16 = u16::MAX;
+
 /// A physical memory frame allocator
 ///
 /// This uses a simple bump allocator with explicit frame reservations.
 /// Reserved frames are never returned by the allocator.
+/// Supports reference counting for copy-on-write (COW) fork.
 #[derive(Debug)]
 pub struct FrameAllocator {
     /// Range of available frames
@@ -92,6 +96,10 @@ pub struct FrameAllocator {
     reserved_count: usize,
     /// Allocation bitmap for tracking used frames
     allocation_bitmap: Bitmap,
+    /// Reference counts for each frame (for COW support)
+    /// Index is frame_number - available_frames.start
+    /// 0 = not allocated, 1+ = allocated with that many references
+    refcounts: Option<&'static mut [u16]>,
 }
 
 impl FrameAllocator {
@@ -112,7 +120,34 @@ impl FrameAllocator {
             reserved_regions: [None; MAX_RESERVED_REGIONS],
             reserved_count: 0,
             allocation_bitmap,
+            refcounts: None,
         }
+    }
+
+    /// Set refcount storage for COW support
+    ///
+    /// # Arguments
+    ///
+    /// * `refcount_storage` - Array of u16 for storing refcounts, must be at least total_frames() long
+    ///
+    /// # Panics
+    ///
+    /// Panics if refcount storage is too small
+    pub fn set_refcount_storage(&mut self, refcount_storage: &'static mut [u16]) {
+        let total_frames = self.total_frames();
+        assert!(
+            refcount_storage.len() >= total_frames,
+            "Refcount storage too small: {} < {}",
+            refcount_storage.len(),
+            total_frames
+        );
+
+        // Initialize refcounts to 0 (unallocated)
+        for count in refcount_storage.iter_mut().take(total_frames) {
+            *count = 0;
+        }
+
+        self.refcounts = Some(refcount_storage);
     }
 
     /// Reserve a range of frames
@@ -262,6 +297,7 @@ impl FrameAllocator {
     ///
     /// Returns the frame number or None if out of memory.
     /// This method skips any reserved frames.
+    /// Sets initial refcount to 1 if refcounting is enabled.
     pub fn allocate_frame(&mut self) -> Option<usize> {
         // Invariant: next_frame should never exceed end
         #[cfg(debug_assertions)]
@@ -292,6 +328,12 @@ impl FrameAllocator {
 
             if !self.is_reserved(frame) && !self.is_allocated(frame) {
                 self.set_allocated(frame);
+                // Set initial refcount to 1
+                if let Some(index) = self.frame_index(frame) {
+                    if let Some(ref mut refcounts) = self.refcounts {
+                        refcounts[index] = 1;
+                    }
+                }
                 self.next_frame = frame + 1;
                 return Some(frame);
             }
@@ -306,6 +348,9 @@ impl FrameAllocator {
     /// Deallocate a frame
     ///
     /// Clears the allocation bitmap so the frame can be reused.
+    /// If refcounting is enabled, decrements refcount and only frees when it reaches 0.
+    /// Direct calls to this function bypass refcounting (for compatibility).
+    /// For COW support, use dec_refcount instead.
     pub fn deallocate_frame(&mut self, frame: usize) {
         if self.is_reserved(frame) {
             return;
@@ -314,6 +359,13 @@ impl FrameAllocator {
         if !self.is_allocated(frame) {
             debug_assert!(false, "Deallocating unallocated frame {frame}");
             return;
+        }
+
+        // If refcounting is enabled, clear refcount
+        if let Some(index) = self.frame_index(frame) {
+            if let Some(ref mut refcounts) = self.refcounts {
+                refcounts[index] = 0;
+            }
         }
 
         self.clear_allocated(frame);
@@ -346,6 +398,65 @@ impl FrameAllocator {
     /// Convert physical address to frame number
     pub const fn addr_to_frame(addr: usize) -> usize {
         addr / FRAME_SIZE
+    }
+
+    /// Increment reference count for a frame (for COW support)
+    ///
+    /// Returns the new refcount, or None if refcounting is not enabled
+    /// or the frame is not allocated.
+    /// Saturates at MAX_REFCOUNT to prevent overflow.
+    pub fn inc_refcount(&mut self, frame: usize) -> Option<u16> {
+        if let Some(index) = self.frame_index(frame) {
+            if let Some(ref mut refcounts) = self.refcounts {
+                let refcount = &mut refcounts[index];
+                if *refcount > 0 && *refcount < MAX_REFCOUNT {
+                    *refcount += 1;
+                }
+                return Some(*refcount);
+            }
+        }
+        None
+    }
+
+    /// Decrement reference count for a frame (for COW support)
+    ///
+    /// Returns the new refcount, or None if refcounting is not enabled
+    /// or the frame is not allocated.
+    /// If refcount reaches 0, the frame is deallocated automatically.
+    pub fn dec_refcount(&mut self, frame: usize) -> Option<u16> {
+        if let Some(index) = self.frame_index(frame) {
+            if let Some(ref mut refcounts) = self.refcounts {
+                let refcount = &mut refcounts[index];
+                if *refcount > 0 {
+                    *refcount -= 1;
+                    let new_count = *refcount;
+
+                    // If refcount hits 0, deallocate the frame
+                    if new_count == 0 {
+                        self.clear_allocated(frame);
+                        if frame < self.next_frame {
+                            self.next_frame = frame;
+                        }
+                    }
+
+                    return Some(new_count);
+                }
+            }
+        }
+        None
+    }
+
+    /// Get reference count for a frame (for COW support)
+    ///
+    /// Returns the refcount, or None if refcounting is not enabled
+    /// or the frame is not in the valid range.
+    pub fn get_refcount(&self, frame: usize) -> Option<u16> {
+        if let Some(index) = self.frame_index(frame) {
+            if let Some(ref refcounts) = self.refcounts {
+                return Some(refcounts[index]);
+            }
+        }
+        None
     }
 }
 

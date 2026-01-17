@@ -36,6 +36,9 @@ impl PageTableFlags {
     pub const HUGE_PAGE: Self = Self(1 << 7);
     /// Page is global (not flushed from TLB on context switch)
     pub const GLOBAL: Self = Self(1 << 8);
+    /// Copy-on-write page (OS-specific bit 9)
+    /// When set, indicates this page is shared via COW and should be copied on write
+    pub const COPY_ON_WRITE: Self = Self(1 << 9);
     /// Disable execution
     pub const NO_EXECUTE: Self = Self(1 << 63);
 
@@ -591,6 +594,116 @@ pub unsafe fn unmap_page(
     Ok(phys_addr)
 }
 
+/// Walk page tables to find PTE for a virtual address
+///
+/// Returns a mutable reference to the PTE if the page is mapped, otherwise None.
+///
+/// # Safety
+///
+/// - page_table_phys must point to a valid L4 page table
+/// - The returned reference is only valid while the page table structure remains unchanged
+#[allow(clippy::cast_ptr_alignment)]
+pub unsafe fn walk_page_table(
+    page_table_phys: u64,
+    virt_addr: VirtAddr,
+) -> Option<&'static mut PageTableEntry> {
+    // SAFETY: Caller guarantees page table is valid
+    let l4_table = unsafe { &mut *(phys_to_virt_addr(page_table_phys) as *mut PageTable) };
+
+    let p4_index = virt_addr.p4_index();
+    let p3_index = virt_addr.p3_index();
+    let p2_index = virt_addr.p2_index();
+    let p1_index = virt_addr.p1_index();
+
+    // Walk the page table hierarchy
+    if !l4_table[p4_index].is_present() {
+        return None;
+    }
+
+    // SAFETY: Entry is present
+    let l3_table =
+        unsafe { &mut *(phys_to_virt_addr(l4_table[p4_index].addr()) as *mut PageTable) };
+
+    if !l3_table[p3_index].is_present() {
+        return None;
+    }
+
+    // SAFETY: Entry is present
+    let l2_table =
+        unsafe { &mut *(phys_to_virt_addr(l3_table[p3_index].addr()) as *mut PageTable) };
+
+    if !l2_table[p2_index].is_present() {
+        return None;
+    }
+
+    // SAFETY: Entry is present
+    let l1_table =
+        unsafe { &mut *(phys_to_virt_addr(l2_table[p2_index].addr()) as *mut PageTable) };
+
+    if !l1_table[p1_index].is_present() {
+        return None;
+    }
+
+    // SAFETY: We've verified all entries are present, return mutable reference to PTE
+    Some(unsafe { &mut *(&mut l1_table[p1_index] as *mut PageTableEntry) })
+}
+
+/// Update PTE flags for a mapped page
+///
+/// Sets the specified flags on the PTE and flushes the TLB.
+///
+/// # Safety
+///
+/// - page_table_phys must point to a valid L4 page table
+/// - virt_addr must be mapped
+pub unsafe fn set_pte_flags(
+    page_table_phys: u64,
+    virt_addr: VirtAddr,
+    flags_to_set: PageTableFlags,
+) -> Result<(), &'static str> {
+    // SAFETY: Caller guarantees page table is valid
+    let pte = unsafe { walk_page_table(page_table_phys, virt_addr) }.ok_or("Page not mapped")?;
+
+    let current_flags = pte.flags();
+    let new_flags = PageTableFlags::from_bits(current_flags.bits() | flags_to_set.bits());
+    let phys_addr = pte.addr();
+    pte.set(phys_addr, new_flags);
+
+    // Flush TLB for this address
+    use x86_64::instructions::tlb;
+    tlb::flush(x86_64::VirtAddr::new(virt_addr.as_u64()));
+
+    Ok(())
+}
+
+/// Clear PTE flags for a mapped page
+///
+/// Clears the specified flags from the PTE and flushes the TLB.
+///
+/// # Safety
+///
+/// - page_table_phys must point to a valid L4 page table
+/// - virt_addr must be mapped
+pub unsafe fn clear_pte_flags(
+    page_table_phys: u64,
+    virt_addr: VirtAddr,
+    flags_to_clear: PageTableFlags,
+) -> Result<(), &'static str> {
+    // SAFETY: Caller guarantees page table is valid
+    let pte = unsafe { walk_page_table(page_table_phys, virt_addr) }.ok_or("Page not mapped")?;
+
+    let current_flags = pte.flags();
+    let new_flags = PageTableFlags::from_bits(current_flags.bits() & !flags_to_clear.bits());
+    let phys_addr = pte.addr();
+    pte.set(phys_addr, new_flags);
+
+    // Flush TLB for this address
+    use x86_64::instructions::tlb;
+    tlb::flush(x86_64::VirtAddr::new(virt_addr.as_u64()));
+
+    Ok(())
+}
+
 /// Allocate and map user stack
 ///
 /// Allocates physical frames and maps them to a user stack region.
@@ -729,9 +842,11 @@ pub unsafe fn free_process_address_space(
 
                     let frame =
                         (l1_table[p1_index].addr() / panda_hal::memory::FRAME_SIZE as u64) as usize;
+                    // Decrement refcount instead of direct deallocation
+                    // This handles COW pages properly
                     // SAFETY: Frame was allocated via the global allocator.
                     unsafe {
-                        crate::memory::deallocate_frame(frame);
+                        crate::memory::dec_frame_refcount(frame);
                     }
                     l1_table[p1_index].clear();
                 }
@@ -949,36 +1064,55 @@ pub unsafe fn clone_user_address_space(parent_page_table_phys: u64) -> Result<u6
                 let child_l1 =
                     unsafe { &mut *(phys_to_virt_addr(child_l1_phys) as *mut PageTable) };
 
-                // Copy each mapped page
+                // COW fork: share pages instead of copying
                 for p1_index in 0..ENTRY_COUNT {
                     if !parent_l1[p1_index].is_present() {
                         continue;
                     }
 
                     let parent_phys = parent_l1[p1_index].addr();
-                    let flags = parent_l1[p1_index].flags();
+                    let parent_frame =
+                        (parent_phys / panda_hal::memory::FRAME_SIZE as u64) as usize;
+                    let mut flags = parent_l1[p1_index].flags();
 
-                    // Allocate a new physical frame for the child
-                    // SAFETY: Caller guarantees frame allocator is initialized
-                    let child_frame = unsafe {
-                        crate::memory::allocate_frame()
-                            .ok_or("Failed to allocate frame for page copy")?
-                    };
-                    let child_phys = child_frame as u64 * panda_hal::memory::FRAME_SIZE as u64;
-
-                    // Copy page contents from parent to child
-                    // SAFETY: Both frames are valid and identity-mapped
-                    unsafe {
-                        let src = phys_to_virt_addr(parent_phys) as *const u8;
-                        let dst = phys_to_virt_addr(child_phys) as *mut u8;
-                        core::ptr::copy_nonoverlapping(src, dst, PAGE_SIZE as usize);
+                    // Mark page as COW and read-only in both parent and child
+                    // Skip if page is already read-only (e.g., code segments)
+                    let was_writable = flags.contains(PageTableFlags::WRITABLE);
+                    if was_writable {
+                        // Clear writable flag and set COW flag
+                        let new_flags = PageTableFlags::from_bits(
+                            (flags.bits() & !PageTableFlags::WRITABLE.bits())
+                                | PageTableFlags::COPY_ON_WRITE.bits(),
+                        );
+                        
+                        // Update parent's PTE to be read-only + COW
+                        // SAFETY: We're modifying the parent's page table
+                        unsafe {
+                            let parent_l1_mut = &mut *(phys_to_virt_addr(parent_l1_phys) as *mut PageTable);
+                            parent_l1_mut[p1_index].set(parent_phys, new_flags);
+                        }
+                        
+                        flags = new_flags;
                     }
 
-                    // Map the new frame in child's page table
-                    child_l1[p1_index].set(child_phys, flags);
+                    // Share the physical frame with child
+                    child_l1[p1_index].set(parent_phys, flags);
+
+                    // Increment reference count for shared frame
+                    // SAFETY: Frame was allocated via the global allocator
+                    unsafe {
+                        crate::memory::inc_frame_refcount(parent_frame);
+                    }
                 }
             }
         }
+    }
+
+    // Flush TLB for parent process to reflect COW changes
+    // SAFETY: We're flushing the TLB which is always safe
+    use x86_64::instructions::tlb;
+    unsafe {
+        tlb::flush_all();
     }
 
     Ok(child_pt)

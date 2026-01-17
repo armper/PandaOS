@@ -12,19 +12,30 @@
 ### fork()
 - Creates a child process by cloning the parent
 - Child gets:
-  - Copy of parent's address space (full page-by-page copy, no COW yet)
+  - **Copy-on-write address space**: Physical frames shared with refcounting
   - Copy of parent's CPU context with rax=0
   - Copy of parent's FD table (shared file offsets)
   - New page table with shared kernel mappings
   - New kernel stack
   - parent_pid set to parent's PID
-  - **Copy of heap state**: heap_start, heap_end, heap_limit
-  - **Copy of mmap state**: mmap_base and mappings Vec
+  - **Copy of VM regions**: heap_start, heap_end, heap_limit, mmap_base, mappings
 - Returns:
   - In parent: child PID
   - In child: 0
 - Single-CPU only (no SMP support)
-- **Memory isolation**: Child modifications to heap/mmap don't affect parent
+
+**Copy-on-Write Implementation:**
+- All user-space PTEs marked read-only + COW flag in both parent and child
+- Physical frames shared between parent and child
+- Refcounts incremented for each shared frame
+- Write faults trigger copy-on-write: allocate new frame, copy data, remap writable
+- Read-only pages remain shared until written to
+- Parent and child eventually get independent physical frames only for modified pages
+
+**Benefits:**
+- Faster fork (no immediate copying)
+- Reduced memory usage (share unmodified pages)
+- Deferred allocation (copy frames only when modified)
 
 ## Process States
 
@@ -489,10 +500,16 @@ Planned improvements for full Linux compatibility:
 
 After CR3 switch away from an exited process:
 - Free all user-space page tables (L1, L2, L3)
-- Free all user-space data pages
+- **Decrement refcounts for all user-space data pages**
+- Frames automatically freed when refcount reaches 0
 - Free kernel stack pages (if free_kernel_stack=true)
 - Free L4 page table
 - Process structure is dropped from scheduler
+
+**Refcounting Cleanup:**
+- Each page table entry decrement's frame refcount on unmap
+- Shared frames (from COW fork) remain until all processes release them
+- No double-free: frames only deallocated when refcount == 0
 
 ## Signal Handling
 

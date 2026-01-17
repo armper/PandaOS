@@ -46,6 +46,7 @@ disable the feature"
         "brk_test",
         "mmap_test",
         "vm_test",
+        "cowtest",
     ] {
         let src = userland_bin.join(program);
         let dst = out_dir.join(format!("{}_elf", program));
@@ -72,6 +73,7 @@ disable the feature"
     println!("cargo:rerun-if-changed=../userland/brk_test.asm");
     println!("cargo:rerun-if-changed=../userland/mmap_test.asm");
     println!("cargo:rerun-if-changed=../userland/vm_test.asm");
+    println!("cargo:rerun-if-changed=../userland/cowtest.asm");
     println!("cargo:rerun-if-changed=../userland/build.sh");
     println!("cargo:rerun-if-changed=../userland/bin/hello");
     println!("cargo:rerun-if-changed=../userland/bin/hello1");
@@ -84,4 +86,5 @@ disable the feature"
     println!("cargo:rerun-if-changed=../userland/bin/brk_test");
     println!("cargo:rerun-if-changed=../userland/bin/mmap_test");
     println!("cargo:rerun-if-changed=../userland/bin/vm_test");
+    println!("cargo:rerun-if-changed=../userland/bin/cowtest");
 }

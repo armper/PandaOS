@@ -68,6 +68,7 @@ pub mod timer;
 pub mod tmpfs;
 pub mod tty;
 pub mod usermode;
+pub mod vm_counters;
 
 /// Entry point for the kernel
 ///
@@ -526,7 +527,7 @@ unsafe fn init_scheduler_and_start() -> ! {
 ///
 /// This is safe in interrupt handlers and syscall handlers as they
 /// run with interrupts disabled.
-unsafe fn get_scheduler() -> &'static mut scheduler::Scheduler {
+pub unsafe fn get_scheduler() -> &'static mut scheduler::Scheduler {
     // SAFETY: Caller guarantees interrupts are disabled and scheduler is initialized
     unsafe { (*core::ptr::addr_of_mut!(SCHEDULER)).as_mut().expect("Scheduler not initialized") }
 }
@@ -2390,6 +2391,12 @@ fn exit_handler(status: i32) -> ! {
             serial_println!("[PREEMPT] Final stats: ticks={} switches={}", tick, switches);
             serial_println!("TEST PASS preempt_smoke");
         }
+        #[cfg(feature = "cow-smoke")]
+        {
+            // Print COW statistics
+            crate::vm_counters::print_summary();
+            serial_println!("TEST PASS cow_smoke");
+        }
         #[cfg(not(any(
             feature = "shell-smoke",
             feature = "vfs-cat-smoke",
@@ -2405,7 +2412,8 @@ fn exit_handler(status: i32) -> ! {
             feature = "tmpfs-redir-smoke",
             feature = "elf-exec-smoke",
             feature = "tty-smoke",
-            feature = "preempt-smoke"
+            feature = "preempt-smoke",
+            feature = "cow-smoke"
         )))]
         serial_println!("TEST PASS exec_smoke");
         let kernel_pt = usermode::kernel_page_table_phys();

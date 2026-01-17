@@ -67,15 +67,229 @@ extern "x86-interrupt" fn page_fault_handler(
 ) {
     use x86_64::registers::control::Cr2;
 
-    println!("EXCEPTION: PAGE FAULT");
-    println!("Accessed Address: {:?}", Cr2::read());
-    println!("Error Code: {:?}", error_code);
-    println!("{:#?}", stack_frame);
+    // Read faulting address from CR2
+    let cr2 = Cr2::read_raw();
+    let rip = stack_frame.instruction_pointer.as_u64();
 
-    // For now, halt on page fault
-    loop {
-        x86_64::instructions::hlt();
+    // Increment page fault counter
+    crate::vm_counters::inc_page_faults();
+
+    // Parse error code bits
+    let present = error_code.contains(PageFaultErrorCode::PROTECTION_VIOLATION);
+    let write = error_code.contains(PageFaultErrorCode::CAUSED_BY_WRITE);
+    let user = error_code.contains(PageFaultErrorCode::USER_MODE);
+    let reserved_write = error_code.contains(PageFaultErrorCode::MALFORMED_TABLE);
+    let instruction_fetch = error_code.contains(PageFaultErrorCode::INSTRUCTION_FETCH);
+
+    // Get current process from scheduler
+    // SAFETY: Page fault handlers run with interrupts disabled
+    let scheduler = unsafe { crate::get_scheduler() };
+    let Some(process) = scheduler.current_process_mut() else {
+        // No current process - kernel page fault
+        panic!(
+            "PAGE FAULT in kernel space: cr2={:#x}, rip={:#x}, error_code={:?}",
+            cr2, rip, error_code
+        );
+    };
+
+    let pid = process.pid;
+    let page_table_phys = process.page_table_phys;
+    let mode = if user { "user" } else { "kernel" };
+
+    // Case 1: Not present, user mode - demand paging
+    if !present && user {
+        handle_demand_paging(process, cr2, rip, error_code, pid, page_table_phys, mode);
+        return;
     }
+
+    // Case 2: Present, write, user mode - potential COW fault
+    if present && write && user {
+        handle_cow_fault(process, cr2, rip, error_code, pid, page_table_phys, mode);
+        return;
+    }
+
+    // Case 3: All other faults - protection violation or invalid access
+    panic!(
+        "PAGE FAULT: pid={:?}, cr2={:#x}, rip={:#x}, error_code={:?}, mode={}\n\
+         present={}, write={}, user={}, reserved_write={}, instruction_fetch={}\n\
+         Unhandled page fault type\n\
+         Process VM regions: {:?}",
+        pid,
+        cr2,
+        rip,
+        error_code,
+        mode,
+        present,
+        write,
+        user,
+        reserved_write,
+        instruction_fetch,
+        process.vm_regions
+    );
+}
+
+/// Handle demand paging fault
+fn handle_demand_paging(
+    process: &mut crate::process::Process,
+    cr2: u64,
+    rip: u64,
+    error_code: PageFaultErrorCode,
+    pid: panda_hal::pid::Pid,
+    page_table_phys: u64,
+    mode: &str,
+) {
+    use crate::process::ProtFlags;
+
+    // Check if address is in a valid VM region
+    let page_addr = cr2 & !0xFFF;
+    let region =
+        process.vm_regions.iter().find(|r| page_addr >= r.start_addr && page_addr < r.end_addr);
+
+    let Some(region) = region else {
+        // Address not in any valid region - protection fault
+        panic!(
+            "PAGE FAULT: pid={:?}, cr2={:#x}, rip={:#x}, error_code={:?}, mode={}\n\
+             Invalid memory access - address not in any VM region\n\
+             Process VM regions: {:?}",
+            pid, cr2, rip, error_code, mode, process.vm_regions
+        );
+    };
+
+    // Valid region - allocate and map page
+    // SAFETY: Frame allocator is initialized
+    let frame = unsafe {
+        crate::memory::allocate_frame().expect("Failed to allocate frame for demand paging")
+    };
+
+    let phys_addr = (frame as u64) * 4096;
+
+    // Convert region flags to page table flags
+    let mut flags =
+        crate::paging::PageTableFlags::PRESENT.or(crate::paging::PageTableFlags::USER_ACCESSIBLE);
+
+    if region.flags & ProtFlags::PROT_WRITE.0 != 0 {
+        flags = flags.or(crate::paging::PageTableFlags::WRITABLE);
+    }
+    if region.flags & ProtFlags::PROT_EXEC.0 == 0 {
+        flags = flags.or(crate::paging::PageTableFlags::NO_EXECUTE);
+    }
+
+    // Map the page
+    // SAFETY: page_table_phys is valid, frame was just allocated
+    unsafe {
+        crate::paging::map_page(
+            page_table_phys,
+            crate::paging::VirtAddr::new(page_addr),
+            crate::paging::PhysAddr::new(phys_addr),
+            flags,
+        )
+        .expect("Failed to map page for demand paging");
+    }
+
+    // Zero-fill the page
+    // TODO: For file-backed regions, populate from ELF data instead
+    let page_virt = crate::memory::phys_to_virt(phys_addr);
+    // SAFETY: page_virt points to newly allocated page
+    unsafe {
+        core::ptr::write_bytes(page_virt as *mut u8, 0, 4096);
+    }
+
+    // Increment demand allocation counter
+    crate::vm_counters::inc_demand_allocations();
+
+    println!(
+        "PAGE FAULT: pid={:?}, cr2={:#x}, rip={:#x}, error={:?}, mode={}, action=demand_page (frame={})",
+        pid, cr2, rip, error_code, mode, frame
+    );
+}
+
+/// Handle copy-on-write fault
+fn handle_cow_fault(
+    _process: &crate::process::Process,
+    cr2: u64,
+    rip: u64,
+    error_code: PageFaultErrorCode,
+    pid: panda_hal::pid::Pid,
+    page_table_phys: u64,
+    mode: &str,
+) {
+    // Walk page table to check for COW flag
+    let page_addr = cr2 & !0xFFF;
+
+    // SAFETY: page_table_phys is valid
+    let pte = unsafe {
+        crate::paging::walk_page_table(page_table_phys, crate::paging::VirtAddr::new(page_addr))
+    };
+
+    let Some(pte) = pte else {
+        // Page not mapped - shouldn't happen if present bit is set
+        panic!(
+            "PAGE FAULT: pid={:?}, cr2={:#x}, rip={:#x}, error_code={:?}, mode={}\n\
+             Page table walk failed despite present bit set",
+            pid, cr2, rip, error_code, mode
+        );
+    };
+
+    let pte_flags = pte.flags();
+
+    // Check if page has COW flag
+    if !pte_flags.contains(crate::paging::PageTableFlags::COPY_ON_WRITE) {
+        // Not a COW page - real write protection fault
+        panic!(
+            "PAGE FAULT: pid={:?}, cr2={:#x}, rip={:#x}, error_code={:?}, mode={}\n\
+             Write to read-only page (not COW)\n\
+             PTE flags: {:?}",
+            pid, cr2, rip, error_code, mode, pte_flags
+        );
+    }
+
+    // COW fault - allocate new frame and copy
+    let old_phys = pte.addr();
+    let old_frame = (old_phys / 4096) as usize;
+
+    // Allocate new frame
+    // SAFETY: Frame allocator is initialized
+    let new_frame =
+        unsafe { crate::memory::allocate_frame().expect("Failed to allocate frame for COW") };
+    let new_phys = (new_frame as u64) * 4096;
+
+    // Copy old page to new frame
+    let old_virt = crate::memory::phys_to_virt(old_phys);
+    let new_virt = crate::memory::phys_to_virt(new_phys);
+
+    // SAFETY: Both addresses point to valid pages
+    unsafe {
+        core::ptr::copy_nonoverlapping(old_virt as *const u8, new_virt as *mut u8, 4096);
+    }
+
+    // Remap to new frame with RW flags, clear COW flag
+    let new_flags = pte_flags.or(crate::paging::PageTableFlags::WRITABLE);
+
+    // Clear COW flag by creating new flags without it
+    let new_flags_bits = new_flags.bits() & !crate::paging::PageTableFlags::COPY_ON_WRITE.bits();
+    let new_flags = crate::paging::PageTableFlags::from_bits(new_flags_bits);
+
+    pte.set(new_phys, new_flags);
+
+    // Flush TLB for this page
+    {
+        use x86_64::instructions::tlb;
+        tlb::flush(x86_64::VirtAddr::new(page_addr));
+    }
+
+    // Decrement old frame refcount
+    // SAFETY: Frame allocator is initialized
+    unsafe {
+        crate::memory::dec_frame_refcount(old_frame);
+    }
+
+    // Increment COW fault counter
+    crate::vm_counters::inc_cow_faults();
+
+    println!(
+        "PAGE FAULT: pid={:?}, cr2={:#x}, rip={:#x}, error={:?}, mode={}, action=cow_copy (old_frame={}, new_frame={})",
+        pid, cr2, rip, error_code, mode, old_frame, new_frame
+    );
 }
 
 /// Timer interrupt handler (IRQ 0)
