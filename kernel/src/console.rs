@@ -18,7 +18,7 @@ macro_rules! console_print {
     ($($arg:tt)*) => {{
         // Always print to serial
         serial_print!($($arg)*);
-        
+
         // Print to VGA if vga-console feature is enabled
         #[cfg(feature = "vga-console")]
         {
@@ -42,7 +42,7 @@ macro_rules! console_println {
 pub fn vga_print(args: fmt::Arguments) {
     use core::fmt::Write;
     use x86_64::instructions::interrupts;
-    
+
     interrupts::without_interrupts(|| {
         if let Some(writer) = panda_hal::vga::WRITER.lock().as_mut() {
             let _ = writer.write_fmt(args);
@@ -68,10 +68,10 @@ impl fmt::Write for DualConsole {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         // Write to serial
         serial_print!("{}", s);
-        
+
         // Write to VGA
         vga_print(format_args!("{}", s));
-        
+
         Ok(())
     }
 }
@@ -80,8 +80,10 @@ impl fmt::Write for DualConsole {
 pub fn print_boot_banner() {
     console_println!("╔════════════════════════════════════════════════════════════════╗");
     console_println!("║              PandaOS - Unix-like x86_64 Kernel                 ║");
-    console_println!("║                    Version {}                          ║", 
-                     env!("CARGO_PKG_VERSION"));
+    console_println!(
+        "║                    Version {}                          ║",
+        env!("CARGO_PKG_VERSION")
+    );
     console_println!("╚════════════════════════════════════════════════════════════════╝");
     console_println!();
 }

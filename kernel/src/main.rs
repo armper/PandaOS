@@ -35,6 +35,8 @@ extern crate panda_hal;
 
 pub mod boot_diagnostics;
 pub mod boot_phases;
+#[cfg(feature = "boot-watchdog")]
+pub mod boot_watchdog;
 pub mod console;
 pub mod context;
 pub mod context_switch;
@@ -84,10 +86,15 @@ pub extern "C" fn _start(boot_info: &'static bootloader::BootInfo) -> ! {
     BOOT_STEP!(1);
     // Explicit early boot log to confirm serial is working
     serial_println!("[BOOT] serial ok");
-    
+
+    // Start boot watchdog if feature is enabled
+    // Timeout after 30 seconds at 100Hz (3000 ticks)
+    #[cfg(feature = "boot-watchdog")]
+    boot_watchdog::start(3000);
+
     // Print boot banner to all consoles
     console::print_boot_banner();
-    
+
     console_println!("Hardware abstraction layer initialized");
 
     BOOT_STEP!(2);
@@ -229,7 +236,7 @@ fn panic(info: &PanicInfo) -> ! {
     serial_println!("╚════════════════════════════════════════════════════════════════╝");
     serial_println!();
     serial_println!("Panic: {}", info);
-    
+
     #[cfg(feature = "vga-console")]
     {
         console_println!("\n╔════════════════════════════════════════════════════════════════╗");
@@ -238,16 +245,16 @@ fn panic(info: &PanicInfo) -> ! {
         console_println!();
         console_println!("Panic: {}", info);
     }
-    
+
     // Print diagnostic information
     let cpu_id = boot_diagnostics::get_cpu_id();
     let cr3 = boot_diagnostics::get_cr3();
     let rsp = boot_diagnostics::get_rsp();
-    
+
     serial_println!("CPU ID: {}", cpu_id);
     serial_println!("CR3:    {:#018x}", cr3);
     serial_println!("RSP:    {:#018x}", rsp);
-    
+
     #[cfg(feature = "vga-console")]
     {
         console_println!("CPU ID: {}", cpu_id);
@@ -468,6 +475,10 @@ unsafe fn init_scheduler_and_start() -> ! {
     // Print ready marker before starting scheduler
     console::print_ready_marker();
 
+    // Stop boot watchdog - boot completed successfully
+    #[cfg(feature = "boot-watchdog")]
+    boot_watchdog::stop();
+
     println!("Starting scheduler...");
     println!("======================================");
 
@@ -494,6 +505,16 @@ unsafe fn get_scheduler() -> &'static mut scheduler::Scheduler {
 
 /// Timer interrupt handler - called on each timer tick
 fn timer_tick_handler() {
+    // Tick the boot watchdog if enabled
+    #[cfg(feature = "boot-watchdog")]
+    {
+        if boot_watchdog::tick() {
+            // Boot timeout occurred
+            serial_println!("Boot watchdog timeout - exiting QEMU");
+            exit_qemu(QemuExitCode::Failed);
+        }
+    }
+
     // For now, just acknowledge the timer tick
     // Full preemptive multitasking would require saving interrupt frame state
     // and switching page tables, which is complex. Start with yield-based switching.
