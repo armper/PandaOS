@@ -116,13 +116,28 @@ Kernel functionality tested in QEMU with custom test harness:
 
 - Rust nightly toolchain (automatically installed via `rust-toolchain.toml`)
 - `rust-src` and `llvm-tools-preview` components (required for bare-metal builds)
-- QEMU for testing (optional)
+- QEMU for testing (optional but recommended)
 - `bootimage` (optional, required for `cargo bootimage` / QEMU runner)
 
-On macOS:
+**macOS:**
 ```bash
 rustup component add rust-src llvm-tools-preview
 cargo install bootimage --version "^0.10"
+brew install qemu  # Optional but recommended
+```
+
+**Linux (Ubuntu/Debian):**
+```bash
+rustup component add rust-src llvm-tools-preview
+cargo install bootimage --version "^0.10"
+sudo apt-get install qemu-system-x86  # Optional but recommended
+```
+
+**Linux (Fedora/RHEL):**
+```bash
+rustup component add rust-src llvm-tools-preview
+cargo install bootimage --version "^0.10"
+sudo dnf install qemu-system-x86  # Optional but recommended
 ```
 
 ### Build Commands
@@ -130,11 +145,105 @@ cargo install bootimage --version "^0.10"
 - `make build` - Build kernel in debug mode
 - `make release` - Build kernel in release mode  
 - `make bootimage` - Create bootable disk image (requires bootimage)
-- `make run` - Build and run in QEMU
+- `make fs.img` - Generate filesystem image with disk utility
 - `make test` - Run all tests
 - `make fmt` - Format code
 - `make clippy` - Run lints
 - `make clean` - Clean build artifacts
+
+### Running PandaOS in QEMU
+
+PandaOS includes a flexible runner script that supports multiple display modes:
+
+#### Quick Start (Serial Output in Terminal)
+```bash
+make bootimage  # Build bootimage first
+SERIAL_STDIO=1 ./scripts/run-qemu.sh
+```
+
+Or use the Makefile shortcut:
+```bash
+make run  # Runs in headless mode with serial output
+```
+
+#### Display Modes
+
+**1. Serial stdio mode (default)** - Terminal shows serial output:
+```bash
+SERIAL_STDIO=1 ./scripts/run-qemu.sh
+```
+
+**2. GUI VGA mode** - QEMU window shows VGA text:
+```bash
+GUI_VGA=1 ./scripts/run-qemu.sh
+```
+
+**3. Both modes** - VGA window + serial in terminal:
+```bash
+BOTH=1 ./scripts/run-qemu.sh
+```
+
+**4. Headless mode** - No display, serial only:
+```bash
+HEADLESS=1 ./scripts/run-qemu.sh
+```
+
+**5. GUI with Makefile** - Use the make target:
+```bash
+make run-gui  # Opens QEMU window with VGA display
+```
+
+#### Custom QEMU Arguments
+
+Pass additional QEMU arguments via `QEMU_ARGS`:
+```bash
+QEMU_ARGS="-m 512M -smp 2" SERIAL_STDIO=1 ./scripts/run-qemu.sh
+```
+
+#### Enabling VGA Console
+
+To see boot messages on the VGA display, build with the `vga-console` feature:
+```bash
+cargo build --manifest-path kernel/Cargo.toml \
+            --target x86_64-unknown-none \
+            --features vga-console
+make bootimage
+GUI_VGA=1 ./scripts/run-qemu.sh
+```
+
+#### Boot Success Indicators
+
+When PandaOS boots successfully, you'll see:
+
+1. **Boot banner:**
+   ```
+   ╔════════════════════════════════════════════════════════════════╗
+   ║              PandaOS - Unix-like x86_64 Kernel                 ║
+   ║                    Version X.X.X                               ║
+   ╚════════════════════════════════════════════════════════════════╝
+   ```
+
+2. **Boot step markers** (BOOT STEP 1-11) showing initialization progress
+
+3. **Ready marker:**
+   ```
+   ════════════════════════════════════════════════════════════════
+                           PANDA READY
+   ════════════════════════════════════════════════════════════════
+   ```
+
+4. **Shell prompt:**
+   ```
+   panda>
+   ```
+
+#### Troubleshooting
+
+If you encounter issues booting or running PandaOS, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for:
+- Common boot failures and solutions
+- Display issues (black screen, no serial output)
+- Debugging tips and QEMU options
+- Boot diagnostics interpretation
 
 ## Development
 

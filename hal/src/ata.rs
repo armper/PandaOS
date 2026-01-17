@@ -36,7 +36,7 @@ const ATA_CMD_WRITE_SECTORS: u8 = 0x30;
 pub struct AtaDisk {
     io_base: u16,
     /// Drive select base value: 0xE0 for master, 0xF0 for slave
-    /// This base value is ORed with the upper 4 bits of the LBA
+    /// This base value is `OR`ed with the upper 4 bits of the LBA
     drive_select_base: u8,
 }
 
@@ -207,7 +207,7 @@ impl BlockDevice for AtaDisk {
         let mut data_port: Port<u16> = Port::new(self.io_base + ATA_DATA);
         for i in 0..256 {
             let offset = i * 2;
-            let word = (buffer[offset] as u16) | ((buffer[offset + 1] as u16) << 8);
+            let word = u16::from(buffer[offset]) | (u16::from(buffer[offset + 1]) << 8);
             // SAFETY: Writing data to ATA data port
             unsafe { data_port.write(word) };
         }

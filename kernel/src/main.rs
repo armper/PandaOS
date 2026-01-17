@@ -35,6 +35,9 @@ extern crate panda_hal;
 
 pub mod boot_diagnostics;
 pub mod boot_phases;
+#[cfg(feature = "boot-watchdog")]
+pub mod boot_watchdog;
+pub mod console;
 pub mod context;
 pub mod context_switch;
 pub mod diskfs;
@@ -83,9 +86,16 @@ pub extern "C" fn _start(boot_info: &'static bootloader::BootInfo) -> ! {
     BOOT_STEP!(1);
     // Explicit early boot log to confirm serial is working
     serial_println!("[BOOT] serial ok");
-    serial_println!("Serial output initialized");
-    println!("PandaOS v{}", env!("CARGO_PKG_VERSION"));
-    println!("Hardware abstraction layer initialized");
+
+    // Start boot watchdog if feature is enabled
+    // Timeout after 30 seconds at 100Hz (3000 ticks)
+    #[cfg(feature = "boot-watchdog")]
+    boot_watchdog::start(3000);
+
+    // Print boot banner to all consoles
+    console::print_boot_banner();
+
+    console_println!("Hardware abstraction layer initialized");
 
     BOOT_STEP!(2);
     // SAFETY: HAL is now initialized, safe to proceed
@@ -103,22 +113,22 @@ pub extern "C" fn _start(boot_info: &'static bootloader::BootInfo) -> ! {
         paging::init_identity_map_minimal().expect("Failed to initialize identity mapping");
         paging::init_higher_half_mapping().expect("Failed to initialize higher-half mapping");
     }
-    println!("Paging infrastructure initialized");
+    console_println!("Paging infrastructure initialized");
 
     BOOT_STEP!(4);
     // Initialize GDT (must be before interrupts are enabled)
     unsafe { gdt::init() };
-    println!("GDT initialized");
+    console_println!("GDT initialized");
 
     BOOT_STEP!(5);
     // Initialize interrupts (after GDT)
     interrupts::init();
-    println!("Interrupt handling initialized");
+    console_println!("Interrupt handling initialized");
 
     BOOT_STEP!(6);
     // Initialize syscall/sysret support (after GDT and interrupts)
     unsafe { usermode::init_syscall() };
-    println!("Syscall/sysret initialized");
+    console_println!("Syscall/sysret initialized");
 
     BOOT_STEP!(7);
     // Map heap region (allocate frames and map pages)
@@ -126,12 +136,12 @@ pub extern "C" fn _start(boot_info: &'static bootloader::BootInfo) -> ! {
     unsafe {
         heap::map_heap().expect("Failed to map heap");
     }
-    println!("Heap region mapped");
+    console_println!("Heap region mapped");
 
     BOOT_STEP!(8);
     // Initialize heap allocator (after heap is mapped)
     unsafe { heap::init() };
-    println!("Heap allocator initialized");
+    console_println!("Heap allocator initialized");
 
     // Test heap allocation
     {
@@ -140,7 +150,7 @@ pub extern "C" fn _start(boot_info: &'static bootloader::BootInfo) -> ! {
         test_vec.push(1);
         test_vec.push(2);
         test_vec.push(3);
-        println!("Heap test passed: {:?}", test_vec);
+        console_println!("Heap test passed: {:?}", test_vec);
     }
 
     BOOT_STEP!(9);
@@ -169,24 +179,24 @@ pub extern "C" fn _start(boot_info: &'static bootloader::BootInfo) -> ! {
     {
         // Initialize mount table
         mount::init_mount_table();
-        println!("Mount table initialized");
+        console_println!("Mount table initialized");
 
         // Mount tmpfs at /tmp
         match mount::mount_tmpfs_at_tmp() {
-            Ok(()) => println!("Tmpfs mounted at /tmp"),
-            Err(e) => println!("Warning: Failed to mount tmpfs at /tmp: {:?}", e),
+            Ok(()) => console_println!("Tmpfs mounted at /tmp"),
+            Err(e) => console_println!("Warning: Failed to mount tmpfs at /tmp: {:?}", e),
         }
 
         // Mount disk filesystem at /mnt
         match mount::mount_disk_at_mnt() {
-            Ok(()) => println!("Disk filesystem mounted at /mnt"),
-            Err(e) => println!("Warning: Failed to mount disk at /mnt: {:?}", e),
+            Ok(()) => console_println!("Disk filesystem mounted at /mnt"),
+            Err(e) => console_println!("Warning: Failed to mount disk at /mnt: {:?}", e),
         }
 
         BOOT_STEP!(10);
         // Finalize boot
         let _state = state.finalize();
-        println!("Kernel initialization complete!");
+        console_println!("Kernel initialization complete!");
 
         #[cfg(test)]
         test_main();
@@ -220,8 +230,37 @@ pub extern "C" fn _start(boot_info: &'static bootloader::BootInfo) -> ! {
 /// Panic handler for the kernel
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
-    println!("KERNEL PANIC: {}", info);
-    serial_println!("KERNEL PANIC: {}", info);
+    // Print panic marker to both serial and console
+    serial_println!("\n╔════════════════════════════════════════════════════════════════╗");
+    serial_println!("║                      KERNEL PANIC                              ║");
+    serial_println!("╚════════════════════════════════════════════════════════════════╝");
+    serial_println!();
+    serial_println!("Panic: {}", info);
+
+    #[cfg(feature = "vga-console")]
+    {
+        console_println!("\n╔════════════════════════════════════════════════════════════════╗");
+        console_println!("║                      KERNEL PANIC                              ║");
+        console_println!("╚════════════════════════════════════════════════════════════════╝");
+        console_println!();
+        console_println!("Panic: {}", info);
+    }
+
+    // Print diagnostic information
+    let cpu_id = boot_diagnostics::get_cpu_id();
+    let cr3 = boot_diagnostics::get_cr3();
+    let rsp = boot_diagnostics::get_rsp();
+
+    serial_println!("CPU ID: {}", cpu_id);
+    serial_println!("CR3:    {:#018x}", cr3);
+    serial_println!("RSP:    {:#018x}", rsp);
+
+    #[cfg(feature = "vga-console")]
+    {
+        console_println!("CPU ID: {}", cpu_id);
+        console_println!("CR3:    {:#018x}", cr3);
+        console_println!("RSP:    {:#018x}", rsp);
+    }
 
     // Dump boot diagnostics to help debug
     boot_diagnostics::dump_boot_diagnostics();
@@ -433,6 +472,13 @@ unsafe fn init_scheduler_and_start() -> ! {
         pic::unmask_irq(0);
     }
 
+    // Print ready marker before starting scheduler
+    console::print_ready_marker();
+
+    // Stop boot watchdog - boot completed successfully
+    #[cfg(feature = "boot-watchdog")]
+    boot_watchdog::stop();
+
     println!("Starting scheduler...");
     println!("======================================");
 
@@ -459,6 +505,16 @@ unsafe fn get_scheduler() -> &'static mut scheduler::Scheduler {
 
 /// Timer interrupt handler - called on each timer tick
 fn timer_tick_handler() {
+    // Tick the boot watchdog if enabled
+    #[cfg(feature = "boot-watchdog")]
+    {
+        if boot_watchdog::tick() {
+            // Boot timeout occurred
+            serial_println!("Boot watchdog timeout - exiting QEMU");
+            exit_qemu(QemuExitCode::Failed);
+        }
+    }
+
     // For now, just acknowledge the timer tick
     // Full preemptive multitasking would require saving interrupt frame state
     // and switching page tables, which is complex. Start with yield-based switching.
