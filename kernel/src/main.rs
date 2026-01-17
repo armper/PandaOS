@@ -462,6 +462,7 @@ unsafe fn init_scheduler_and_start() -> ! {
     syscall::set_setuid_handler(setuid_handler);
     syscall::set_setgid_handler(setgid_handler);
     syscall::set_signal_handler(signal_handler);
+    syscall::set_stop_signal_handler(stop_signal_handler);
     syscall::set_lseek_handler(lseek_handler);
     syscall::set_mkdir_handler(mkdir_handler);
     syscall::set_rmdir_handler(rmdir_handler);
@@ -1095,6 +1096,24 @@ fn signal_handler() {
         }
     } else {
         serial_println!("[TTY] Ctrl+C: no foreground process group");
+    }
+}
+
+/// Handle Ctrl+Z by sending SIGTSTP to foreground process group
+fn stop_signal_handler() {
+    use crate::process::Signal;
+
+    // SAFETY: Called from syscall context with interrupts disabled
+    let scheduler = unsafe { get_scheduler() };
+
+    if let Some(pgid) = scheduler.foreground_pgid() {
+        serial_println!("[TTY] Ctrl+Z: sending SIGTSTP to foreground pgid {}", pgid.as_u64());
+        let count = scheduler.signal_process_group(pgid, Signal::SIGTSTP);
+        if count > 0 {
+            serial_println!("[TTY] Stopped {} processes", count);
+        }
+    } else {
+        serial_println!("[TTY] Ctrl+Z: no foreground process group");
     }
 }
 
@@ -1946,8 +1965,12 @@ fn mmap_handler(
 fn waitpid_handler(pid: i64, status_ptr: u64, options: i32) -> syscall::SyscallResult {
     serial_println!("[WAITPID] pid={}, status_ptr={:#x}, options={}", pid, status_ptr, options);
 
-    // Only support options=0
-    if options != 0 {
+    // Support WUNTRACED option (0x2)
+    const WUNTRACED: i32 = 0x2;
+    let wuntraced = (options & WUNTRACED) != 0;
+
+    // Only support options=0 or WUNTRACED
+    if options != 0 && options != WUNTRACED {
         return Err(syscall::ErrorCode::EINVAL);
     }
 
@@ -1956,6 +1979,25 @@ fn waitpid_handler(pid: i64, status_ptr: u64, options: i32) -> syscall::SyscallR
 
     let parent = scheduler.current_process().ok_or(syscall::ErrorCode::ESRCH)?;
     let parent_pid = parent.pid;
+
+    // First, check for stopped children if WUNTRACED is set
+    if wuntraced {
+        if let Some(stopped_pid) = scheduler.find_stopped_child(parent_pid) {
+            serial_println!("[WAITPID] Found stopped child PID {}", stopped_pid.as_u64());
+
+            // Write stop status to user if pointer is non-null
+            // Status format for stopped: 0x7f (127) in low byte, signal in next byte
+            // For SIGTSTP (20): (20 << 8) | 0x7f = 0x147f
+            if status_ptr != 0 {
+                let status = ((crate::process::Signal::SIGTSTP as u32) << 8) | 0x7f;
+                let status_bytes = status.to_ne_bytes();
+                crate::usermode::copy_to_user_bytes(status_ptr, &status_bytes)?;
+            }
+
+            // Return child PID (don't reap stopped processes)
+            return Ok(stopped_pid.as_u64());
+        }
+    }
 
     // Find zombie child
     let zombie = if pid == -1 {
@@ -2023,11 +2065,30 @@ fn waitpid_handler(pid: i64, status_ptr: u64, options: i32) -> syscall::SyscallR
                 // The yield handler will call schedule_next which will skip blocked processes
                 yield_handler();
 
-                // After returning from yield (when woken), retry to find zombie
+                // After returning from yield (when woken), retry to find zombie or stopped
                 // Get fresh scheduler reference after context switch
                 let scheduler = unsafe { get_scheduler() };
                 let parent = scheduler.current_process().ok_or(syscall::ErrorCode::ESRCH)?;
                 let parent_pid = parent.pid;
+
+                // Check for stopped children again if WUNTRACED is set
+                if wuntraced {
+                    if let Some(stopped_pid) = scheduler.find_stopped_child(parent_pid) {
+                        serial_println!(
+                            "[WAITPID] After wake, found stopped child PID {}",
+                            stopped_pid.as_u64()
+                        );
+
+                        // Write stop status to user if pointer is non-null
+                        if status_ptr != 0 {
+                            let status = ((crate::process::Signal::SIGTSTP as u32) << 8) | 0x7f;
+                            let status_bytes = status.to_ne_bytes();
+                            crate::usermode::copy_to_user_bytes(status_ptr, &status_bytes)?;
+                        }
+
+                        return Ok(stopped_pid.as_u64());
+                    }
+                }
 
                 let zombie_after_wake = if pid == -1 {
                     scheduler.find_any_zombie_child(parent_pid)

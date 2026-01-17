@@ -139,7 +139,12 @@ echo "Building printenv..."
 nasm -f elf64 printenv.asm -o build/printenv.o
 $LINKER -o build/printenv build/printenv.o -static -nostdlib --entry=_start
 
-cp build/hello build/hello1 build/hello2 build/init build/sh build/cat build/true build/echo build/wc build/ls build/chmod build/id build/su build/chown build/brk_test build/mmap_test build/vm_test build/touch build/mkdir build/rm build/mv build/cp build/args build/printenv bin/
+# Build sleepy program
+echo "Building sleepy..."
+nasm -f elf64 sleepy.asm -o build/sleepy.o
+$LINKER -o build/sleepy build/sleepy.o -static -nostdlib --entry=_start
+
+cp build/hello build/hello1 build/hello2 build/init build/sh build/cat build/true build/echo build/wc build/ls build/chmod build/id build/su build/chown build/brk_test build/mmap_test build/vm_test build/touch build/mkdir build/rm build/mv build/cp build/args build/printenv build/sleepy bin/
 
 echo "Userland programs built successfully!"
 ls -lh build/

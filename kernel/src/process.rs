@@ -81,6 +81,10 @@ impl HeapInfo {
 pub enum Signal {
     /// SIGINT - Interrupt signal (Ctrl+C)
     SIGINT = 2,
+    /// SIGCONT - Continue stopped process
+    SIGCONT = 18,
+    /// SIGTSTP - Terminal stop signal (Ctrl+Z)
+    SIGTSTP = 20,
 }
 
 impl Signal {
@@ -88,9 +92,24 @@ impl Signal {
     pub const fn from_u32(n: u32) -> Option<Self> {
         match n {
             2 => Some(Self::SIGINT),
+            18 => Some(Self::SIGCONT),
+            20 => Some(Self::SIGTSTP),
             _ => None,
         }
     }
+}
+
+/// Signal action to take after delivery
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignalAction {
+    /// No action needed
+    None,
+    /// Terminate the process
+    Terminate,
+    /// Stop (suspend) the process
+    Stop,
+    /// Continue a stopped process
+    Continue,
 }
 
 /// Wait state for blocking operations
@@ -111,6 +130,8 @@ pub enum ProcessState {
     Ready,
     /// Process is currently running
     Running,
+    /// Process is stopped (suspended)
+    Stopped,
     /// Process has exited
     Exited(i32),
     /// Process is a zombie (exited but not yet reaped by parent)
@@ -408,6 +429,23 @@ impl Process {
         matches!(self.state, ProcessState::Zombie(_))
     }
 
+    /// Mark process as stopped (suspended)
+    pub fn set_stopped(&mut self) {
+        self.state = ProcessState::Stopped;
+    }
+
+    /// Check if process is stopped
+    pub const fn is_stopped(&self) -> bool {
+        matches!(self.state, ProcessState::Stopped)
+    }
+
+    /// Resume a stopped process (transition to Ready state)
+    pub fn resume(&mut self) {
+        if self.is_stopped() {
+            self.state = ProcessState::Ready;
+        }
+    }
+
     /// Send a signal to this process
     ///
     /// Signals are stored as a bitmask in pending_signals.
@@ -432,16 +470,36 @@ impl Process {
         self.pending_signals &= !(1 << (signal as u32));
     }
 
-    /// Deliver pending signals and return true if process should be terminated
+    /// Deliver pending signals and return signal action
     ///
-    /// For SIGINT, the default action is to terminate the process.
-    pub fn deliver_signals(&mut self) -> bool {
+    /// Returns:
+    /// - `SignalAction::Terminate` - Process should be terminated (SIGINT)
+    /// - `SignalAction::Stop` - Process should be stopped (SIGTSTP)
+    /// - `SignalAction::Continue` - Process should be continued (SIGCONT)
+    /// - `SignalAction::None` - No action needed
+    pub fn deliver_signals(&mut self) -> SignalAction {
+        // SIGCONT resumes stopped processes
+        if self.has_signal(Signal::SIGCONT) {
+            self.clear_signal(Signal::SIGCONT);
+            if self.is_stopped() {
+                self.resume();
+            }
+            return SignalAction::Continue;
+        }
+
+        // SIGTSTP stops the process
+        if self.has_signal(Signal::SIGTSTP) {
+            self.clear_signal(Signal::SIGTSTP);
+            return SignalAction::Stop;
+        }
+
+        // SIGINT terminates the process
         if self.has_signal(Signal::SIGINT) {
             self.clear_signal(Signal::SIGINT);
-            // Default action: terminate
-            return true;
+            return SignalAction::Terminate;
         }
-        false
+
+        SignalAction::None
     }
 
     /// Check if process is blocked (waiting)

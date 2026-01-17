@@ -1278,32 +1278,51 @@ A feature is "done" when:
 5. Update this architecture doc for major changes
 6. Follow the "definition of done" checklist
 
-## Signal Support (Minimal)
+## Signal Support
 
-PandaOS implements minimal SIGINT handling for Ctrl+C support:
+PandaOS implements basic POSIX signal handling for job control:
 
 ### Supported Signals
-- **SIGINT** (signal #2) - Interrupt signal (Ctrl+C)
+- **SIGINT** (signal #2) - Interrupt signal (Ctrl+C) - terminates process
+- **SIGCONT** (signal #18) - Continue stopped process - resumes execution
+- **SIGTSTP** (signal #20) - Terminal stop signal (Ctrl+Z) - suspends process
 
 ### Signal Delivery
 - Signals stored as bitmask in `Process.pending_signals`
 - Delivered when process is scheduled via `schedule_next()`
-- Default action: terminate process with exit code 130 (128 + 2)
+- Default actions:
+  - **SIGINT**: terminate process with exit code 130 (128 + 2)
+  - **SIGTSTP**: stop (suspend) process, transition to `Stopped` state
+  - **SIGCONT**: resume stopped process, transition to `Ready` state
+
+### Process States
+- **Ready**: Process is ready to run
+- **Running**: Process is currently executing
+- **Stopped**: Process is suspended (by SIGTSTP), not scheduled
+- **Zombie**: Process has exited but not yet reaped
+- **Exited**: Process has exited and has no parent
+
+Stopped processes remain in the scheduler but are skipped during scheduling until they receive SIGCONT.
 
 ### Syscalls
 - `kill(pid, sig)` - syscall #37
-  - Send SIGINT to a target process
-  - Currently only works if target is current process
-  - Returns ESRCH if target PID not found
+  - Send signal to a process or process group
+  - Negative PID targets process group: `kill(-pgid, SIGTSTP)`
+  - Returns ESRCH if target PID/PGID not found
+
+- `waitpid(pid, status, options)` - syscall #61
+  - **WUNTRACED** option (0x2): Also report stopped children
+  - Status encoding for stopped: `(signal << 8) | 0x7f`
+  - Parent is woken when child stops (if waiting with WUNTRACED)
+
+### TTY Integration
+- **Ctrl+C** (0x03): Sends SIGINT to foreground process group
+- **Ctrl+Z** (0x1A): Sends SIGTSTP to foreground process group
+- Both clear the input line and echo control character (^C or ^Z)
 
 ### Limitations
-- No custom signal handlers (only default termination)
-- No other signals (SIGTSTP, SIGCONT, etc.)
-- No process groups or job control
+- No custom signal handlers (only default actions)
 - No signal blocking or masking
-
-### Shell Integration
-- Shell detects Ctrl+C (byte 0x03) on stdin
-- When idle: clears input line and reprints prompt  
-- When child running: should send SIGINT to child (not yet implemented)
+- No other signals (SIGTERM, SIGKILL, SIGHUP, etc.)
+- SIGCONT always resumes stopped processes (cannot be ignored)
 

@@ -74,10 +74,14 @@ impl Scheduler {
     ///
     /// Selects the next process from the ready queue in round-robin order.
     /// If a process is currently running, it is moved back to the ready queue
-    /// (unless it has exited). Blocked processes are skipped.
+    /// (unless it has exited or stopped). Blocked and stopped processes are skipped.
     ///
-    /// This also checks for pending signals and terminates processes that
-    /// receive SIGINT. Signal delivery can also wake blocked processes.
+    /// This also checks for pending signals and handles:
+    /// - SIGINT: terminates the process
+    /// - SIGTSTP: stops the process
+    /// - SIGCONT: resumes stopped processes
+    ///
+    /// Signal delivery can also wake blocked processes.
     ///
     /// # Returns
     ///
@@ -88,28 +92,39 @@ impl Scheduler {
         if let Some(mut proc) = self.current.take() {
             if !proc.is_exited() {
                 // Check for pending signals before re-queueing
-                if proc.deliver_signals() {
-                    // Process was terminated by signal
-                    // Exit code = 128 + signal number (standard Unix convention)
-                    proc.set_exited(128 + crate::process::Signal::SIGINT as i32);
-                } else {
-                    // Wake up if there are pending signals (even if not terminating)
-                    if proc.pending_signals != 0 {
-                        proc.wake();
+                match proc.deliver_signals() {
+                    crate::process::SignalAction::Terminate => {
+                        // Process was terminated by signal
+                        // Exit code = 128 + signal number (standard Unix convention)
+                        proc.set_exited(128 + crate::process::Signal::SIGINT as i32);
                     }
-                    proc.state = ProcessState::Ready;
-                    self.ready_queue.push_back(proc);
+                    crate::process::SignalAction::Stop => {
+                        // Process was stopped by SIGTSTP
+                        let child_pid = proc.pid;
+                        proc.set_stopped();
+                        self.ready_queue.push_back(proc);
+                        // Wake parent waiting with WUNTRACED
+                        self.wake_waiters_for_stopped_child(child_pid);
+                    }
+                    crate::process::SignalAction::Continue | crate::process::SignalAction::None => {
+                        // Wake up if there are pending signals (even if not terminating)
+                        if proc.pending_signals != 0 {
+                            proc.wake();
+                        }
+                        proc.state = ProcessState::Ready;
+                        self.ready_queue.push_back(proc);
+                    }
                 }
             }
             // If exited, drop it (it won't be added back to queue)
         }
 
-        // Find next runnable (not blocked) process from ready queue
+        // Find next runnable (not blocked, not stopped) process from ready queue
         let ready_count = self.ready_queue.len();
         for _ in 0..ready_count {
             if let Some(mut next_proc) = self.ready_queue.pop_front() {
-                if next_proc.is_blocked() {
-                    // Process is blocked, put it back at the end and try next
+                if next_proc.is_blocked() || next_proc.is_stopped() {
+                    // Process is blocked or stopped, put it back at the end and try next
                     self.ready_queue.push_back(next_proc);
                 } else {
                     // Found a runnable process
@@ -274,6 +289,43 @@ impl Scheduler {
         self.ready_queue.iter().any(|p| p.parent_pid == Some(parent_pid))
     }
 
+    /// Check if a process has any stopped children
+    pub fn has_stopped_children(&self, parent_pid: panda_hal::pid::Pid) -> bool {
+        // Check current process
+        if let Some(proc) = &self.current {
+            if proc.parent_pid == Some(parent_pid) && proc.is_stopped() {
+                return true;
+            }
+        }
+
+        // Check ready queue
+        self.ready_queue.iter().any(|p| p.parent_pid == Some(parent_pid) && p.is_stopped())
+    }
+
+    /// Find a stopped child of the given parent PID
+    ///
+    /// # Returns
+    ///
+    /// - `Some(&Process)` - A stopped child process (not removed from queue)
+    /// - `None` - No stopped children found
+    pub fn find_stopped_child(
+        &self,
+        parent_pid: panda_hal::pid::Pid,
+    ) -> Option<panda_hal::pid::Pid> {
+        // Check current process first
+        if let Some(proc) = &self.current {
+            if proc.is_stopped() && proc.parent_pid == Some(parent_pid) {
+                return Some(proc.pid);
+            }
+        }
+
+        // Check ready queue
+        self.ready_queue
+            .iter()
+            .find(|p| p.is_stopped() && p.parent_pid == Some(parent_pid))
+            .map(|p| p.pid)
+    }
+
     /// Wake processes waiting for a specific child to exit
     ///
     /// Called when a child process exits to wake its parent if it's waiting
@@ -291,6 +343,15 @@ impl Scheduler {
                 proc.wake();
             }
         }
+    }
+
+    /// Wake processes waiting for a child that has stopped (for WUNTRACED)
+    ///
+    /// Called when a child process stops to wake its parent if it's waiting with WUNTRACED
+    pub fn wake_waiters_for_stopped_child(&mut self, child_pid: panda_hal::pid::Pid) {
+        // For now, use the same wake logic as exit
+        // In a full implementation, we'd check for WUNTRACED flag
+        self.wake_waiters_for_child(child_pid);
     }
 
     /// Get all processes (for debugging/testing)
