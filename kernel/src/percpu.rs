@@ -59,7 +59,7 @@ impl CpuLocal {
         if pid == 0 {
             None
         } else {
-            Some(Pid::from_u64(pid))
+            Some(Pid::new(pid))
         }
     }
 

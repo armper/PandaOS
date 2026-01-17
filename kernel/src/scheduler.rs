@@ -27,14 +27,13 @@
 //! - No data races on process state
 
 use crate::process::{Process, ProcessState};
-use crate::spinlock_irq::SpinLockIrq;
 use alloc::collections::VecDeque;
 
-/// Round-robin process scheduler (inner state)
+/// Round-robin process scheduler
 ///
 /// The scheduler maintains a queue of runnable processes and selects
 /// the next process to run in a fair, round-robin manner.
-struct SchedulerInner {
+pub struct Scheduler {
     /// Queue of ready-to-run processes
     ready_queue: VecDeque<Process>,
     /// Currently running process (if any)
@@ -43,21 +42,10 @@ struct SchedulerInner {
     foreground_pgid: Option<panda_hal::pid::Pid>,
 }
 
-/// Thread-safe scheduler wrapper
-pub struct Scheduler {
-    inner: SpinLockIrq<SchedulerInner>,
-}
-
 impl Scheduler {
     /// Create a new empty scheduler
     pub fn new() -> Self {
-        Self {
-            inner: SpinLockIrq::new(SchedulerInner {
-                ready_queue: VecDeque::new(),
-                current: None,
-                foreground_pgid: None,
-            }),
-        }
+        Self { ready_queue: VecDeque::new(), current: None, foreground_pgid: None }
     }
 
     /// Add a process to the scheduler
@@ -72,15 +60,14 @@ impl Scheduler {
     /// # Panics
     ///
     /// Panics if the process is not in Ready state
-    pub fn add_process(&self, mut process: Process) {
-        let mut inner = self.inner.lock();
+    pub fn add_process(&mut self, mut process: Process) {
         assert_eq!(
             process.state,
             ProcessState::Ready,
             "Process must be in Ready state when added to scheduler"
         );
         process.state = ProcessState::Ready;
-        inner.ready_queue.push_back(process);
+        self.ready_queue.push_back(process);
     }
 
     /// Get the next process to run
@@ -96,17 +83,9 @@ impl Scheduler {
     ///
     /// - `Some(&mut Process)` - The next process to run
     /// - `None` - No processes are available to run
-    pub fn schedule_next(&self) -> Option<&mut Process> {
-        // SAFETY: We need to return a mutable reference that outlives the lock guard
-        // This is safe because:
-        // 1. Only one CPU can hold the scheduler lock at a time
-        // 2. The returned reference is to the current process field
-        // 3. Callers must ensure they're done with the reference before calling schedule_next again
-        let inner_ptr = self.inner.lock().deref_mut() as *mut SchedulerInner;
-        let inner = unsafe { &mut *inner_ptr };
-
+    pub fn schedule_next(&mut self) -> Option<&mut Process> {
         // If there's a current process that's not exited, move it back to ready queue
-        if let Some(mut proc) = inner.current.take() {
+        if let Some(mut proc) = self.current.take() {
             if !proc.is_exited() {
                 // Check for pending signals before re-queueing
                 if proc.deliver_signals() {
@@ -119,24 +98,24 @@ impl Scheduler {
                         proc.wake();
                     }
                     proc.state = ProcessState::Ready;
-                    inner.ready_queue.push_back(proc);
+                    self.ready_queue.push_back(proc);
                 }
             }
             // If exited, drop it (it won't be added back to queue)
         }
 
         // Find next runnable (not blocked) process from ready queue
-        let ready_count = inner.ready_queue.len();
+        let ready_count = self.ready_queue.len();
         for _ in 0..ready_count {
-            if let Some(mut next_proc) = inner.ready_queue.pop_front() {
+            if let Some(mut next_proc) = self.ready_queue.pop_front() {
                 if next_proc.is_blocked() {
                     // Process is blocked, put it back at the end and try next
-                    inner.ready_queue.push_back(next_proc);
+                    self.ready_queue.push_back(next_proc);
                 } else {
                     // Found a runnable process
                     next_proc.state = ProcessState::Running;
-                    inner.current = Some(next_proc);
-                    return inner.current.as_mut();
+                    self.current = Some(next_proc);
+                    return self.current.as_mut();
                 }
             }
         }
@@ -152,11 +131,7 @@ impl Scheduler {
     /// - `Some(&Process)` - The currently running process
     /// - `None` - No process is currently running
     pub fn current_process(&self) -> Option<&Process> {
-        // SAFETY: We need to return a reference that outlives the lock guard
-        // This is safe because we're only reading, not mutating
-        let inner = self.inner.lock();
-        let current_ref = inner.current.as_ref()?;
-        Some(unsafe { &*(current_ref as *const Process) })
+        self.current.as_ref()
     }
 
     /// Get a mutable reference to the currently running process
@@ -165,11 +140,8 @@ impl Scheduler {
     ///
     /// - `Some(&mut Process)` - The currently running process
     /// - `None` - No process is currently running
-    pub fn current_process_mut(&self) -> Option<&mut Process> {
-        // SAFETY: Similar to schedule_next, we return a mutable reference that outlives the guard
-        let mut inner = self.inner.lock();
-        let current_ref = inner.current.as_mut()?;
-        Some(unsafe { &mut *(current_ref as *mut Process) })
+    pub fn current_process_mut(&mut self) -> Option<&mut Process> {
+        self.current.as_mut()
     }
 
     /// Mark the current process as exited
