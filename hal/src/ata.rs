@@ -35,6 +35,7 @@ const ATA_CMD_WRITE_SECTORS: u8 = 0x30;
 #[cfg(feature = "hardware")]
 pub struct AtaDisk {
     io_base: u16,
+    drive_select_base: u8,  // 0xE0 for master, 0xF0 for slave
 }
 
 #[cfg(feature = "hardware")]
@@ -45,7 +46,16 @@ impl AtaDisk {
     /// Must only be called once, and only after proper hardware initialization.
     /// Assumes the ATA controller is present and configured.
     pub const unsafe fn new() -> Self {
-        Self { io_base: ATA_PRIMARY_IO }
+        Self { io_base: ATA_PRIMARY_IO, drive_select_base: 0xE0 }
+    }
+
+    /// Create a new ATA disk driver for the primary slave disk
+    ///
+    /// # Safety
+    /// Must only be called once, and only after proper hardware initialization.
+    /// Assumes the ATA controller is present and configured.
+    pub const unsafe fn new_slave() -> Self {
+        Self { io_base: ATA_PRIMARY_IO, drive_select_base: 0xF0 }
     }
 
     /// Wait for the drive to be ready (not busy)
@@ -107,8 +117,8 @@ impl BlockDevice for AtaDisk {
         // Wait for drive to be ready
         self.wait_not_busy()?;
 
-        // Select drive (0xE0 = master, LBA mode, bits 24-27 of LBA)
-        let drive = 0xE0 | (((sector >> 24) & 0x0F) as u8);
+        // Select drive (master or slave, LBA mode, bits 24-27 of LBA)
+        let drive = self.drive_select_base | (((sector >> 24) & 0x0F) as u8);
         let mut drive_port: Port<u8> = Port::new(self.io_base + ATA_DRIVE_SELECT);
         // SAFETY: Writing to ATA drive select port
         unsafe { drive_port.write(drive) };
@@ -164,8 +174,8 @@ impl BlockDevice for AtaDisk {
         // Wait for drive to be ready
         self.wait_not_busy()?;
 
-        // Select drive (0xE0 = master, LBA mode, bits 24-27 of LBA)
-        let drive = 0xE0 | (((sector >> 24) & 0x0F) as u8);
+        // Select drive (master or slave, LBA mode, bits 24-27 of LBA)
+        let drive = self.drive_select_base | (((sector >> 24) & 0x0F) as u8);
         let mut drive_port: Port<u8> = Port::new(self.io_base + ATA_DRIVE_SELECT);
         // SAFETY: Writing to ATA drive select port
         unsafe { drive_port.write(drive) };
