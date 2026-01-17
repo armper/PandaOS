@@ -35,7 +35,7 @@ const ATA_CMD_WRITE_SECTORS: u8 = 0x30;
 #[cfg(feature = "hardware")]
 pub struct AtaDisk {
     io_base: u16,
-    drive_select_base: u8,  // 0xE0 for master, 0xF0 for slave
+    drive_select_base: u8, // 0xE0 for master, 0xF0 for slave
 }
 
 #[cfg(feature = "hardware")]
@@ -161,11 +161,7 @@ impl BlockDevice for AtaDisk {
         Ok(())
     }
 
-    fn write_sector(
-        &mut self,
-        sector: u64,
-        buffer: &[u8; SECTOR_SIZE],
-    ) -> Result<(), BlockError> {
+    fn write_sector(&mut self, sector: u64, buffer: &[u8; SECTOR_SIZE]) -> Result<(), BlockError> {
         // Only support 28-bit LBA
         if sector >= (1 << 28) {
             return Err(BlockError::InvalidSector);

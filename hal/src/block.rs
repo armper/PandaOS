@@ -30,8 +30,7 @@ pub trait BlockDevice {
     ///
     /// # Errors
     /// Returns an error if the write fails
-    fn write_sector(&mut self, sector: u64, buffer: &[u8; SECTOR_SIZE])
-        -> Result<(), BlockError>;
+    fn write_sector(&mut self, sector: u64, buffer: &[u8; SECTOR_SIZE]) -> Result<(), BlockError>;
 
     /// Read multiple contiguous sectors
     ///

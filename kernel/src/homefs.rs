@@ -290,8 +290,7 @@ impl<D: BlockDevice> HomeFs<D> {
         self.device.read_sector(sector.into(), &mut buf)?;
 
         // SAFETY: Inode is repr(C, packed)
-        let inode =
-            unsafe { core::ptr::read((buf.as_ptr().add(offset)) as *const Inode) };
+        let inode = unsafe { core::ptr::read((buf.as_ptr().add(offset)) as *const Inode) };
 
         Ok(inode)
     }
@@ -471,37 +470,35 @@ impl<D: BlockDevice> HomeFs<D> {
 
     /// Get filesystem statistics
     pub fn statfs(&self) -> (u32, u32, u32, u32) {
-        (
-            self.superblock.free_blocks,
-            MAX_DATA_BLOCKS,
-            self.superblock.free_inodes,
-            MAX_INODES,
-        )
+        (self.superblock.free_blocks, MAX_DATA_BLOCKS, self.superblock.free_inodes, MAX_INODES)
     }
 
     /// Read a directory entry at given index
     fn read_dir_entry(&mut self, block_sector: u64, index: usize) -> Result<DirEntry, HomeFsError> {
         let mut buf = [0u8; SECTOR_SIZE];
         self.device.read_sector(block_sector, &mut buf)?;
-        
+
         let offset = index * DIR_ENTRY_SIZE;
         if offset + DIR_ENTRY_SIZE > SECTOR_SIZE {
             return Err(HomeFsError::InvalidArgument);
         }
 
         // SAFETY: DirEntry is repr(C, packed)
-        let entry = unsafe { 
-            core::ptr::read((buf.as_ptr().add(offset)) as *const DirEntry) 
-        };
+        let entry = unsafe { core::ptr::read((buf.as_ptr().add(offset)) as *const DirEntry) };
         Ok(entry)
     }
 
     /// Write a directory entry at given index
-    fn write_dir_entry(&mut self, block_sector: u64, index: usize, entry: &DirEntry) -> Result<(), HomeFsError> {
+    fn write_dir_entry(
+        &mut self,
+        block_sector: u64,
+        index: usize,
+        entry: &DirEntry,
+    ) -> Result<(), HomeFsError> {
         // Read entire block
         let mut buf = [0u8; SECTOR_SIZE];
         self.device.read_sector(block_sector, &mut buf)?;
-        
+
         let offset = index * DIR_ENTRY_SIZE;
         if offset + DIR_ENTRY_SIZE > SECTOR_SIZE {
             return Err(HomeFsError::InvalidArgument);
@@ -547,7 +544,7 @@ impl<D: BlockDevice> HomeFs<D> {
 
             for entry_idx in 0..ENTRIES_PER_BLOCK {
                 let entry = self.read_dir_entry(block_sector.into(), entry_idx)?;
-                
+
                 if entry.inode == 0 {
                     continue; // Empty slot
                 }
@@ -555,7 +552,7 @@ impl<D: BlockDevice> HomeFs<D> {
                 // Compare name
                 let entry_name = core::str::from_utf8(&entry.name[..entry.name_len as usize])
                     .map_err(|_| HomeFsError::Corrupted)?;
-                
+
                 if entry_name == name {
                     return Ok(entry.inode);
                 }
@@ -566,7 +563,13 @@ impl<D: BlockDevice> HomeFs<D> {
     }
 
     /// Add an entry to a directory
-    pub fn add_dir_entry(&mut self, dir_inode_num: u32, name: &str, child_inode: u32, child_type: FileType) -> Result<(), HomeFsError> {
+    pub fn add_dir_entry(
+        &mut self,
+        dir_inode_num: u32,
+        name: &str,
+        child_inode: u32,
+        child_type: FileType,
+    ) -> Result<(), HomeFsError> {
         if name.len() == 0 || name.len() > MAX_FILENAME_LEN {
             return Err(HomeFsError::InvalidArgument);
         }
@@ -592,7 +595,7 @@ impl<D: BlockDevice> HomeFs<D> {
 
             for entry_idx in 0..ENTRIES_PER_BLOCK {
                 let entry = self.read_dir_entry(block_sector.into(), entry_idx)?;
-                
+
                 if entry.inode == 0 {
                     // Found empty slot
                     let new_entry = DirEntry {
@@ -650,7 +653,12 @@ impl<D: BlockDevice> HomeFs<D> {
     }
 
     /// Create a new file
-    pub fn create_file(&mut self, dir_inode_num: u32, name: &str, mode: u16) -> Result<u32, HomeFsError> {
+    pub fn create_file(
+        &mut self,
+        dir_inode_num: u32,
+        name: &str,
+        mode: u16,
+    ) -> Result<u32, HomeFsError> {
         // Allocate inode
         let inode_num = self.allocate_inode()?;
 
@@ -682,7 +690,12 @@ impl<D: BlockDevice> HomeFs<D> {
     }
 
     /// Create a new directory
-    pub fn create_directory(&mut self, parent_inode_num: u32, name: &str, mode: u16) -> Result<u32, HomeFsError> {
+    pub fn create_directory(
+        &mut self,
+        parent_inode_num: u32,
+        name: &str,
+        mode: u16,
+    ) -> Result<u32, HomeFsError> {
         // Allocate inode
         let inode_num = self.allocate_inode()?;
 
@@ -764,9 +777,14 @@ impl<D: BlockDevice> HomeFs<D> {
     }
 
     /// Read file data
-    pub fn read_file(&mut self, inode_num: u32, offset: usize, buf: &mut [u8]) -> Result<usize, HomeFsError> {
+    pub fn read_file(
+        &mut self,
+        inode_num: u32,
+        offset: usize,
+        buf: &mut [u8],
+    ) -> Result<usize, HomeFsError> {
         let inode = self.read_inode(inode_num)?;
-        
+
         if inode.file_type != FileType::File as u32 {
             return Err(HomeFsError::IsDirectory);
         }
@@ -782,7 +800,7 @@ impl<D: BlockDevice> HomeFs<D> {
         while bytes_read < to_read {
             let block_idx = (offset + bytes_read) / BLOCK_SIZE;
             let block_offset = (offset + bytes_read) % BLOCK_SIZE;
-            
+
             if block_idx >= MAX_DIRECT_BLOCKS || block_idx >= inode.blocks_used as usize {
                 break;
             }
@@ -807,9 +825,14 @@ impl<D: BlockDevice> HomeFs<D> {
     }
 
     /// Write file data
-    pub fn write_file(&mut self, inode_num: u32, offset: usize, buf: &[u8]) -> Result<usize, HomeFsError> {
+    pub fn write_file(
+        &mut self,
+        inode_num: u32,
+        offset: usize,
+        buf: &[u8],
+    ) -> Result<usize, HomeFsError> {
         let mut inode = self.read_inode(inode_num)?;
-        
+
         if inode.file_type != FileType::File as u32 {
             return Err(HomeFsError::IsDirectory);
         }
@@ -833,7 +856,7 @@ impl<D: BlockDevice> HomeFs<D> {
         while bytes_written < buf.len() {
             let block_idx = (offset + bytes_written) / BLOCK_SIZE;
             let block_offset = (offset + bytes_written) % BLOCK_SIZE;
-            
+
             if block_idx >= MAX_DIRECT_BLOCKS {
                 break;
             }
@@ -844,7 +867,7 @@ impl<D: BlockDevice> HomeFs<D> {
             }
 
             let block_sector = self.superblock.first_data_block + block_num;
-            
+
             // Read existing block
             let mut block_buf = [0u8; SECTOR_SIZE];
             self.device.read_sector(block_sector.into(), &mut block_buf)?;
@@ -892,7 +915,7 @@ impl<D: BlockDevice> HomeFs<D> {
 
             for entry_idx in 0..ENTRIES_PER_BLOCK {
                 let entry = self.read_dir_entry(block_sector.into(), entry_idx)?;
-                
+
                 if entry.inode == 0 {
                     continue;
                 }
@@ -900,7 +923,7 @@ impl<D: BlockDevice> HomeFs<D> {
                 // Compare name
                 let entry_name = core::str::from_utf8(&entry.name[..entry.name_len as usize])
                     .map_err(|_| HomeFsError::Corrupted)?;
-                
+
                 if entry_name == name {
                     // Found it - mark as empty
                     let empty_entry = DirEntry {
@@ -975,7 +998,7 @@ impl<D: BlockDevice> HomeFs<D> {
 
             for entry_idx in 0..ENTRIES_PER_BLOCK {
                 let entry = self.read_dir_entry(block_sector.into(), entry_idx)?;
-                
+
                 if entry.inode == 0 {
                     continue;
                 }
@@ -1010,7 +1033,13 @@ impl<D: BlockDevice> HomeFs<D> {
     }
 
     /// Rename a file or directory within the filesystem
-    pub fn rename(&mut self, old_dir: u32, old_name: &str, new_dir: u32, new_name: &str) -> Result<(), HomeFsError> {
+    pub fn rename(
+        &mut self,
+        old_dir: u32,
+        old_name: &str,
+        new_dir: u32,
+        new_name: &str,
+    ) -> Result<(), HomeFsError> {
         // Lookup old entry
         let inode_num = self.lookup_in_dir(old_dir, old_name)?;
         let inode = self.read_inode(inode_num)?;
@@ -1035,7 +1064,10 @@ impl<D: BlockDevice> HomeFs<D> {
     }
 
     /// List directory entries
-    pub fn readdir(&mut self, dir_inode_num: u32) -> Result<alloc::vec::Vec<(u32, alloc::string::String, FileType)>, HomeFsError> {
+    pub fn readdir(
+        &mut self,
+        dir_inode_num: u32,
+    ) -> Result<alloc::vec::Vec<(u32, alloc::string::String, FileType)>, HomeFsError> {
         let dir_inode = self.read_inode(dir_inode_num)?;
         if dir_inode.file_type != FileType::Directory as u32 {
             return Err(HomeFsError::NotDirectory);
@@ -1057,16 +1089,16 @@ impl<D: BlockDevice> HomeFs<D> {
 
             for entry_idx in 0..ENTRIES_PER_BLOCK {
                 let entry = self.read_dir_entry(block_sector.into(), entry_idx)?;
-                
+
                 if entry.inode == 0 {
                     continue;
                 }
 
                 let name = core::str::from_utf8(&entry.name[..entry.name_len as usize])
                     .map_err(|_| HomeFsError::Corrupted)?;
-                
-                let file_type = FileType::from_u32(entry.file_type as u32)
-                    .ok_or(HomeFsError::Corrupted)?;
+
+                let file_type =
+                    FileType::from_u32(entry.file_type as u32).ok_or(HomeFsError::Corrupted)?;
 
                 entries.push((entry.inode, alloc::string::String::from(name), file_type));
             }
@@ -1078,7 +1110,7 @@ impl<D: BlockDevice> HomeFs<D> {
     /// Truncate a file to zero length
     pub fn truncate(&mut self, inode_num: u32) -> Result<(), HomeFsError> {
         let mut inode = self.read_inode(inode_num)?;
-        
+
         if inode.file_type != FileType::File as u32 {
             return Err(HomeFsError::IsDirectory);
         }
@@ -1129,11 +1161,7 @@ mod tests {
     }
 
     impl BlockDevice for MockDevice {
-        fn read_sector(
-            &mut self,
-            sector: u64,
-            buffer: &mut [u8; 512],
-        ) -> Result<(), BlockError> {
+        fn read_sector(&mut self, sector: u64, buffer: &mut [u8; 512]) -> Result<(), BlockError> {
             if sector as usize >= self.data.len() {
                 return Err(BlockError::InvalidSector);
             }
