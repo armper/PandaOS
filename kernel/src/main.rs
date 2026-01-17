@@ -189,10 +189,10 @@ pub extern "C" fn _start(boot_info: &'static bootloader::BootInfo) -> ! {
             Err(e) => console_println!("Warning: Failed to mount tmpfs at /tmp: {:?}", e),
         }
 
-        // Mount disk filesystem at /mnt
-        match mount::mount_disk_at_mnt() {
-            Ok(()) => console_println!("Disk filesystem mounted at /mnt"),
-            Err(e) => console_println!("Warning: Failed to mount disk at /mnt: {:?}", e),
+        // Mount disk filesystem at /mnt (using FAT32)
+        match mount::mount_fat32_at_mnt() {
+            Ok(()) => console_println!("FAT32 filesystem mounted at /mnt"),
+            Err(e) => console_println!("Warning: Failed to mount FAT32 at /mnt: {:?}", e),
         }
 
         BOOT_STEP!(10);
