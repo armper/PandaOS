@@ -477,7 +477,7 @@ pub unsafe fn map_page(
     // 2. ELF loading maps the same page twice (e.g., adjacent segments sharing page boundaries)
     // 3. Kernel stack or heap initialization overlaps with existing mappings
     let already_mapped = l1_table[p1_index].is_present();
-    
+
     // Debug logging for mapping operation
     println!(
         "map_page: VA={:#x}, phys_frame={:#x}, flags={:#x}, already_mapped={}",

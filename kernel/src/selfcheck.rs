@@ -242,8 +242,7 @@ fn check_segment_mapping_idempotency() -> bool {
     serial_println!("✓ Idempotent mapping succeeded (same frame, same flags)");
 
     // Third mapping with different flags but same frame - should update flags
-    let new_flags = paging::PageTableFlags::PRESENT
-        .or(paging::PageTableFlags::USER_ACCESSIBLE); // Remove WRITABLE
+    let new_flags = paging::PageTableFlags::PRESENT.or(paging::PageTableFlags::USER_ACCESSIBLE); // Remove WRITABLE
 
     unsafe {
         if let Err(e) = paging::map_page(page_table_phys, virt_addr, phys_addr, new_flags) {
@@ -255,7 +254,7 @@ fn check_segment_mapping_idempotency() -> bool {
 
     // Test overlapping segment scenario
     serial_println!("  Testing overlapping segment mapping...");
-    
+
     let page2_virt = paging::VirtAddr::new(0x401000);
     let frame2 = unsafe {
         match crate::memory::allocate_frame() {
