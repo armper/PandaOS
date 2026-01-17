@@ -54,6 +54,63 @@ The main kernel crate contains:
 
 PandaOS implements Unix-like virtual memory with per-process address spaces. See [MEMORY_MODEL.md](MEMORY_MODEL.md) for complete documentation.
 
+### VM Region Tracking
+
+Each process maintains a list of virtual memory regions (`VMRegion`) that describe mapped areas of its address space:
+
+**Region Types:**
+- **Code**: Executable code segments (RX)
+- **Data**: Read-write data segments (RW, NX)
+- **Heap**: Dynamic allocation via brk (RW, NX)
+- **Stack**: Process stack (RW, NX)
+- **Anonymous**: mmap allocations (configurable permissions)
+
+**Purpose:**
+- Tracks valid memory regions for page fault handling
+- Stores permissions (read, write, execute) per region
+- Enables demand paging: pages allocated on first access, not eagerly
+- Supports copy-on-write fork with shared physical frames
+
+### Demand Paging
+
+PandaOS implements demand paging to reduce memory usage and improve fork performance:
+
+**Mechanism:**
+- VM regions reserve virtual address ranges without allocating physical frames
+- Page faults trigger allocation of physical frames on first access
+- Page fault handler distinguishes three cases:
+  1. **Demand paging**: Valid region, no mapping yet → allocate frame and map
+  2. **Copy-on-write**: Shared frame, write attempted → copy frame and remap
+  3. **Protection fault**: Invalid access → terminate process (SIGSEGV)
+
+**Benefits:**
+- Reduced memory usage (allocate only what's accessed)
+- Faster fork (share frames, copy-on-write)
+- Deferred allocation of heap and mmap regions
+
+### Copy-on-Write Fork
+
+Fork uses copy-on-write (COW) to share physical frames between parent and child:
+
+**Mechanism:**
+- All user-space PTEs marked read-only with COW flag
+- Physical frames shared between parent and child with refcounting
+- Write faults trigger frame copy and remap with write permission
+- Refcounts decremented on unmap; frames freed when refcount reaches 0
+
+**Refcounting in HAL:**
+- `FrameAllocator` tracks reference count per frame
+- `increment_refcount(frame)` - called when sharing frame during fork
+- `decrement_refcount(frame)` - called on unmap or page table free
+- Frame automatically deallocated when refcount reaches 0
+- Thread-safe refcounting for future SMP support
+
+**Page Fault Handler:**
+- Checks if fault address is in valid VM region
+- If COW flag set and write attempted: allocate new frame, copy data, remap writable
+- If demand paging: allocate frame, zero it, map with region permissions
+- Otherwise: protection fault (SIGSEGV)
+
 ### Address Space Layout
 
 Each process has isolated 64-bit virtual address space:

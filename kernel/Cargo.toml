@@ -40,6 +40,7 @@ elf-exec-smoke = []
 tty-smoke = []
 preempt-smoke = []
 preempt-log = []
+cow-smoke = []
 build-userland = []
 
 [package.metadata.bootimage]

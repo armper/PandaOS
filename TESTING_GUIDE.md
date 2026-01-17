@@ -1198,6 +1198,87 @@ make test-vm
 - `fork_exec_smoke`: Tests fork/exec without memory management focus
 - `vm_smoke`: Comprehensive integration test combining all VM features
 
+## cow_smoke Test
+
+**Purpose**: Verify copy-on-write fork and demand paging implementation
+
+**Feature Flag**: `cow-smoke`
+
+**Test Program**: `userland/cowtest.asm` → `cowtest` binary
+
+**What It Tests**:
+1. **Demand paging**: Pages allocated on first fault, not eagerly
+2. **COW fork**: Parent and child share physical frames after fork
+3. **COW write fault**: Child write triggers frame copy
+4. **Refcounting**: Frames shared until modified, then independent
+5. **VM statistics**: Page faults, COW faults, and frame allocation counters
+
+**Test Flow**:
+```
+1. Allocate a page via brk or mmap
+2. Write test pattern to page (triggers demand paging fault)
+3. Fork process
+   Child Process:
+   4a. Read shared page (no fault, data matches)
+   5a. Write to page (triggers COW fault, allocates new frame)
+   6a. Verify child's modification took effect
+   7a. Exit with status 0
+   Parent Process:
+   4b. Wait for child to exit
+   5b. Read page (still original data)
+   6b. Verify parent data unchanged
+   7b. Print VM statistics (page faults, COW faults)
+8. Print "TEST PASS cow_smoke"
+```
+
+**Expected Output**:
+```
+cowtest: starting COW test
+cowtest: allocating page
+cowtest: writing parent data (demand page fault expected)
+cowtest: forking
+cowtest: in child process
+cowtest: child reading shared page (no fault)
+cowtest: child writing to page (COW fault expected)
+cowtest: child verifying modification
+cowtest: child exiting
+cowtest: in parent process
+cowtest: parent verifying data unchanged
+cowtest: VM statistics:
+  Total page faults: 2
+  COW faults: 1
+  Demand paging faults: 1
+TEST PASS cow_smoke
+```
+
+**Build and Run**:
+```bash
+# Build kernel with COW smoke test
+cargo bootimage --manifest-path kernel/Cargo.toml --target x86_64-unknown-none \
+  --features cow-smoke
+
+# Run test
+COW_SMOKE=1 ./scripts/qemu-test.sh
+
+# Check output
+cat target/qemu/cow_smoke.log
+```
+
+**Success Criteria**:
+- Child and parent both see correct data
+- VM statistics show expected fault counts
+- No kernel panics or page faults outside test program
+- TEST PASS marker emitted
+
+**What This Validates**:
+- ✅ Demand paging: pages allocated on first access
+- ✅ COW fork: frames shared between parent and child
+- ✅ COW write fault: copy-on-write triggers frame duplication
+- ✅ Refcounting: frames released when last reference removed
+- ✅ Memory isolation: child writes don't affect parent
+- ✅ Page fault handler: distinguishes demand paging vs COW vs protection faults
+- ✅ Frame allocator: refcount tracking and automatic deallocation
+
 
 ## tmpfs_redir_smoke Test
 
