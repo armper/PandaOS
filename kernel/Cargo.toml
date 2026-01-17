@@ -20,6 +20,7 @@ path = "src/main.rs"
 
 [features]
 default = []
+boot-selfcheck = []
 shell-smoke = []
 vfs-cat-smoke = []
 fork-exec-smoke = []

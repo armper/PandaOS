@@ -1293,3 +1293,158 @@ TMPFS_REDIR_SMOKE=1 ./scripts/qemu-test.sh
 - Verify file contents match expected values
 - Check directory listing order (alphabetical)
 - Confirm wc output format (depends on implementation)
+
+## Boot Selfcheck Test
+
+The boot selfcheck feature provides comprehensive validation of kernel initialization without requiring userland or filesystem support. It's designed to catch boot failures early in CI/CD pipelines.
+
+### What It Tests
+
+1. **GDT/TSS Configuration**
+   - CS and SS segment selectors match expected values
+   - Task Register (TR) is loaded
+   - TSS is properly configured
+
+2. **IDT Configuration**
+   - IDT is loaded (SIDT returns non-null base)
+   - Syscall entry point (LSTAR MSR) is configured
+
+3. **Paging and Memory**
+   - CR3 (page table register) is loaded
+   - Kernel code is in higher-half (if applicable)
+   - Heap allocations work correctly
+   - Memory can be read/written
+
+4. **Timer Configuration**
+   - PIT timer is configured (frequency check)
+
+### Running Boot Selfcheck
+
+```bash
+# Using the test harness
+BOOT_SELFCHK=1 ./scripts/qemu-test.sh
+
+# Check the output
+cat target/qemu/boot_selfcheck.log
+```
+
+### Expected Output
+
+```
+BOOT STEP 1 cpu=0 cr3=0x1000 rsp=0xffff800000104f80
+[BOOT] serial ok
+...
+BOOT STEP 9 cpu=0 cr3=0x3000 rsp=0xffff800000104800
+=== Boot Selfcheck Mode ===
+[SELFCHECK] GDT/TSS checks...
+✓ CS = 0x8 (kernel code)
+✓ SS = 0x10 (kernel data)
+✓ TR = 0x28 (TSS loaded)
+✓ GDT/TSS checks passed
+
+[SELFCHECK] IDT checks...
+✓ IDT loaded at 0xffff800000120000, limit 0xfff
+✓ LSTAR = 0xffff800000102340 (syscall entry configured)
+✓ IDT checks passed
+
+[SELFCHECK] Paging/memory checks...
+✓ CR3 = 0x3000 (page table loaded)
+✓ Kernel in higher-half at 0xffff800000100000
+✓ Heap allocations work (allocated vec, sum=45)
+✓ Paging/memory checks passed
+
+[SELFCHECK] Timer configuration check...
+✓ Timer configured at 100 Hz
+
+=== Selfcheck Summary ===
+✓ All checks passed
+TEST PASS boot_selfcheck
+```
+
+### Success Criteria
+
+- All check sections show "✓ ... passed"
+- Final line shows `TEST PASS boot_selfcheck`
+- QEMU exits with code 33 (success)
+- No `KERNEL PANIC` or `BOOT ASSERT FAIL` messages
+
+### Failure Cases
+
+1. **GDT/TSS Failure**
+   ```
+   ✗ CS mismatch: got 0x0, expected 0x8
+   ```
+   Indicates GDT not properly loaded or wrong selector used.
+
+2. **IDT Failure**
+   ```
+   ✗ IDT base is null
+   ```
+   IDT was not loaded before selfcheck ran.
+
+3. **Paging Failure**
+   ```
+   ✗ Heap allocation test failed: sum=0, expected 45
+   ```
+   Heap memory is not working correctly.
+
+4. **Boot Assert Failure**
+   ```
+   BOOT ASSERT FAIL code=0x103 step=8
+   ```
+   A critical invariant was violated during boot.
+
+### Debugging Boot Selfcheck Failures
+
+1. **Check boot steps**: Look at which step was reached
+   ```bash
+   grep "BOOT STEP" target/qemu/boot_selfcheck.log
+   ```
+
+2. **Check for panics**: Look for kernel panic messages
+   ```bash
+   grep "KERNEL PANIC" target/qemu/boot_selfcheck.log
+   ```
+
+3. **Review full log**: See complete initialization sequence
+   ```bash
+   cat target/qemu/boot_selfcheck.log
+   ```
+
+4. **Compare with normal boot**: Run without selfcheck to see if issue is specific to that mode
+   ```bash
+   # Normal build
+   make bootimage
+   make run
+   ```
+
+### CI Integration
+
+Include in your CI pipeline to catch boot regressions:
+
+```yaml
+# Example GitHub Actions
+- name: Boot Selfcheck
+  run: BOOT_SELFCHK=1 ./scripts/qemu-test.sh
+  
+- name: Upload logs on failure
+  if: failure()
+  uses: actions/upload-artifact@v3
+  with:
+    name: boot-selfcheck-logs
+    path: target/qemu/boot_selfcheck.log
+```
+
+### Limitations
+
+- Does not test actual usermode transition (no ring 3 code)
+- Does not test timer IRQs with actual interrupts firing
+- Does not test filesystem or scheduler
+- Minimal validation (focused on critical invariants only)
+
+These limitations are intentional to keep selfcheck fast, deterministic, and independent of complex subsystems.
+
+### See Also
+
+- [BOOT_DIAGNOSTICS.md](BOOT_DIAGNOSTICS.md) - Detailed guide to boot diagnostics
+- [ARCHITECTURE.md](ARCHITECTURE.md) - Kernel architecture overview
