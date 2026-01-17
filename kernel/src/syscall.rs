@@ -1229,6 +1229,13 @@ pub fn set_yield_handler(handler: fn()) {
     YIELD_HANDLER.call_once(|| handler);
 }
 
+/// Get the yield handler for preemption
+///
+/// Used by preemption logic to trigger context switches at syscall boundaries.
+pub fn get_yield_handler() -> Option<&'static fn()> {
+    YIELD_HANDLER.get()
+}
+
 /// Set the execve handler for syscall execve
 ///
 /// Must be called before any user processes run.
