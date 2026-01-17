@@ -20,6 +20,8 @@ path = "src/main.rs"
 
 [features]
 default = []
+vga-console = []
+boot-watchdog = []
 boot-selfcheck = []
 shell-smoke = []
 vfs-cat-smoke = []
