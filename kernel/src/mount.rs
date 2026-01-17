@@ -4,6 +4,7 @@
 //! to filesystem instances (disk filesystem and tmpfs).
 
 use crate::diskfs::{DiskFs, DiskFsError, InodeType};
+use crate::fat32::{Fat32, Fat32Error};
 use crate::fs::{FileMetadata, FileType};
 use crate::syscall::ErrorCode;
 use crate::tmpfs::Inode as TmpfsInode;
@@ -16,6 +17,7 @@ use spin::Mutex;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum FsType {
     Disk,
+    Fat32,
     Tmpfs,
 }
 
@@ -35,12 +37,13 @@ pub struct MountEntry {
 pub struct MountTable {
     mounts: Vec<(String, MountEntry)>,
     disk_fs: Option<DiskFs<AtaDisk>>,
+    fat32_fs: Option<Fat32<AtaDisk>>,
 }
 
 impl MountTable {
     /// Create a new empty mount table
     pub fn new() -> Self {
-        Self { mounts: Vec::new(), disk_fs: None }
+        Self { mounts: Vec::new(), disk_fs: None, fat32_fs: None }
     }
 
     /// Mount a disk filesystem at a mount point
@@ -56,6 +59,23 @@ impl MountTable {
         self.mounts
             .push((String::from(mount_point), MountEntry { mount_point, fs_type: FsType::Disk }));
         self.disk_fs = Some(disk_fs);
+
+        Ok(())
+    }
+
+    /// Mount a FAT32 filesystem at a mount point
+    pub fn mount_fat32(&mut self, mount_point: &'static str) -> Result<(), ErrorCode> {
+        // Initialize ATA disk
+        // SAFETY: This should only be called once during boot
+        let disk = unsafe { AtaDisk::new_slave() };
+
+        // Create FAT32 filesystem
+        let fat32_fs = Fat32::new(disk).map_err(fat32_error_to_errno)?;
+
+        // Add mount entry
+        self.mounts
+            .push((String::from(mount_point), MountEntry { mount_point, fs_type: FsType::Fat32 }));
+        self.fat32_fs = Some(fat32_fs);
 
         Ok(())
     }
@@ -95,6 +115,16 @@ impl MountTable {
     pub fn disk_fs(&self) -> Option<&DiskFs<AtaDisk>> {
         self.disk_fs.as_ref()
     }
+
+    /// Get the FAT32 filesystem (mutable)
+    pub fn fat32_fs_mut(&mut self) -> Option<&mut Fat32<AtaDisk>> {
+        self.fat32_fs.as_mut()
+    }
+
+    /// Get the FAT32 filesystem (immutable)
+    pub fn fat32_fs(&self) -> Option<&Fat32<AtaDisk>> {
+        self.fat32_fs.as_ref()
+    }
 }
 
 /// Initialize the mount table
@@ -108,6 +138,13 @@ pub fn mount_disk_at_mnt() -> Result<(), ErrorCode> {
     let mut table = MOUNT_TABLE.lock();
     let mount_table = table.as_mut().ok_or(ErrorCode::EIO)?;
     mount_table.mount_disk("/mnt")
+}
+
+/// Mount FAT32 filesystem at /mnt
+pub fn mount_fat32_at_mnt() -> Result<(), ErrorCode> {
+    let mut table = MOUNT_TABLE.lock();
+    let mount_table = table.as_mut().ok_or(ErrorCode::EIO)?;
+    mount_table.mount_fat32("/mnt")
 }
 
 /// Mount tmpfs at /tmp
@@ -208,6 +245,95 @@ fn diskfs_error_to_errno(err: DiskFsError) -> ErrorCode {
         DiskFsError::NotADirectory => ErrorCode::ENOTDIR,
         DiskFsError::NotAFile => ErrorCode::EISDIR,
     }
+}
+
+/// Convert FAT32 error to errno
+fn fat32_error_to_errno(err: Fat32Error) -> ErrorCode {
+    match err {
+        Fat32Error::IoError => ErrorCode::EIO,
+        Fat32Error::InvalidSignature => ErrorCode::EINVAL,
+        Fat32Error::InvalidBpb => ErrorCode::EINVAL,
+        Fat32Error::UnsupportedSectorSize => ErrorCode::EINVAL,
+        Fat32Error::InvalidCluster => ErrorCode::EINVAL,
+        Fat32Error::BadCluster => ErrorCode::EIO,
+        Fat32Error::NotFound => ErrorCode::ENOENT,
+        Fat32Error::NotADirectory => ErrorCode::ENOTDIR,
+        Fat32Error::InvalidPath => ErrorCode::EINVAL,
+    }
+}
+
+/// FAT32 operations
+
+/// Represents a FAT32 file or directory handle
+#[derive(Clone, Copy, Debug)]
+pub struct Fat32Handle {
+    pub cluster: u32,
+    pub size: u32,
+    pub is_dir: bool,
+}
+
+/// Lookup a file on the FAT32 filesystem
+pub fn fat32_lookup(path: &str) -> Result<Fat32Handle, ErrorCode> {
+    let mut table = MOUNT_TABLE.lock();
+    let mount_table = table.as_mut().ok_or(ErrorCode::EIO)?;
+    let fat32_fs = mount_table.fat32_fs_mut().ok_or(ErrorCode::EIO)?;
+
+    let entry = fat32_fs.resolve_path(path).map_err(fat32_error_to_errno)?;
+
+    Ok(Fat32Handle {
+        cluster: entry.first_cluster,
+        size: entry.file_size,
+        is_dir: entry.is_directory(),
+    })
+}
+
+/// Read from a FAT32 file
+pub fn fat32_read(
+    cluster: u32,
+    size: u32,
+    offset: usize,
+    buffer: &mut [u8],
+) -> Result<usize, ErrorCode> {
+    let mut table = MOUNT_TABLE.lock();
+    let mount_table = table.as_mut().ok_or(ErrorCode::EIO)?;
+    let fat32_fs = mount_table.fat32_fs_mut().ok_or(ErrorCode::EIO)?;
+
+    fat32_fs
+        .read_file(cluster, size, offset as u64, buffer)
+        .map_err(fat32_error_to_errno)
+}
+
+/// Get file metadata from FAT32
+pub fn fat32_stat(handle: Fat32Handle) -> Result<FileMetadata, ErrorCode> {
+    let file_type = if handle.is_dir { FileType::Directory } else { FileType::File };
+    let mode = match file_type {
+        FileType::Directory => crate::fs::DEFAULT_DIR_MODE,
+        FileType::File => crate::fs::DEFAULT_FILE_MODE,
+    };
+
+    // Default ownership: root:root
+    Ok(FileMetadata { file_type, size: handle.size as u64, mode, uid: 0, gid: 0 })
+}
+
+/// List directory on FAT32 filesystem
+pub fn fat32_list_dir(cluster: u32) -> Result<Vec<(String, FileType)>, ErrorCode> {
+    let mut table = MOUNT_TABLE.lock();
+    let mount_table = table.as_mut().ok_or(ErrorCode::EIO)?;
+    let fat32_fs = mount_table.fat32_fs_mut().ok_or(ErrorCode::EIO)?;
+
+    let entries = fat32_fs.read_directory(cluster).map_err(fat32_error_to_errno)?;
+
+    let mut result = Vec::new();
+    for entry in entries {
+        let file_type = if entry.is_directory() {
+            FileType::Directory
+        } else {
+            FileType::File
+        };
+        result.push((entry.name, file_type));
+    }
+
+    Ok(result)
 }
 
 /// Tmpfs operations

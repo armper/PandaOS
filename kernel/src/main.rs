@@ -43,6 +43,7 @@ pub mod context_switch;
 pub mod diskfs;
 pub mod elf;
 pub mod exec_stack;
+pub mod fat32;
 pub mod fs;
 pub mod gdt;
 pub mod heap;
@@ -846,7 +847,10 @@ fn read_handler(fd: i32, buf: u64, count: u64) -> syscall::SyscallResult {
     let fd_kind = current.fd_table.get(fd)?;
 
     match fd_kind {
-        fs::FdKind::File(_, _) | fs::FdKind::DiskFile(_) | fs::FdKind::TmpfsFile(_) => {
+        fs::FdKind::File(_, _)
+        | fs::FdKind::DiskFile(_)
+        | fs::FdKind::TmpfsFile(_)
+        | fs::FdKind::Fat32File(_) => {
             // Read from file using a temporary buffer
             let mut temp_buf = [0u8; 4096];
             let to_read = count.min(temp_buf.len());
@@ -857,7 +861,10 @@ fn read_handler(fd: i32, buf: u64, count: u64) -> syscall::SyscallResult {
             }
             Ok(bytes_read as u64)
         }
-        fs::FdKind::Directory(_) | fs::FdKind::DiskDirectory(_) | fs::FdKind::TmpfsDirectory(_) => {
+        fs::FdKind::Directory(_)
+        | fs::FdKind::DiskDirectory(_)
+        | fs::FdKind::TmpfsDirectory(_)
+        | fs::FdKind::Fat32Directory(_) => {
             // Can't read directories with read() - use getdents64
             Err(syscall::ErrorCode::EISDIR)
         }
@@ -916,8 +923,12 @@ fn write_handler(fd: i32, buf: u64, count: u64) -> syscall::SyscallResult {
             let written = current.fd_table.write(fd, &temp_buf[..copied])?;
             Ok(written as u64)
         }
-        fs::FdKind::Directory(_) | fs::FdKind::DiskFile(_) | fs::FdKind::DiskDirectory(_) => {
-            // Can't write to directories or disk files (read-only filesystem)
+        fs::FdKind::Directory(_)
+        | fs::FdKind::DiskFile(_)
+        | fs::FdKind::DiskDirectory(_)
+        | fs::FdKind::Fat32File(_)
+        | fs::FdKind::Fat32Directory(_) => {
+            // Can't write to directories or disk/FAT32 files (read-only filesystems)
             Err(syscall::ErrorCode::EBADF)
         }
         fs::FdKind::TmpfsFile(_open) => {
@@ -1693,6 +1704,10 @@ fn mkdir_handler(path_ptr: u64, _mode: u16) -> syscall::SyscallResult {
                 mount::tmpfs_mkdir(parent, name)?;
                 return Ok(0);
             }
+            mount::FsType::Fat32 => {
+                // FAT32 filesystem is read-only
+                return Err(syscall::ErrorCode::EROFS);
+            }
         }
     }
 
@@ -1733,6 +1748,10 @@ fn rmdir_handler(path_ptr: u64) -> syscall::SyscallResult {
                 // Remove the directory from tmpfs
                 mount::tmpfs_rmdir(parent, name)?;
                 return Ok(0);
+            }
+            mount::FsType::Fat32 => {
+                // FAT32 filesystem is read-only
+                return Err(syscall::ErrorCode::EROFS);
             }
         }
     }
