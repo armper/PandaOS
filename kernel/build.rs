@@ -39,6 +39,7 @@ disable the feature"
         "hello1",
         "hello2",
         "init",
+        "init_preempt",
         "sh",
         "cat",
         "true",
@@ -64,6 +65,7 @@ disable the feature"
     println!("cargo:rerun-if-changed=../userland/hello1.asm");
     println!("cargo:rerun-if-changed=../userland/hello2.asm");
     println!("cargo:rerun-if-changed=../userland/init.asm");
+    println!("cargo:rerun-if-changed=../userland/init_preempt.asm");
     println!("cargo:rerun-if-changed=../userland/sh.asm");
     println!("cargo:rerun-if-changed=../userland/cat.asm");
     println!("cargo:rerun-if-changed=../userland/true.asm");
@@ -75,6 +77,7 @@ disable the feature"
     println!("cargo:rerun-if-changed=../userland/bin/hello1");
     println!("cargo:rerun-if-changed=../userland/bin/hello2");
     println!("cargo:rerun-if-changed=../userland/bin/init");
+    println!("cargo:rerun-if-changed=../userland/bin/init_preempt");
     println!("cargo:rerun-if-changed=../userland/bin/sh");
     println!("cargo:rerun-if-changed=../userland/bin/cat");
     println!("cargo:rerun-if-changed=../userland/bin/true");

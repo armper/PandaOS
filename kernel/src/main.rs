@@ -405,6 +405,10 @@ unsafe fn init_scheduler_and_start() -> ! {
         panic!("init program not found in /mnt/bin/init or /init");
     };
 
+    // For preempt-smoke test, use init_preempt if available
+    #[cfg(feature = "preempt-smoke")]
+    let init_path = "/init_preempt";
+
     serial_println!("[sched] Loading init from {}...", init_path);
     let init_data_vec = fs::read_file_to_vec(init_path).expect("Failed to read init");
     serial_println!("[sched] Loaded init program ({} bytes)...", init_data_vec.len());
@@ -2361,6 +2365,14 @@ fn exit_handler(status: i32) -> ! {
         serial_println!("TEST PASS elf_exec_smoke");
         #[cfg(feature = "tty-smoke")]
         serial_println!("TEST PASS tty_smoke");
+        #[cfg(feature = "preempt-smoke")]
+        {
+            // Print observability data for preemption test
+            let tick = unsafe { get_tick_counter() };
+            let switches = unsafe { get_context_switch_counter() };
+            serial_println!("[PREEMPT] Final stats: ticks={} switches={}", tick, switches);
+            serial_println!("TEST PASS preempt_smoke");
+        }
         #[cfg(not(any(
             feature = "shell-smoke",
             feature = "vfs-cat-smoke",
@@ -2375,7 +2387,8 @@ fn exit_handler(status: i32) -> ! {
             feature = "redir-smoke",
             feature = "tmpfs-redir-smoke",
             feature = "elf-exec-smoke",
-            feature = "tty-smoke"
+            feature = "tty-smoke",
+            feature = "preempt-smoke"
         )))]
         serial_println!("TEST PASS exec_smoke");
         let kernel_pt = usermode::kernel_page_table_phys();
