@@ -1084,14 +1084,15 @@ pub unsafe fn clone_user_address_space(parent_page_table_phys: u64) -> Result<u6
                             (flags.bits() & !PageTableFlags::WRITABLE.bits())
                                 | PageTableFlags::COPY_ON_WRITE.bits(),
                         );
-                        
+
                         // Update parent's PTE to be read-only + COW
                         // SAFETY: We're modifying the parent's page table
                         unsafe {
-                            let parent_l1_mut = &mut *(phys_to_virt_addr(parent_l1_phys) as *mut PageTable);
+                            let parent_l1_mut =
+                                &mut *(phys_to_virt_addr(parent_l1_phys) as *mut PageTable);
                             parent_l1_mut[p1_index].set(parent_phys, new_flags);
                         }
-                        
+
                         flags = new_flags;
                     }
 

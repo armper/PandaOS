@@ -298,9 +298,7 @@ pub fn fat32_read(
     let mount_table = table.as_mut().ok_or(ErrorCode::EIO)?;
     let fat32_fs = mount_table.fat32_fs_mut().ok_or(ErrorCode::EIO)?;
 
-    fat32_fs
-        .read_file(cluster, size, offset as u64, buffer)
-        .map_err(fat32_error_to_errno)
+    fat32_fs.read_file(cluster, size, offset as u64, buffer).map_err(fat32_error_to_errno)
 }
 
 /// Get file metadata from FAT32
@@ -325,11 +323,7 @@ pub fn fat32_list_dir(cluster: u32) -> Result<Vec<(String, FileType)>, ErrorCode
 
     let mut result = Vec::new();
     for entry in entries {
-        let file_type = if entry.is_directory() {
-            FileType::Directory
-        } else {
-            FileType::File
-        };
+        let file_type = if entry.is_directory() { FileType::Directory } else { FileType::File };
         result.push((entry.name, file_type));
     }
 
