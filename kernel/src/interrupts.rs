@@ -149,11 +149,11 @@ fn handle_demand_paging(
 
     // Check if address is in a valid VM region
     let page_addr = cr2 & !0xFFF;
-    let region =
+    let maybe_region =
         process.vm_regions.iter().find(|r| page_addr >= r.start_addr && page_addr < r.end_addr);
 
     // Determine flags based on region or use defaults
-    let flags = if let Some(region) = region {
+    let flags = if let Some(region) = maybe_region {
         // Use region-specific flags
         let mut flags = crate::paging::PageTableFlags::PRESENT
             .or(crate::paging::PageTableFlags::USER_ACCESSIBLE);
@@ -206,18 +206,12 @@ fn handle_demand_paging(
     // Increment demand allocation counter
     crate::vm_counters::inc_demand_allocations();
 
-    // Log demand paging with region info
-    if region.is_some() {
-        println!(
-            "PAGE FAULT: pid={:?}, cr2={:#x}, rip={:#x}, error={:?}, mode={}, action=demand_page (frame={}, region=tracked)",
-            pid, cr2, rip, error_code, mode, frame
-        );
-    } else {
-        println!(
-            "PAGE FAULT: pid={:?}, cr2={:#x}, rip={:#x}, error={:?}, mode={}, action=demand_page (frame={}, region=UNTRACKED)",
-            pid, cr2, rip, error_code, mode, frame
-        );
-    }
+    // Log demand paging with region tracking status
+    let region_status = if maybe_region.is_some() { "tracked" } else { "UNTRACKED" };
+    println!(
+        "PAGE FAULT: pid={:?}, cr2={:#x}, rip={:#x}, error={:?}, mode={}, action=demand_page (frame={}, region={})",
+        pid, cr2, rip, error_code, mode, frame, region_status
+    );
 }
 
 /// Handle copy-on-write fault
