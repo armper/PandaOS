@@ -156,6 +156,13 @@ pub extern "C" fn _start(boot_info: &'static bootloader::BootInfo) -> ! {
         console_println!("Heap test passed: {:?}", test_vec);
     }
 
+    // Initialize network stack (optional, after heap)
+    // Don't fail boot if network initialization fails
+    match net::init() {
+        Ok(()) => console_println!("Network stack initialized"),
+        Err(e) => console_println!("Network initialization skipped: {}", e),
+    }
+
     BOOT_STEP!(9);
 
     // If boot-selfcheck feature is enabled, run selfcheck instead of normal boot
