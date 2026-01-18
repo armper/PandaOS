@@ -27,7 +27,8 @@ bootimage: build
 	cargo bootimage --manifest-path kernel/Cargo.toml --target x86_64-unknown-none
 	@echo "Bootimage created!"
 
-# Generate filesystem image
+# Generate filesystem image (requires userland binaries in userland/bin/)
+# Note: userland binaries should be built using userland/build.sh before running this
 fs.img:
 	@echo "Generating filesystem image..."
 	python3 scripts/mkdiskimg.py
