@@ -119,6 +119,12 @@ if [ "${BOOT_SELFCHK:-0}" -eq 1 ]; then
     FEATURES+=(--features boot-selfcheck)
     EXPECTED_MARKER="TEST PASS boot_selfcheck"
 fi
+if [ "${NET_DNS_SMOKE:-0}" -eq 1 ]; then
+    FEATURE_COUNT=$((FEATURE_COUNT + 1))
+    TEST_NAME="net_dns_smoke"
+    FEATURES+=(--features net-dns-smoke)
+    EXPECTED_MARKER="TEST PASS net_dns_smoke"
+fi
 
 if [ $FEATURE_COUNT -gt 1 ]; then
     echo "Error: Test features are mutually exclusive"
@@ -126,7 +132,7 @@ if [ $FEATURE_COUNT -gt 1 ]; then
 fi
 
 if [ $FEATURE_COUNT -eq 0 ]; then
-    echo "Error: Must set one of SHELL_SMOKE, VFS_CAT_SMOKE, FORK_EXEC_SMOKE, PIPE_SMOKE, CTRLC_SMOKE, LS_SMOKE, LS_STAT_SMOKE, CD_SMOKE, PATH_SMOKE, REDIR_SMOKE, TMPFS_REDIR_SMOKE, DISK_FS_SMOKE, TTY_SMOKE, or BOOT_SELFCHK"
+    echo "Error: Must set one of SHELL_SMOKE, VFS_CAT_SMOKE, FORK_EXEC_SMOKE, PIPE_SMOKE, CTRLC_SMOKE, LS_SMOKE, LS_STAT_SMOKE, CD_SMOKE, PATH_SMOKE, REDIR_SMOKE, TMPFS_REDIR_SMOKE, DISK_FS_SMOKE, TTY_SMOKE, BOOT_SELFCHK, or NET_DNS_SMOKE"
     exit 1
 fi
 
@@ -180,6 +186,8 @@ if [ -n "$TIMEOUT_BIN" ]; then
     $TIMEOUT_BIN $TIMEOUT qemu-system-x86_64 \
         -drive format=raw,file="$KERNEL_IMAGE" \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
+        -netdev user,id=n0 \
+        -device virtio-net-pci,netdev=n0 \
         -serial file:"$SERIAL_LOG" \
         -display none \
         -no-reboot \
@@ -191,6 +199,8 @@ else
     qemu-system-x86_64 \
         -drive format=raw,file="$KERNEL_IMAGE" \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
+        -netdev user,id=n0 \
+        -device virtio-net-pci,netdev=n0 \
         -serial file:"$SERIAL_LOG" \
         -display none \
         -no-reboot \
