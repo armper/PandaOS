@@ -194,6 +194,16 @@ pub struct OpenTmpfsFile {
     pub flags: u64,
 }
 
+/// Open FAT32 file descriptor
+#[derive(Clone, Copy, Debug)]
+pub struct OpenFat32File {
+    pub cluster: u32,
+    pub size: u32,
+    pub is_dir: bool,
+    pub offset: usize,
+    pub flags: u64,
+}
+
 /// File descriptor kinds
 #[derive(Clone, Copy, Debug)]
 pub enum FdKind {
@@ -209,6 +219,10 @@ pub enum FdKind {
     TmpfsFile(OpenTmpfsFile),
     /// Tmpfs directory from tmpfs filesystem
     TmpfsDirectory(OpenTmpfsFile),
+    /// FAT32 file from mounted filesystem
+    Fat32File(OpenFat32File),
+    /// FAT32 directory from mounted filesystem
+    Fat32Directory(OpenFat32File),
     /// Pipe read end
     PipeRead(PipeId),
     /// Pipe write end
@@ -344,7 +358,9 @@ impl FdTable {
                 | FdKind::DiskFile(_)
                 | FdKind::DiskDirectory(_)
                 | FdKind::TmpfsFile(_)
-                | FdKind::TmpfsDirectory(_) => {
+                | FdKind::TmpfsDirectory(_)
+                | FdKind::Fat32File(_)
+                | FdKind::Fat32Directory(_) => {
                     // Files and directories don't need cleanup
                 }
             }
@@ -463,6 +479,27 @@ impl FdTable {
                 // Reading directories via read() is not supported
                 Err(ErrorCode::EISDIR)
             }
+            FdKind::Fat32File(open) => {
+                // Read from FAT32 file
+                let bytes_read =
+                    crate::mount::fat32_read(open.cluster, open.size, open.offset, buffer)?;
+
+                // Update offset
+                let new_offset = open.offset + bytes_read;
+                self.entries[fd as usize] = Some(FdKind::Fat32File(OpenFat32File {
+                    cluster: open.cluster,
+                    size: open.size,
+                    is_dir: open.is_dir,
+                    offset: new_offset,
+                    flags: open.flags,
+                }));
+
+                Ok(bytes_read)
+            }
+            FdKind::Fat32Directory(_) => {
+                // Reading directories via read() is not supported
+                Err(ErrorCode::EISDIR)
+            }
             FdKind::PipeRead(_) | FdKind::PipeWrite(_) => {
                 // Pipes are handled through separate syscall path
                 Err(ErrorCode::EBADF)
@@ -535,6 +572,7 @@ impl FdTable {
             }
             FdKind::Directory(_) => Err(ErrorCode::EBADF),
             FdKind::DiskFile(_) | FdKind::DiskDirectory(_) => Err(ErrorCode::EROFS),
+            FdKind::Fat32File(_) | FdKind::Fat32Directory(_) => Err(ErrorCode::EROFS),
             FdKind::TmpfsFile(open) => {
                 // Check if O_APPEND is set
                 let write_offset = if (open.flags & O_APPEND) != 0 {
@@ -601,6 +639,16 @@ impl FdTable {
                 }));
                 Ok(())
             }
+            FdKind::Fat32Directory(open) => {
+                self.entries[fd as usize] = Some(FdKind::Fat32Directory(OpenFat32File {
+                    cluster: open.cluster,
+                    size: open.size,
+                    is_dir: open.is_dir,
+                    offset: new_offset,
+                    flags: open.flags,
+                }));
+                Ok(())
+            }
             _ => Err(ErrorCode::ENOTDIR),
         }
     }
@@ -646,6 +694,12 @@ impl FdTable {
             FdKind::TmpfsDirectory(open) => {
                 self.entries[newfd as usize] = Some(FdKind::TmpfsDirectory(open));
             }
+            FdKind::Fat32File(open) => {
+                self.entries[newfd as usize] = Some(FdKind::Fat32File(open));
+            }
+            FdKind::Fat32Directory(open) => {
+                self.entries[newfd as usize] = Some(FdKind::Fat32Directory(open));
+            }
             FdKind::PipeRead(pipe_id) => {
                 crate::pipe::pipe_open_read_end(pipe_id)?;
                 self.entries[newfd as usize] = Some(FdKind::PipeRead(pipe_id));
@@ -679,7 +733,9 @@ impl FdTable {
                     | FdKind::DiskFile(_)
                     | FdKind::DiskDirectory(_)
                     | FdKind::TmpfsFile(_)
-                    | FdKind::TmpfsDirectory(_) => {
+                    | FdKind::TmpfsDirectory(_)
+                    | FdKind::Fat32File(_)
+                    | FdKind::Fat32Directory(_) => {
                         // Files and directories don't need refcounting
                     }
                 }
@@ -703,9 +759,11 @@ impl FdTable {
             FdKind::File(open, _) => Ok(open.offset as i64),
             FdKind::DiskFile(open) => Ok(open.offset as i64),
             FdKind::TmpfsFile(open) => Ok(open.offset as i64),
-            FdKind::Directory(_) | FdKind::DiskDirectory(_) | FdKind::TmpfsDirectory(_) => {
-                Err(ErrorCode::EISDIR)
-            }
+            FdKind::Fat32File(open) => Ok(open.offset as i64),
+            FdKind::Directory(_)
+            | FdKind::DiskDirectory(_)
+            | FdKind::TmpfsDirectory(_)
+            | FdKind::Fat32Directory(_) => Err(ErrorCode::EISDIR),
             FdKind::PipeRead(_) | FdKind::PipeWrite(_) => Err(ErrorCode::ESPIPE),
         }
     }
@@ -750,9 +808,21 @@ impl FdTable {
                 }));
                 Ok(new_offset as i64)
             }
-            FdKind::Directory(_) | FdKind::DiskDirectory(_) | FdKind::TmpfsDirectory(_) => {
-                Err(ErrorCode::EISDIR)
+            FdKind::Fat32File(open) => {
+                let new_offset = new_offset as usize;
+                self.entries[fd as usize] = Some(FdKind::Fat32File(OpenFat32File {
+                    cluster: open.cluster,
+                    size: open.size,
+                    is_dir: open.is_dir,
+                    offset: new_offset,
+                    flags: open.flags,
+                }));
+                Ok(new_offset as i64)
             }
+            FdKind::Directory(_)
+            | FdKind::DiskDirectory(_)
+            | FdKind::TmpfsDirectory(_)
+            | FdKind::Fat32Directory(_) => Err(ErrorCode::EISDIR),
             FdKind::PipeRead(_) | FdKind::PipeWrite(_) => Err(ErrorCode::ESPIPE),
         }
     }
@@ -787,9 +857,11 @@ impl FdTable {
                 let metadata = crate::mount::tmpfs_stat(open.inode)?;
                 Ok(metadata.size as i64)
             }
-            FdKind::Directory(_) | FdKind::DiskDirectory(_) | FdKind::TmpfsDirectory(_) => {
-                Err(ErrorCode::EISDIR)
-            }
+            FdKind::Fat32File(open) => Ok(open.size as i64),
+            FdKind::Directory(_)
+            | FdKind::DiskDirectory(_)
+            | FdKind::TmpfsDirectory(_)
+            | FdKind::Fat32Directory(_) => Err(ErrorCode::EISDIR),
             FdKind::PipeRead(_) | FdKind::PipeWrite(_) => Err(ErrorCode::ESPIPE),
         }
     }
@@ -967,6 +1039,59 @@ pub fn open_path_with_flags(
 
                 return Ok(fd as i32);
             }
+            crate::mount::FsType::Fat32 => {
+                // Open file from FAT32 filesystem
+                let handle = crate::mount::fat32_lookup(&rel_path)?;
+                let metadata = crate::mount::fat32_stat(handle)?;
+
+                // Check access mode and permissions
+                // O_RDONLY=0, O_WRONLY=1, O_RDWR=2
+                let writable = (flags & O_WRONLY) != 0 || (flags & O_RDWR) != 0;
+                // Readable if not O_WRONLY (covers O_RDONLY and O_RDWR)
+                let readable = (flags & O_WRONLY) == 0 || (flags & O_RDWR) != 0;
+
+                // Check permissions
+                if readable
+                    && !can_read(proc_uid, proc_gid, metadata.uid, metadata.gid, metadata.mode)
+                {
+                    return Err(ErrorCode::EACCES);
+                }
+                if writable {
+                    // Check write permission
+                    if !can_write(proc_uid, proc_gid, metadata.uid, metadata.gid, metadata.mode) {
+                        return Err(ErrorCode::EACCES);
+                    }
+                    // FAT32 fs is read-only
+                    return Err(ErrorCode::EROFS);
+                }
+
+                // Allocate FD
+                let fd = table.allocate_fd()?;
+
+                // Open based on file type
+                match metadata.file_type {
+                    FileType::File => {
+                        table.entries[fd] = Some(FdKind::Fat32File(OpenFat32File {
+                            cluster: handle.cluster,
+                            size: handle.size,
+                            is_dir: handle.is_dir,
+                            offset: 0,
+                            flags,
+                        }));
+                    }
+                    FileType::Directory => {
+                        table.entries[fd] = Some(FdKind::Fat32Directory(OpenFat32File {
+                            cluster: handle.cluster,
+                            size: handle.size,
+                            is_dir: handle.is_dir,
+                            offset: 0,
+                            flags,
+                        }));
+                    }
+                }
+
+                return Ok(fd as i32);
+            }
             crate::mount::FsType::Tmpfs => {
                 // Try to lookup file in tmpfs
                 let inode_result = crate::mount::tmpfs_lookup(&rel_path);
@@ -1104,6 +1229,11 @@ pub fn list_directory(
                 // List directory from tmpfs
                 let inode = crate::mount::tmpfs_lookup(&rel_path)?;
                 return crate::mount::tmpfs_list_dir(inode);
+            }
+            crate::mount::FsType::Fat32 => {
+                // List directory from FAT32 filesystem
+                let handle = crate::mount::fat32_lookup(&rel_path)?;
+                return crate::mount::fat32_list_dir(handle.cluster);
             }
         }
     }
@@ -1258,6 +1388,10 @@ pub fn unlink_path(path: &str) -> Result<(), ErrorCode> {
 
                 return crate::mount::tmpfs_unlink(parent, name);
             }
+            crate::mount::FsType::Fat32 => {
+                // FAT32 filesystem is read-only
+                return Err(ErrorCode::EROFS);
+            }
         }
     }
 
@@ -1296,6 +1430,10 @@ pub fn chmod_path(path: &str, new_mode: u16) -> Result<(), ErrorCode> {
                 let inode = crate::mount::tmpfs_lookup(&rel_path)?;
                 return crate::mount::tmpfs_chmod(inode, new_mode);
             }
+            crate::mount::FsType::Fat32 => {
+                // FAT32 filesystem is read-only
+                return Err(ErrorCode::EROFS);
+            }
         }
     }
 
@@ -1327,6 +1465,10 @@ pub fn chown_path(path: &str, uid: u32, gid: u32) -> Result<(), ErrorCode> {
             crate::mount::FsType::Tmpfs => {
                 // Tmpfs doesn't support ownership yet - would need to add
                 return Err(ErrorCode::ENOSYS);
+            }
+            crate::mount::FsType::Fat32 => {
+                // FAT32 filesystem is read-only
+                return Err(ErrorCode::EROFS);
             }
         }
     }
@@ -1368,6 +1510,10 @@ pub fn stat_path(path: &str) -> Result<FileMetadata, ErrorCode> {
             crate::mount::FsType::Tmpfs => {
                 let inode = crate::mount::tmpfs_lookup(&rel_path)?;
                 return crate::mount::tmpfs_stat(inode);
+            }
+            crate::mount::FsType::Fat32 => {
+                let handle = crate::mount::fat32_lookup(&rel_path)?;
+                return crate::mount::fat32_stat(handle);
             }
         }
     }
@@ -1498,6 +1644,13 @@ pub fn fstat_fd(table: &FdTable, fd: i32) -> Result<FileMetadata, ErrorCode> {
         FdKind::TmpfsFile(open) | FdKind::TmpfsDirectory(open) => {
             crate::mount::tmpfs_stat(open.inode)
         }
+        FdKind::Fat32File(open) | FdKind::Fat32Directory(open) => {
+            crate::mount::fat32_stat(crate::mount::Fat32Handle {
+                cluster: open.cluster,
+                size: open.size,
+                is_dir: open.is_dir,
+            })
+        }
         FdKind::PipeRead(_) | FdKind::PipeWrite(_) => {
             // Pipes don't have traditional stat metadata
             Err(ErrorCode::EBADF)
@@ -1550,6 +1703,14 @@ pub fn read_file_to_vec(path: &str) -> Result<alloc::vec::Vec<u8>, ErrorCode> {
                 // Read from tmpfs
                 let inode = crate::mount::tmpfs_lookup(&rel_path)?;
                 let bytes_read = crate::mount::tmpfs_read(inode, 0, &mut buffer)?;
+                buffer.truncate(bytes_read);
+                return Ok(buffer);
+            }
+            crate::mount::FsType::Fat32 => {
+                // Read from FAT32 filesystem
+                let handle = crate::mount::fat32_lookup(&rel_path)?;
+                let bytes_read =
+                    crate::mount::fat32_read(handle.cluster, handle.size, 0, &mut buffer)?;
                 buffer.truncate(bytes_read);
                 return Ok(buffer);
             }
