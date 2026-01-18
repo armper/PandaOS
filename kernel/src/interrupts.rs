@@ -110,9 +110,7 @@ extern "x86-interrupt" fn page_fault_handler(
 
     // Case 3: Not present, kernel mode accessing user space - demand paging for kernel access
     // This happens when the kernel accesses user space memory (e.g., during syscalls)
-    // User space is the lower half: 0x0000_0000_0000_0000 to 0x0000_7FFF_FFFF_FFFF
-    const USER_SPACE_MAX: u64 = 0x0000_8000_0000_0000;
-    if !present && !user && cr2 < USER_SPACE_MAX {
+    if !present && !user && cr2 < crate::paging::USER_SPACE_MAX {
         handle_demand_paging(process, cr2, rip, error_code, pid, page_table_phys, mode);
         return;
     }
@@ -168,12 +166,13 @@ fn handle_demand_paging(
         }
         flags
     } else {
-        // No VM region tracking yet - use permissive defaults
-        // This allows read, write, and execute for user space
+        // No VM region tracking yet - use safe defaults
+        // Allow read and write, but not execute (W^X policy)
         // TODO: Populate vm_regions during process creation for proper permission tracking
         crate::paging::PageTableFlags::PRESENT
             .or(crate::paging::PageTableFlags::USER_ACCESSIBLE)
             .or(crate::paging::PageTableFlags::WRITABLE)
+            .or(crate::paging::PageTableFlags::NO_EXECUTE)
     };
 
     // Allocate and map page

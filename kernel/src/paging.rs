@@ -338,6 +338,11 @@ pub const KERNEL_STACK_TOP: u64 = 0xFFFF_FFFF_8000_0000;
 /// Default kernel stack size in pages
 pub const KERNEL_STACK_PAGES: usize = 4;
 
+/// Maximum address for user space (canonical address boundary)
+/// User space: 0x0000_0000_0000_0000 to 0x0000_7FFF_FFFF_FFFF
+/// Kernel space: 0xFFFF_8000_0000_0000 to 0xFFFF_FFFF_FFFF_FFFF
+pub const USER_SPACE_MAX: u64 = 0x0000_8000_0000_0000;
+
 #[inline]
 fn phys_to_virt_addr(phys_addr: u64) -> u64 {
     crate::memory::phys_to_virt(phys_addr)
