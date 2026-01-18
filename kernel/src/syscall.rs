@@ -34,7 +34,8 @@ use alloc::vec::Vec;
     feature = "tmpfs-redir-smoke",
     feature = "elf-exec-smoke",
     feature = "tty-smoke",
-    feature = "cow-smoke"
+    feature = "cow-smoke",
+    feature = "kbd-smoke"
 ))]
 use core::sync::atomic::{AtomicUsize, Ordering};
 use panda_hal::serial_println;
@@ -474,6 +475,9 @@ const SCRIPTED_INPUT: &[u8] = b"/mnt/bin/ls\n/mnt/bin/cat /mnt/version\nexit\n";
 #[cfg(feature = "tty-smoke")]
 const SCRIPTED_INPUT: &[u8] = b"echo hello\n\x03ls\nexit\n";
 
+#[cfg(feature = "kbd-smoke")]
+const SCRIPTED_INPUT: &[u8] = b"help\nls\nexit\n";
+
 #[cfg(all(
     feature = "shell-smoke",
     any(
@@ -666,7 +670,8 @@ compile_error!(
     feature = "redir-smoke",
     feature = "tmpfs-redir-smoke",
     feature = "elf-exec-smoke",
-    feature = "tty-smoke"
+    feature = "tty-smoke",
+    feature = "kbd-smoke"
 ))]
 static SCRIPTED_POS: AtomicUsize = AtomicUsize::new(0);
 
@@ -685,7 +690,8 @@ fn read_byte() -> Option<u8> {
         feature = "redir-smoke",
         feature = "tmpfs-redir-smoke",
         feature = "elf-exec-smoke",
-        feature = "tty-smoke"
+        feature = "tty-smoke",
+        feature = "kbd-smoke"
     ))]
     {
         let pos = SCRIPTED_POS.fetch_add(1, Ordering::Relaxed);
@@ -706,9 +712,20 @@ fn read_byte() -> Option<u8> {
         feature = "redir-smoke",
         feature = "tmpfs-redir-smoke",
         feature = "elf-exec-smoke",
-        feature = "tty-smoke"
+        feature = "tty-smoke",
+        feature = "kbd-smoke"
     )))]
     {
+        // Try keyboard first (PS/2 input)
+        if let Some(scancode) = crate::input::ps2::try_read_scancode() {
+            // Decode scancode to ASCII
+            if let Some(ascii) = crate::input::ps2::decode_scancode(scancode) {
+                return Some(ascii);
+            }
+            // Scancode didn't decode (modifier key, etc), fall through to serial
+        }
+
+        // Fall back to serial port
         return panda_hal::serial::serial_read_byte();
     }
 }

@@ -43,6 +43,8 @@ preempt-log = []
 cow-smoke = []
 net-dns-smoke = []
 build-userland = []
+kbd-smoke = []
+kbd-log = []
 
 [package.metadata.bootimage]
 run-args = [
