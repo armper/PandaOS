@@ -26,6 +26,8 @@ SECTIONS
         __text_start = .;
         KEEP(*(.text._start))
         *(.text .text.*)
+        *(.ltext .ltext.* .ltext*)
+        . = ALIGN(4K);
         __text_end = .;
     }
     
@@ -34,6 +36,9 @@ SECTIONS
     {
         __rodata_start = .;
         *(.rodata .rodata.*)
+        *(.srodata .srodata.*)
+        *(.lrodata .lrodata.* .lrodata*)
+        . = ALIGN(4K);
         __rodata_end = .;
     }
     
@@ -41,7 +46,12 @@ SECTIONS
     .data ALIGN(4K) : AT(ADDR(.data) - KERNEL_VIRT_BASE)
     {
         __data_start = .;
+        *(.data.rel.ro .data.rel.ro.*)
         *(.data .data.*)
+        *(.ldata .ldata.* .ldata*)
+        *(.got .got.*)
+        *(.igot .igot.*)
+        . = ALIGN(4K);
         __data_end = .;
     }
     
@@ -50,7 +60,9 @@ SECTIONS
     {
         __bss_start = .;
         *(.bss .bss.*)
+        *(.lbss .lbss.* .lbss*)
         *(COMMON)
+        . = ALIGN(4K);
         __bss_end = .;
     }
     
