@@ -1,4 +1,4 @@
-//! PS/2 Keyboard Driver for x86_64
+//! PS/2 Keyboard Driver for `x86_64`
 //!
 //! This module provides a driver for PS/2 keyboards through the i8042 controller.
 //! It handles IRQ1 interrupts and decodes scancodes to ASCII characters.
@@ -30,8 +30,7 @@ const SCANCODE_BUFFER_SIZE: usize = 128;
 const STATUS_OUTPUT_FULL: u8 = 0x01;
 
 /// Global scancode ring buffer
-static SCANCODE_BUFFER: Mutex<RingBuffer<u8, SCANCODE_BUFFER_SIZE>> =
-    Mutex::new(RingBuffer::new());
+static SCANCODE_BUFFER: Mutex<RingBuffer<u8, SCANCODE_BUFFER_SIZE>> = Mutex::new(RingBuffer::new());
 
 /// Keyboard state for tracking modifiers
 struct KeyboardState {
@@ -213,10 +212,10 @@ fn decode_key_to_ascii(scancode: u8, shift: bool) -> Option<u8> {
         0x35 => Some(if shift { b'?' } else { b'/' }),
 
         // Special keys
-        0x0E => Some(0x08),   // Backspace
-        0x1C => Some(b'\n'),  // Enter
-        0x39 => Some(b' '),   // Space
-        0x0F => Some(b'\t'),  // Tab
+        0x0E => Some(0x08),                             // Backspace
+        0x1C => Some(b'\n'),                            // Enter
+        0x39 => Some(b' '),                             // Space
+        0x0F => Some(b'\t'),                            // Tab
         0x2B => Some(if shift { b'|' } else { b'\\' }), // Backslash
 
         // Ignore other keys

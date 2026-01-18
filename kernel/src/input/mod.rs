@@ -1,4 +1,4 @@
-//! Input subsystem for PandaOS
+//! Input subsystem for `PandaOS`
 //!
 //! This module provides input device drivers and abstractions.
 
