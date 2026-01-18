@@ -417,6 +417,24 @@ unsafe fn init_scheduler_and_start() -> ! {
             } else if fs::stat_path("/init").is_ok() {
                 "/init"
             } else {
+                // Debug: List /mnt and /mnt/bin contents before panicking
+                serial_println!("[sched] init program not found, listing disk filesystem:");
+                if let Ok(entries) = fs::list_directory("/mnt") {
+                    serial_println!("  /mnt contents:");
+                    for (name, _) in entries {
+                        serial_println!("    - {}", name);
+                    }
+                } else {
+                    serial_println!("  /mnt not accessible or empty");
+                }
+                if let Ok(entries) = fs::list_directory("/mnt/bin") {
+                    serial_println!("  /mnt/bin contents:");
+                    for (name, _) in entries {
+                        serial_println!("    - {}", name);
+                    }
+                } else {
+                    serial_println!("  /mnt/bin not accessible or empty");
+                }
                 panic!("init program not found in /mnt/bin/init or /init");
             };
 
