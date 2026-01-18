@@ -48,6 +48,7 @@ pub mod fs;
 pub mod gdt;
 pub mod heap;
 pub mod homefs;
+pub mod input;
 pub mod interrupt_frame;
 pub mod interrupts;
 pub mod invariants;
@@ -129,11 +130,19 @@ pub extern "C" fn _start(boot_info: &'static bootloader::BootInfo) -> ! {
     console_println!("Interrupt handling initialized");
 
     BOOT_STEP!(6);
+    // Initialize PS/2 keyboard controller and enable IRQ1
+    unsafe {
+        crate::input::ps2::init();
+    }
+    console_println!("PS/2 keyboard initialized");
+    BOOT_STEP!(12); // Mark keyboard IRQ enabled
+
+    BOOT_STEP!(7);
     // Initialize syscall/sysret support (after GDT and interrupts)
     unsafe { usermode::init_syscall() };
     console_println!("Syscall/sysret initialized");
 
-    BOOT_STEP!(7);
+    BOOT_STEP!(8);
     // Map heap region (allocate frames and map pages)
     // MUST happen before heap allocator init
     unsafe {
@@ -141,7 +150,7 @@ pub extern "C" fn _start(boot_info: &'static bootloader::BootInfo) -> ! {
     }
     console_println!("Heap region mapped");
 
-    BOOT_STEP!(8);
+    BOOT_STEP!(9);
     // Initialize heap allocator (after heap is mapped)
     unsafe { heap::init() };
     console_println!("Heap allocator initialized");
@@ -163,7 +172,7 @@ pub extern "C" fn _start(boot_info: &'static bootloader::BootInfo) -> ! {
         Err(e) => console_println!("Network initialization skipped: {}", e),
     }
 
-    BOOT_STEP!(9);
+    BOOT_STEP!(10);
 
     // If boot-selfcheck feature is enabled, run selfcheck instead of normal boot
     #[cfg(feature = "boot-selfcheck")]
@@ -203,7 +212,7 @@ pub extern "C" fn _start(boot_info: &'static bootloader::BootInfo) -> ! {
             Err(e) => console_println!("Warning: Failed to mount disk filesystem at /mnt: {:?}", e),
         }
 
-        BOOT_STEP!(10);
+        BOOT_STEP!(11);
         // Finalize boot
         let _state = state.finalize();
         console_println!("Kernel initialization complete!");
@@ -227,7 +236,7 @@ pub extern "C" fn _start(boot_info: &'static bootloader::BootInfo) -> ! {
                 run_net_dns_smoke_test();
             }
 
-            BOOT_STEP!(11);
+            BOOT_STEP!(13);
             // Initialize scheduler and start multitasking
             unsafe {
                 init_scheduler_and_start();

@@ -28,6 +28,9 @@ pub fn init() {
         // Add timer interrupt (IRQ 0 -> interrupt 32)
         idt[32].set_handler_fn(timer_interrupt_handler);
 
+        // Add keyboard interrupt (IRQ 1 -> interrupt 33)
+        idt[33].set_handler_fn(keyboard_interrupt_handler);
+
         idt.load();
     }
 }
@@ -314,6 +317,21 @@ extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFr
     // SAFETY: Sending EOI to PIC is safe and required after handling IRQ
     unsafe {
         crate::pic::send_eoi(0);
+    }
+}
+
+/// Keyboard interrupt handler (IRQ 1)
+extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
+    // Handle keyboard interrupt
+    // SAFETY: Called from keyboard IRQ handler
+    unsafe {
+        crate::input::ps2::handle_keyboard_interrupt();
+    }
+
+    // Send EOI (End of Interrupt) to PIC
+    // SAFETY: Sending EOI to PIC is safe and required after handling IRQ
+    unsafe {
+        crate::pic::send_eoi(1);
     }
 }
 
