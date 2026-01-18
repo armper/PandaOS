@@ -34,7 +34,8 @@ use alloc::vec::Vec;
     feature = "tmpfs-redir-smoke",
     feature = "elf-exec-smoke",
     feature = "tty-smoke",
-    feature = "cow-smoke"
+    feature = "cow-smoke",
+    feature = "kbd-smoke"
 ))]
 use core::sync::atomic::{AtomicUsize, Ordering};
 use panda_hal::serial_println;

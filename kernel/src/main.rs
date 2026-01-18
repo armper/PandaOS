@@ -2444,6 +2444,8 @@ fn exit_handler(status: i32) -> ! {
         serial_println!("TEST PASS elf_exec_smoke");
         #[cfg(feature = "tty-smoke")]
         serial_println!("TEST PASS tty_smoke");
+        #[cfg(feature = "kbd-smoke")]
+        serial_println!("TEST PASS kbd_smoke");
         #[cfg(feature = "preempt-smoke")]
         {
             // Print observability data for preemption test
@@ -2474,7 +2476,8 @@ fn exit_handler(status: i32) -> ! {
             feature = "elf-exec-smoke",
             feature = "tty-smoke",
             feature = "preempt-smoke",
-            feature = "cow-smoke"
+            feature = "cow-smoke",
+            feature = "kbd-smoke"
         )))]
         serial_println!("TEST PASS exec_smoke");
         let kernel_pt = usermode::kernel_page_table_phys();
