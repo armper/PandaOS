@@ -1383,3 +1383,197 @@ Stopped processes remain in the scheduler but are skipped during scheduling unti
 - No other signals (SIGTERM, SIGKILL, SIGHUP, etc.)
 - SIGCONT always resumes stopped processes (cannot be ignored)
 
+## Networking Stack
+
+PandaOS implements a minimal but functional TCP/IP networking stack with the following components:
+
+### Architecture
+
+The networking stack is organized in layers following the OSI model:
+
+```
+Application Layer: DNS client, Socket API
+Transport Layer:   UDP (TCP planned)
+Network Layer:     IPv4, ARP
+Link Layer:        Ethernet, VirtIO-Net driver
+```
+
+### Components
+
+#### VirtIO-Net Driver (`kernel/src/net/virtio_net.rs`)
+- PCI device initialization and discovery
+- Virtqueue management for TX/RX
+- Polling-based packet reception (IRQ support planned)
+- MAC address configuration
+
+**Initialization:**
+- Scans PCI bus for VirtIO network device (vendor ID 0x1AF4, device ID 0x1000)
+- Configures device via I/O ports
+- Sets up RX and TX virtqueues
+- Reads MAC address from device config space
+
+#### Ethernet Layer (`kernel/src/net/ethernet.rs`)
+- Ethernet II frame parsing and construction
+- EtherType identification (IPv4, ARP, IPv6)
+- Frame validation (minimum size checks)
+
+#### ARP (`kernel/src/net/arp.rs`)
+- Address Resolution Protocol for IP-to-MAC mapping
+- ARP cache with dynamic updates
+- ARP request/reply handling
+- Automatic cache population on incoming packets
+
+**Resolution Process:**
+1. Check ARP cache for existing entry
+2. If not found, broadcast ARP request
+3. Poll for ARP reply with timeout
+4. Update cache and return MAC address
+
+#### IPv4 (`kernel/src/net/ipv4.rs`)
+- IPv4 packet parsing and construction
+- Header checksum calculation and verification
+- Protocol dispatch (ICMP, TCP, UDP)
+- Fragmentation detection (not yet supported)
+
+**Features:**
+- Standard 20-byte header support (no options yet)
+- One's complement checksum
+- TTL management
+
+#### UDP (`kernel/src/net/udp.rs`)
+- User Datagram Protocol implementation
+- Port-based socket management
+- Ephemeral port allocation (49152-65535)
+- Non-blocking receive with EAGAIN
+- Optional checksum (disabled for IPv4)
+
+**Socket Management:**
+- Global socket table maps ports to receive queues
+- Each socket has a FIFO queue for received packets
+- Queue size limited to 100 packets to prevent memory exhaustion
+
+#### DNS Client (`kernel/src/net/dns.rs`)
+- DNS A record (IPv4) queries
+- Query construction with domain name encoding
+- Response parsing with compression pointer support
+- Fixed transaction ID (to be randomized)
+
+**Query Process:**
+1. Build DNS query packet (transaction ID, flags, questions)
+2. Send via UDP to DNS server (port 53)
+3. Poll for response with timeout
+4. Parse response for A records
+5. Return first IPv4 address found
+
+### Network Configuration
+
+Static IP configuration for QEMU user-mode networking:
+- **IP Address:** 10.0.2.15/24
+- **Gateway:** 10.0.2.2
+- **DNS Server:** 10.0.2.3
+- **MAC Address:** Assigned by VirtIO-Net device
+
+### Socket API
+
+Minimal BSD socket-like interface via syscalls:
+
+#### socket(domain, type, protocol)
+- **Syscall:** 41
+- **Domain:** AF_INET (2) for IPv4
+- **Type:** SOCK_DGRAM (2) for UDP
+- **Returns:** Socket file descriptor (UDP port number)
+
+#### sendto(sockfd, buf, len, flags, dest_addr, addrlen)
+- **Syscall:** 44
+- **dest_addr:** Pointer to `sockaddr_in` structure
+- **Returns:** Number of bytes sent
+
+#### recvfrom(sockfd, buf, len, flags, src_addr, addrlen)
+- **Syscall:** 45
+- **Non-blocking:** Returns EAGAIN if no data available
+- **src_addr:** Filled with sender address if provided
+- **Returns:** Number of bytes received
+
+### Packet Flow
+
+#### Outgoing Packets:
+1. Application calls `sendto()` syscall
+2. UDP layer builds UDP packet
+3. IPv4 layer builds IP packet with checksum
+4. ARP resolves destination MAC (may block)
+5. Ethernet layer builds frame
+6. VirtIO-Net driver sends frame to device
+
+#### Incoming Packets:
+1. VirtIO-Net driver polls for received frames
+2. Ethernet layer parses frame, checks EtherType
+3. For ARP: Update cache, send reply if needed
+4. For IPv4: Verify checksum, dispatch by protocol
+5. UDP layer matches port, enqueues in socket queue
+6. Application retrieves packet via `recvfrom()`
+
+### Testing
+
+Network functionality tested via `net_dns_smoke` feature:
+```bash
+NET_DNS_SMOKE=1 ./scripts/qemu-test.sh
+```
+
+**Test Sequence:**
+1. Initialize VirtIO-Net device
+2. Configure static IP
+3. Perform DNS lookup for "example.com"
+4. Verify valid IPv4 address received
+5. Emit "TEST PASS net_dns_smoke"
+
+### QEMU Configuration
+
+Network enabled via QEMU user-mode networking:
+```bash
+-netdev user,id=n0 -device virtio-net-pci,netdev=n0
+```
+
+**User-mode network features:**
+- Transparent NAT for outbound connections
+- Built-in DHCP server (not used, static IP)
+- Built-in DNS forwarder at 10.0.2.3
+- No inbound connections from host
+
+### Limitations and Future Work
+
+**Current Limitations:**
+- No TCP support (UDP only)
+- No ICMP ping/echo
+- No DHCP client (static configuration only)
+- Polling-based RX (no interrupt support)
+- No packet fragmentation/reassembly
+- No socket options or advanced features
+- VirtIO-Net driver is simplified (no full DMA)
+
+**Planned Features:**
+- TCP implementation with connection state machine
+- ICMP echo request/reply (ping)
+- DHCP client for dynamic IP configuration
+- Interrupt-driven packet reception
+- IPv4 fragmentation support
+- Raw socket support
+- Multiple network interfaces
+
+**Performance Considerations:**
+- Polling adds CPU overhead
+- ARP resolution adds latency to first packet
+- No packet buffering or flow control
+- Limited to QEMU user-mode network bandwidth
+
+### Safety
+
+All unsafe code confined to:
+- VirtIO-Net driver (PCI I/O, DMA setup)
+- Syscall implementations (user pointer dereferencing)
+
+**Safety Invariants:**
+- All packet sizes validated before parsing
+- Checksums verified on receive
+- User buffers bounds-checked
+- No buffer overruns in protocol parsers
+
