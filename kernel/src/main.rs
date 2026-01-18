@@ -54,6 +54,7 @@ pub mod invariants;
 pub mod linker_symbols;
 pub mod memory;
 pub mod mount;
+pub mod net;
 pub mod page_table_tracker;
 pub mod paging;
 pub mod percpu;
