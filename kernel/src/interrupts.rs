@@ -108,7 +108,14 @@ extern "x86-interrupt" fn page_fault_handler(
         return;
     }
 
-    // Case 3: All other faults - protection violation or invalid access
+    // Case 3: Not present, kernel mode accessing user space - demand paging for kernel access
+    // This happens when the kernel accesses user space memory (e.g., during syscalls)
+    if !present && !user && cr2 < crate::paging::USER_SPACE_MAX {
+        handle_demand_paging(process, cr2, rip, error_code, pid, page_table_phys, mode);
+        return;
+    }
+
+    // Case 4: All other faults - protection violation or invalid access
     panic!(
         "PAGE FAULT: pid={:?}, cr2={:#x}, rip={:#x}, error_code={:?}, mode={}\n\
          present={}, write={}, user={}, reserved_write={}, instruction_fetch={}\n\
@@ -142,37 +149,39 @@ fn handle_demand_paging(
 
     // Check if address is in a valid VM region
     let page_addr = cr2 & !0xFFF;
-    let region =
+    let maybe_region =
         process.vm_regions.iter().find(|r| page_addr >= r.start_addr && page_addr < r.end_addr);
 
-    let Some(region) = region else {
-        // Address not in any valid region - protection fault
-        panic!(
-            "PAGE FAULT: pid={:?}, cr2={:#x}, rip={:#x}, error_code={:?}, mode={}\n\
-             Invalid memory access - address not in any VM region\n\
-             Process VM regions: {:?}",
-            pid, cr2, rip, error_code, mode, process.vm_regions
-        );
+    // Determine flags based on region or use defaults
+    let flags = if let Some(region) = maybe_region {
+        // Use region-specific flags
+        let mut flags = crate::paging::PageTableFlags::PRESENT
+            .or(crate::paging::PageTableFlags::USER_ACCESSIBLE);
+
+        if region.flags & ProtFlags::PROT_WRITE.0 != 0 {
+            flags = flags.or(crate::paging::PageTableFlags::WRITABLE);
+        }
+        if region.flags & ProtFlags::PROT_EXEC.0 == 0 {
+            flags = flags.or(crate::paging::PageTableFlags::NO_EXECUTE);
+        }
+        flags
+    } else {
+        // No VM region tracking yet - use safe defaults
+        // Allow read and write, but not execute (W^X policy)
+        // TODO: Populate vm_regions during process creation for proper permission tracking
+        crate::paging::PageTableFlags::PRESENT
+            .or(crate::paging::PageTableFlags::USER_ACCESSIBLE)
+            .or(crate::paging::PageTableFlags::WRITABLE)
+            .or(crate::paging::PageTableFlags::NO_EXECUTE)
     };
 
-    // Valid region - allocate and map page
+    // Allocate and map page
     // SAFETY: Frame allocator is initialized
     let frame = unsafe {
         crate::memory::allocate_frame().expect("Failed to allocate frame for demand paging")
     };
 
     let phys_addr = (frame as u64) * 4096;
-
-    // Convert region flags to page table flags
-    let mut flags =
-        crate::paging::PageTableFlags::PRESENT.or(crate::paging::PageTableFlags::USER_ACCESSIBLE);
-
-    if region.flags & ProtFlags::PROT_WRITE.0 != 0 {
-        flags = flags.or(crate::paging::PageTableFlags::WRITABLE);
-    }
-    if region.flags & ProtFlags::PROT_EXEC.0 == 0 {
-        flags = flags.or(crate::paging::PageTableFlags::NO_EXECUTE);
-    }
 
     // Map the page
     // SAFETY: page_table_phys is valid, frame was just allocated
@@ -197,9 +206,11 @@ fn handle_demand_paging(
     // Increment demand allocation counter
     crate::vm_counters::inc_demand_allocations();
 
+    // Log demand paging with region tracking status
+    let region_status = if maybe_region.is_some() { "tracked" } else { "UNTRACKED" };
     println!(
-        "PAGE FAULT: pid={:?}, cr2={:#x}, rip={:#x}, error={:?}, mode={}, action=demand_page (frame={})",
-        pid, cr2, rip, error_code, mode, frame
+        "PAGE FAULT: pid={:?}, cr2={:#x}, rip={:#x}, error={:?}, mode={}, action=demand_page (frame={}, region={})",
+        pid, cr2, rip, error_code, mode, frame, region_status
     );
 }
 

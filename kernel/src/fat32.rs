@@ -150,8 +150,7 @@ impl Bpb {
     fn cluster_to_sector(&self, cluster: u32) -> u64 {
         // Clusters start at 2, so subtract 2 from cluster number
         let cluster_offset = if cluster >= 2 { cluster - 2 } else { 0 };
-        self.data_start_sector as u64
-            + (cluster_offset as u64 * self.sectors_per_cluster as u64)
+        self.data_start_sector as u64 + (cluster_offset as u64 * self.sectors_per_cluster as u64)
     }
 
     /// Get the number of bytes per cluster
@@ -195,10 +194,8 @@ impl DirEntry {
         let name = Self::parse_short_name(name_bytes);
 
         // Get first cluster (high 16 bits at offset 20, low 16 bits at offset 26)
-        let first_cluster_high =
-            u16::from_le_bytes([data[20], data[21]]) as u32;
-        let first_cluster_low =
-            u16::from_le_bytes([data[26], data[27]]) as u32;
+        let first_cluster_high = u16::from_le_bytes([data[20], data[21]]) as u32;
+        let first_cluster_low = u16::from_le_bytes([data[26], data[27]]) as u32;
         let first_cluster = (first_cluster_high << 16) | first_cluster_low;
 
         // Get file size (32 bits at offset 28)
@@ -209,12 +206,8 @@ impl DirEntry {
 
     /// Parse 8.3 filename into readable string
     fn parse_short_name(name_bytes: &[u8]) -> String {
-        let name_part = core::str::from_utf8(&name_bytes[0..8])
-            .unwrap_or("????????")
-            .trim_end();
-        let ext_part = core::str::from_utf8(&name_bytes[8..11])
-            .unwrap_or("???")
-            .trim_end();
+        let name_part = core::str::from_utf8(&name_bytes[0..8]).unwrap_or("????????").trim_end();
+        let ext_part = core::str::from_utf8(&name_bytes[8..11]).unwrap_or("???").trim_end();
 
         if ext_part.is_empty() {
             name_part.to_lowercase()
@@ -315,7 +308,8 @@ impl<D: BlockDevice> Fat32<D> {
 
         // Calculate FAT offset
         let fat_offset = cluster * 4; // 4 bytes per FAT32 entry
-        let fat_sector = self.bpb.fat_start_sector as u64 + (fat_offset / SECTOR_SIZE as u32) as u64;
+        let fat_sector =
+            self.bpb.fat_start_sector as u64 + (fat_offset / SECTOR_SIZE as u32) as u64;
         let entry_offset = (fat_offset % SECTOR_SIZE as u32) as usize;
 
         // Read FAT sector
