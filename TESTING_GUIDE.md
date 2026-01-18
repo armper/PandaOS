@@ -83,6 +83,72 @@ PandaOS has two independent output channels:
 
 **For Tests:** Always use `serial_println!` for test output and markers.
 
+## Keyboard Input (PS/2)
+
+### Overview
+
+PandaOS supports PS/2 keyboard input through the i8042 controller (IRQ1). Keyboard input is processed in the following path:
+
+```
+PS/2 Keyboard → i8042 Controller → IRQ1 Handler → Scancode Decoder → TTY → stdin
+```
+
+### Testing Keyboard in QEMU GUI
+
+To test keyboard input interactively:
+
+1. **Build and run with GUI:**
+   ```bash
+   make build
+   make bootimage
+   python3 scripts/mkdiskimg.py  # Generate fs.img
+   ./scripts/run-qemu.sh         # Or use make run-gui
+   ```
+
+2. **Interact with the GUI:**
+   - A window will open showing VGA text mode display
+   - Click on the QEMU window to capture keyboard
+   - Type at the PandaOS shell prompt
+   - Press **Ctrl+Alt+G** to release keyboard capture
+
+3. **Test keyboard features:**
+   - **Enter**: Submit command
+   - **Backspace**: Edit line
+   - **Ctrl+C**: Interrupt current process
+   - **Ctrl+Z**: Stop current process
+   - **Shift**: Uppercase letters and symbols
+   - All alphanumeric keys, space, punctuation
+
+### Input Priority
+
+PandaOS uses a dual-input model:
+- **Primary**: PS/2 keyboard (when running in GUI mode)
+- **Fallback**: Serial port (for headless testing and scripted tests)
+
+The kernel polls both sources, with keyboard taking priority in non-smoke-test builds.
+
+### Smoke Test
+
+The `kbd-smoke` feature tests keyboard input deterministically by injecting scripted input:
+
+```bash
+KBD_SMOKE=1 ./scripts/qemu-test.sh
+```
+
+This test:
+- Injects the command sequence: `help\nls\nexit\n`
+- Verifies the shell processes commands correctly
+- Emits `TEST PASS kbd_smoke` on success
+
+### Debug Logging
+
+Enable keyboard debug logging with the `kbd-log` feature (rate-limited):
+```bash
+cargo build --features kbd-log
+```
+
+This logs decoded scancodes to serial output.
+
 ## What Was Implemented
 
 ### 1. Linker Symbols Module (`kernel/src/linker_symbols.rs`)

@@ -205,13 +205,12 @@ fn decode_key_to_ascii(scancode: u8, shift: bool) -> Option<u8> {
         0x2D => Some(if shift { b'X' } else { b'x' }),
         0x2E => Some(if shift { b'C' } else { b'c' }),
         0x2F => Some(if shift { b'V' } else { b'v' }),
-        0x30 => Some(if shift { b'G' } else { b'g' }),
-        0x31 => Some(if shift { b'B' } else { b'b' }),
-        0x32 => Some(if shift { b'N' } else { b'n' }),
-        0x33 => Some(if shift { b'M' } else { b'm' }),
-        0x34 => Some(if shift { b'<' } else { b',' }),
-        0x35 => Some(if shift { b'>' } else { b'.' }),
-        0x36 => Some(if shift { b'?' } else { b'/' }),
+        0x30 => Some(if shift { b'B' } else { b'b' }),
+        0x31 => Some(if shift { b'N' } else { b'n' }),
+        0x32 => Some(if shift { b'M' } else { b'm' }),
+        0x33 => Some(if shift { b'<' } else { b',' }),
+        0x34 => Some(if shift { b'>' } else { b'.' }),
+        0x35 => Some(if shift { b'?' } else { b'/' }),
 
         // Special keys
         0x0E => Some(0x08),   // Backspace

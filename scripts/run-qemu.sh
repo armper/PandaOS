@@ -3,13 +3,14 @@
 # One-command runner with flexible display modes
 #
 # Usage:
-#   GUI_VGA=1 ./scripts/run-qemu.sh           # QEMU window with VGA text
-#   SERIAL_STDIO=1 ./scripts/run-qemu.sh      # Serial output in terminal
-#   BOTH=1 ./scripts/run-qemu.sh              # VGA window + serial in terminal
-#   HEADLESS=1 ./scripts/run-qemu.sh          # No display, serial only
+#   ./scripts/run-qemu.sh                    # GUI window with keyboard support (default)
+#   GUI_VGA=1 ./scripts/run-qemu.sh          # Same as default
+#   SERIAL_STDIO=1 ./scripts/run-qemu.sh     # Serial output in terminal
+#   BOTH=1 ./scripts/run-qemu.sh             # VGA window + serial in terminal
+#   HEADLESS=1 ./scripts/run-qemu.sh         # No display, serial only
 #   QEMU_ARGS="-m 512M" ./scripts/run-qemu.sh # Custom QEMU args
 #
-# Default: SERIAL_STDIO=1 (terminal shows serial output)
+# Default: GUI_VGA=1 (GUI window with VGA text and keyboard input)
 
 set -e
 
@@ -106,17 +107,17 @@ if [ "${HEADLESS:-0}" -eq 1 ]; then
     MODE_COUNT=$((MODE_COUNT + 1))
 fi
 
-# Default to SERIAL_STDIO if no mode specified
+# Default to GUI_VGA if no mode specified (for keyboard input)
 if [ $MODE_COUNT -eq 0 ]; then
-    MODE="serial_stdio"
+    MODE="gui_vga"
     MODE_COUNT=1
 fi
 
 # Check for conflicting modes
 if [ $MODE_COUNT -gt 1 ]; then
     echo "Error: Multiple modes specified (only one allowed)"
-    echo "  GUI_VGA=1      - QEMU window shows VGA text"
-    echo "  SERIAL_STDIO=1 - Terminal shows serial output (default)"
+    echo "  GUI_VGA=1      - QEMU window shows VGA text with keyboard (default)"
+    echo "  SERIAL_STDIO=1 - Terminal shows serial output"
     echo "  BOTH=1         - VGA window + serial in terminal"
     echo "  HEADLESS=1     - No display, serial only"
     exit 1
@@ -125,11 +126,12 @@ fi
 # Configure QEMU based on mode
 case "$MODE" in
     gui_vga)
-        echo "Starting QEMU in GUI VGA mode (window shows VGA text)..."
+        echo "Starting QEMU in GUI VGA mode (window shows VGA text with keyboard support)..."
         QEMU_ARGS=(
             "${QEMU_BASE_ARGS[@]}"
             -serial "file:target/qemu/run.log"
         )
+        echo "Note: Click window to capture keyboard, Ctrl+Alt+G to release"
         # No -display or -serial stdio, let QEMU show VGA window
         ;;
     serial_stdio)
