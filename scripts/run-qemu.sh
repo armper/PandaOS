@@ -76,6 +76,8 @@ fi
 # Base QEMU arguments
 QEMU_BASE_ARGS=(
     -drive "format=raw,file=$BOOTIMAGE"
+    -netdev user,id=n0
+    -device virtio-net-pci,netdev=n0
 )
 
 # Add filesystem if available

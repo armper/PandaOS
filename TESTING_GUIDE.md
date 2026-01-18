@@ -1529,3 +1529,163 @@ These limitations are intentional to keep selfcheck fast, deterministic, and ind
 
 - [BOOT_DIAGNOSTICS.md](BOOT_DIAGNOSTICS.md) - Detailed guide to boot diagnostics
 - [ARCHITECTURE.md](ARCHITECTURE.md) - Kernel architecture overview
+
+## Network Testing
+
+### Overview
+
+PandaOS includes basic networking support with VirtIO-Net, IPv4, UDP, ARP, and DNS. Network functionality can be tested in QEMU using user-mode networking.
+
+### Network DNS Smoke Test
+
+The `net-dns-smoke` test verifies basic network functionality by performing a DNS lookup:
+
+```bash
+NET_DNS_SMOKE=1 ./scripts/qemu-test.sh
+```
+
+**Test Sequence:**
+1. Boot kernel with network initialization
+2. Wait for network stack to initialize
+3. Perform DNS lookup for "example.com"
+4. Verify valid IPv4 address received
+5. Print result: "example.com -> X.X.X.X"
+6. Emit "TEST PASS net_dns_smoke"
+
+**Expected Output:**
+```
+[NET] Network initialized
+[NET] IP: 10.0.2.15
+[NET] Gateway: 10.0.2.2
+[NET] DNS: 10.0.2.3
+[NET] MAC: 52:54:00:12:34:56
+Running net_dns_smoke test
+Attempting DNS lookup for example.com...
+✓ DNS lookup successful: example.com -> 93.184.216.34
+✓ Received valid IP address
+✓ All network DNS tests passed
+TEST PASS net_dns_smoke
+```
+
+### QEMU Network Configuration
+
+Network tests require QEMU user-mode networking:
+
+```bash
+qemu-system-x86_64 \
+  -netdev user,id=n0 \
+  -device virtio-net-pci,netdev=n0 \
+  ...
+```
+
+This is automatically configured by `scripts/run-qemu.sh` and `scripts/qemu-test.sh`.
+
+**User-Mode Network Features:**
+- Provides NAT for outbound connections
+- Built-in DNS forwarder at 10.0.2.3
+- Guest IP: 10.0.2.15 (static configuration)
+- Gateway: 10.0.2.2
+- No inbound connections from host
+
+### Manual Network Testing
+
+To test network functionality interactively:
+
+```bash
+# Build and run with network support
+make bootimage
+make run
+
+# In the PandaOS shell, run nslookup (when available)
+nslookup example.com
+```
+
+**Note:** The nslookup userland program requires NASM to build. Use the smoke test for automated testing.
+
+### Network Test Logs
+
+Network test logs are saved to:
+```
+target/qemu/net_dns_smoke.log
+```
+
+To review:
+```bash
+# Check for test pass marker
+grep "TEST PASS" target/qemu/net_dns_smoke.log
+
+# Check for network initialization
+grep "\[NET\]" target/qemu/net_dns_smoke.log
+
+# Check for DNS lookup result
+grep "DNS lookup" target/qemu/net_dns_smoke.log
+
+# View full log
+cat target/qemu/net_dns_smoke.log
+```
+
+### Troubleshooting Network Tests
+
+**Test hangs or times out:**
+- Check if VirtIO-Net device is detected: `grep "VIRTIO-NET" target/qemu/net_dns_smoke.log`
+- Verify QEMU has network device: check for `-device virtio-net-pci` in QEMU command
+- Increase timeout in `qemu-test.sh` if needed
+
+**DNS lookup fails:**
+- Check DNS server address is 10.0.2.3
+- Verify QEMU user-mode networking is active
+- Check ARP resolution: `grep "ARP" target/qemu/net_dns_smoke.log`
+
+**Invalid IP address (0.0.0.0):**
+- DNS server may not be responding
+- Check DNS query construction in logs
+- Verify UDP packets are being sent
+
+**VirtIO-Net device not found:**
+- Ensure QEMU supports VirtIO-Net device
+- Check PCI scan: `grep "PCI" target/qemu/net_dns_smoke.log`
+- Verify `-device virtio-net-pci` is in QEMU args
+
+### Network Feature Limitations
+
+Current network implementation has limitations:
+- **UDP only** - No TCP support yet
+- **Polling-based** - No interrupt-driven RX
+- **No DHCP** - Static IP configuration only
+- **No ICMP** - Cannot ping
+- **Simplified driver** - VirtIO-Net not fully implemented
+
+These limitations are documented in [ARCHITECTURE.md](ARCHITECTURE.md) under "Networking Stack".
+
+### CI Integration
+
+Include network test in CI pipeline:
+
+```yaml
+# Example GitHub Actions
+- name: Network DNS Smoke Test
+  run: NET_DNS_SMOKE=1 ./scripts/qemu-test.sh
+  
+- name: Upload logs on failure
+  if: failure()
+  uses: actions/upload-artifact@v3
+  with:
+    name: net-dns-smoke-logs
+    path: target/qemu/net_dns_smoke.log
+```
+
+### Performance Expectations
+
+Network tests are slower than other smoke tests due to:
+- PCI device initialization
+- ARP resolution (broadcast + wait)
+- DNS query/response round-trip
+- Polling-based packet reception
+
+Typical test duration: 5-10 seconds
+
+### See Also
+
+- [ARCHITECTURE.md - Networking Stack](ARCHITECTURE.md#networking-stack) - Network architecture details
+- [VFS.md](VFS.md) - Socket syscall documentation
+- [scripts/qemu-test.sh](scripts/qemu-test.sh) - Test runner script

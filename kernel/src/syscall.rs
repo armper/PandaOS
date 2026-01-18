@@ -117,6 +117,12 @@ pub enum SyscallNumber {
     Setpgid = 109,
     /// Get directory entries
     Getdents64 = 217,
+    /// Socket (create socket)
+    Socket = 41,
+    /// Send data to (UDP sendto)
+    Sendto = 44,
+    /// Receive data from (UDP recvfrom)
+    Recvfrom = 45,
 }
 
 impl SyscallNumber {
@@ -159,6 +165,9 @@ impl SyscallNumber {
             109 => Some(Self::Setpgid),
             217 => Some(Self::Getdents64),
             63 => Some(Self::Getenv),
+            41 => Some(Self::Socket),
+            44 => Some(Self::Sendto),
+            45 => Some(Self::Recvfrom),
             _ => None,
         }
     }
@@ -202,6 +211,9 @@ impl SyscallNumber {
             Self::Getgid => "getgid",
             Self::Setuid => "setuid",
             Self::Setgid => "setgid",
+            Self::Socket => "socket",
+            Self::Sendto => "sendto",
+            Self::Recvfrom => "recvfrom",
         }
     }
 }
@@ -325,6 +337,11 @@ pub fn handle_syscall(
         SyscallNumber::Getgid => sys_getgid(),
         SyscallNumber::Setuid => sys_setuid(arg1 as u32),
         SyscallNumber::Setgid => sys_setgid(arg1 as u32),
+        SyscallNumber::Socket => sys_socket(arg1 as i32, arg2 as i32, arg3 as i32),
+        SyscallNumber::Sendto => sys_sendto(arg1 as i32, arg2, arg3, _arg4, _arg5, _arg6 as i32),
+        SyscallNumber::Recvfrom => {
+            sys_recvfrom(arg1 as i32, arg2, arg3, _arg4 as i32, _arg5, _arg6)
+        }
         // All other syscalls return ENOSYS for now
         _ => Err(ErrorCode::ENOSYS),
     };
@@ -1409,6 +1426,140 @@ pub fn set_rmdir_handler(handler: fn(u64) -> SyscallResult) {
 /// Set the rename handler for syscall rename
 pub fn set_rename_handler(handler: fn(u64, u64) -> SyscallResult) {
     RENAME_HANDLER.call_once(|| handler);
+}
+
+/// sys_socket - Create a socket
+///
+/// Arguments:
+/// - domain: Address family (AF_INET = 2 for IPv4)
+/// - type_: Socket type (SOCK_DGRAM = 2 for UDP)
+/// - protocol: Protocol (0 for default)
+///
+/// Returns: socket file descriptor on success, negative errno on error
+fn sys_socket(domain: i32, type_: i32, protocol: i32) -> SyscallResult {
+    // Only support AF_INET (IPv4) and SOCK_DGRAM (UDP) for now
+    const AF_INET: i32 = 2;
+    const SOCK_DGRAM: i32 = 2;
+
+    if domain != AF_INET {
+        return Err(ErrorCode::ENOSYS);
+    }
+
+    if type_ != SOCK_DGRAM {
+        return Err(ErrorCode::ENOSYS);
+    }
+
+    // Bind to ephemeral port
+    let port = crate::net::udp::bind(0).map_err(|_| ErrorCode::ENOMEM)?;
+
+    // For now, return port as file descriptor
+    // In a full implementation, this would be added to the process fd table
+    Ok(u64::from(port))
+}
+
+/// sys_sendto - Send data to a socket
+///
+/// Arguments:
+/// - sockfd: Socket file descriptor (UDP port)
+/// - buf: Pointer to data buffer
+/// - len: Length of data
+/// - flags: Send flags (unused)
+/// - dest_addr: Pointer to destination address structure
+/// - addrlen: Length of address structure
+///
+/// Returns: number of bytes sent on success, negative errno on error
+fn sys_sendto(
+    sockfd: i32,
+    buf: u64,
+    len: u64,
+    _flags: u64,
+    dest_addr: u64,
+    addrlen: i32,
+) -> SyscallResult {
+    // Validate parameters
+    if buf == 0 || len == 0 {
+        return Err(ErrorCode::EINVAL);
+    }
+
+    if dest_addr == 0 || addrlen < 16 {
+        return Err(ErrorCode::EINVAL);
+    }
+
+    // Read data from user space
+    let data_slice = unsafe { core::slice::from_raw_parts(buf as *const u8, len as usize) };
+
+    // Parse destination address (sockaddr_in structure)
+    let addr_slice = unsafe { core::slice::from_raw_parts(dest_addr as *const u8, 16) };
+
+    // sockaddr_in: family (2 bytes), port (2 bytes), addr (4 bytes), zero (8 bytes)
+    let dst_port = u16::from_be_bytes([addr_slice[2], addr_slice[3]]);
+    let dst_ip = [addr_slice[4], addr_slice[5], addr_slice[6], addr_slice[7]];
+
+    // Send via UDP
+    crate::net::udp::send_udp_packet(sockfd as u16, dst_ip, dst_port, data_slice)
+        .map_err(|_| ErrorCode::EIO)?;
+
+    Ok(len)
+}
+
+/// sys_recvfrom - Receive data from a socket
+///
+/// Arguments:
+/// - sockfd: Socket file descriptor (UDP port)
+/// - buf: Pointer to receive buffer
+/// - len: Length of buffer
+/// - flags: Receive flags (unused)
+/// - src_addr: Pointer to source address structure (output)
+/// - addrlen: Pointer to address length (input/output)
+///
+/// Returns: number of bytes received on success, negative errno on error
+fn sys_recvfrom(
+    sockfd: i32,
+    buf: u64,
+    len: u64,
+    _flags: i32,
+    src_addr: u64,
+    addrlen: u64,
+) -> SyscallResult {
+    // Validate parameters
+    if buf == 0 || len == 0 {
+        return Err(ErrorCode::EINVAL);
+    }
+
+    // Try to receive packet (non-blocking)
+    match crate::net::udp::recv_udp_packet(sockfd as u16) {
+        Ok(Some((data, src_ip, src_port))) => {
+            // Copy data to user buffer
+            let copy_len = core::cmp::min(data.len(), len as usize);
+            let dst_slice = unsafe { core::slice::from_raw_parts_mut(buf as *mut u8, copy_len) };
+            dst_slice.copy_from_slice(&data[..copy_len]);
+
+            // Fill in source address if provided
+            if src_addr != 0 && addrlen != 0 {
+                let addrlen_ptr = addrlen as *mut i32;
+                let addr_slice =
+                    unsafe { core::slice::from_raw_parts_mut(src_addr as *mut u8, 16) };
+
+                // sockaddr_in: family (2 bytes), port (2 bytes), addr (4 bytes), zero (8 bytes)
+                addr_slice[0] = 2; // AF_INET
+                addr_slice[1] = 0;
+                addr_slice[2..4].copy_from_slice(&src_port.to_be_bytes());
+                addr_slice[4..8].copy_from_slice(&src_ip);
+                addr_slice[8..16].fill(0);
+
+                unsafe {
+                    *addrlen_ptr = 16;
+                }
+            }
+
+            Ok(copy_len as u64)
+        }
+        Ok(None) => {
+            // No data available
+            Err(ErrorCode::EAGAIN)
+        }
+        Err(_) => Err(ErrorCode::EBADF),
+    }
 }
 
 #[cfg(test)]

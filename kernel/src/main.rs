@@ -54,6 +54,7 @@ pub mod invariants;
 pub mod linker_symbols;
 pub mod memory;
 pub mod mount;
+pub mod net;
 pub mod page_table_tracker;
 pub mod paging;
 pub mod percpu;
@@ -155,6 +156,13 @@ pub extern "C" fn _start(boot_info: &'static bootloader::BootInfo) -> ! {
         console_println!("Heap test passed: {:?}", test_vec);
     }
 
+    // Initialize network stack (optional, after heap)
+    // Don't fail boot if network initialization fails
+    match net::init() {
+        Ok(()) => console_println!("Network stack initialized"),
+        Err(e) => console_println!("Network initialization skipped: {}", e),
+    }
+
     BOOT_STEP!(9);
 
     // If boot-selfcheck feature is enabled, run selfcheck instead of normal boot
@@ -210,6 +218,13 @@ pub extern "C" fn _start(boot_info: &'static bootloader::BootInfo) -> ! {
             {
                 serial_println!("Running disk_fs_smoke test");
                 run_disk_fs_smoke_test();
+            }
+
+            // Run network DNS smoke test if feature is enabled
+            #[cfg(feature = "net-dns-smoke")]
+            {
+                serial_println!("Running net_dns_smoke test");
+                run_net_dns_smoke_test();
             }
 
             BOOT_STEP!(11);
@@ -2627,6 +2642,64 @@ fn run_disk_fs_smoke_test() {
 
     serial_println!("✓ All disk filesystem tests passed");
     serial_println!("TEST PASS disk_fs_smoke");
+
+    // Exit QEMU
+    use x86_64::instructions::port::Port;
+    unsafe {
+        let mut port = Port::new(0xf4);
+        port.write(0x10u32); // Success exit code
+    }
+
+    loop {
+        x86_64::instructions::hlt();
+    }
+}
+
+/// Network DNS smoke test
+#[cfg(feature = "net-dns-smoke")]
+fn run_net_dns_smoke_test() {
+    serial_println!("Testing network DNS lookup");
+
+    // Wait a bit for network to initialize
+    for _ in 0..1000000 {
+        core::hint::spin_loop();
+    }
+
+    // Test 1: Perform DNS lookup for example.com
+    serial_println!("Attempting DNS lookup for example.com...");
+
+    match net::dns::lookup("example.com") {
+        Ok(ip) => {
+            serial_println!(
+                "✓ DNS lookup successful: example.com -> {}.{}.{}.{}",
+                ip[0],
+                ip[1],
+                ip[2],
+                ip[3]
+            );
+
+            // Verify we got a non-zero IP
+            if ip[0] != 0 || ip[1] != 0 || ip[2] != 0 || ip[3] != 0 {
+                serial_println!("✓ Received valid IP address");
+            } else {
+                serial_println!("✗ Received invalid IP address (0.0.0.0)");
+                serial_println!("TEST FAIL net_dns_smoke");
+                loop {
+                    x86_64::instructions::hlt();
+                }
+            }
+        }
+        Err(e) => {
+            serial_println!("✗ DNS lookup failed: {}", e);
+            serial_println!("TEST FAIL net_dns_smoke");
+            loop {
+                x86_64::instructions::hlt();
+            }
+        }
+    }
+
+    serial_println!("✓ All network DNS tests passed");
+    serial_println!("TEST PASS net_dns_smoke");
 
     // Exit QEMU
     use x86_64::instructions::port::Port;

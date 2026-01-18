@@ -149,7 +149,12 @@ echo "Building cowtest..."
 nasm -f elf64 cowtest.asm -o build/cowtest.o
 $LINKER -o build/cowtest build/cowtest.o -static -nostdlib --entry=_start
 
-cp build/hello build/hello1 build/hello2 build/init build/sh build/cat build/true build/echo build/wc build/ls build/chmod build/id build/su build/chown build/brk_test build/mmap_test build/vm_test build/touch build/mkdir build/rm build/mv build/cp build/args build/printenv build/sleepy build/cowtest bin/
+# Build nslookup program
+echo "Building nslookup..."
+nasm -f elf64 nslookup.asm -o build/nslookup.o
+$LINKER -o build/nslookup build/nslookup.o -static -nostdlib --entry=_start
+
+cp build/hello build/hello1 build/hello2 build/init build/sh build/cat build/true build/echo build/wc build/ls build/chmod build/id build/su build/chown build/brk_test build/mmap_test build/vm_test build/touch build/mkdir build/rm build/mv build/cp build/args build/printenv build/sleepy build/cowtest build/nslookup bin/
 
 echo "Userland programs built successfully!"
 ls -lh build/

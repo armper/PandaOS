@@ -41,6 +41,7 @@ tty-smoke = []
 preempt-smoke = []
 preempt-log = []
 cow-smoke = []
+net-dns-smoke = []
 build-userland = []
 
 [package.metadata.bootimage]
