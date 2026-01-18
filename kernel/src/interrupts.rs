@@ -207,10 +207,18 @@ fn handle_demand_paging(
     // Increment demand allocation counter
     crate::vm_counters::inc_demand_allocations();
 
-    println!(
-        "PAGE FAULT: pid={:?}, cr2={:#x}, rip={:#x}, error={:?}, mode={}, action=demand_page (frame={})",
-        pid, cr2, rip, error_code, mode, frame
-    );
+    // Log demand paging with region info
+    if region.is_some() {
+        println!(
+            "PAGE FAULT: pid={:?}, cr2={:#x}, rip={:#x}, error={:?}, mode={}, action=demand_page (frame={}, region=tracked)",
+            pid, cr2, rip, error_code, mode, frame
+        );
+    } else {
+        println!(
+            "PAGE FAULT: pid={:?}, cr2={:#x}, rip={:#x}, error={:?}, mode={}, action=demand_page (frame={}, region=UNTRACKED)",
+            pid, cr2, rip, error_code, mode, frame
+        );
+    }
 }
 
 /// Handle copy-on-write fault
